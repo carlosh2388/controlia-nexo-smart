@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import { ComparisonOperator, RuleExecutionStatus } from "@prisma/client";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { ComparisonOperator, RuleExecutionStatus, RuleTriggerType } from "@prisma/client";
 import type { Subscription } from "rxjs";
 import { PrismaService } from "../prisma/prisma.service";
 import { DeviceStateBus, DeviceStateEvent } from "../state-bus/device-state-bus.service";
@@ -10,17 +11,31 @@ function compare(operator: ComparisonOperator, actual: string, expected: string)
   return operator === ComparisonOperator.eq ? actual === expected : actual !== expected;
 }
 
+/** "HH:mm" en la hora local del proceso (misma zona horaria configurada en el servidor). */
+function currentHhMm(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+/** 0=domingo..6=sabado, igual que Date#getDay(). */
+function currentWeekday(): number {
+  return new Date().getDay();
+}
+
 /**
- * Escucha DeviceStateBus (mismo bus que alimenta el gateway en tiempo real) y evalua
- * las reglas cuyo trigger coincide con el dispositivo que acaba de cambiar de estado.
- * Nota: como las acciones de una regla pueden a su vez generar nuevos cambios de estado
- * (p.ej. si el dispositivo confirma el nuevo estado por MQTT), es responsabilidad de quien
- * diseña las reglas evitar ciclos entre disparadores y acciones.
+ * Escucha DeviceStateBus (mismo bus que alimenta el gateway en tiempo real) para triggers por
+ * estado de dispositivo, y ademas revisa cada minuto los triggers por horario (schedule).
+ * Ambos caminos comparten checkConditions/fireRule para que una regla se comporte igual sin
+ * importar que la dispare. Nota: como las acciones de una regla pueden a su vez generar nuevos
+ * cambios de estado (p.ej. si el dispositivo confirma el nuevo estado por MQTT), es
+ * responsabilidad de quien diseña las reglas evitar ciclos entre disparadores y acciones.
  */
 @Injectable()
 export class AutomationEngineService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger("AutomationEngine");
   private subscription?: Subscription;
+  /** Evita disparar la misma regla varias veces dentro del mismo minuto si el cron corre de mas. */
+  private lastScheduleFireMinute = new Map<string, string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -31,7 +46,7 @@ export class AutomationEngineService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.subscription = this.stateBus.events$.subscribe((event) => {
-      this.evaluate(event).catch((err) =>
+      this.evaluateDeviceState(event).catch((err) =>
         this.logger.error(`Error evaluando reglas para dispositivo ${event.deviceId}: ${err.message}`),
       );
     });
@@ -41,14 +56,35 @@ export class AutomationEngineService implements OnModuleInit, OnModuleDestroy {
     this.subscription?.unsubscribe();
   }
 
-  private async evaluate(event: DeviceStateEvent) {
+  private async evaluateDeviceState(event: DeviceStateEvent) {
     const matchingTriggers = await this.prisma.ruleTrigger.findMany({
-      where: { deviceId: event.deviceId, rule: { enabled: true } },
+      where: { type: RuleTriggerType.device_state, deviceId: event.deviceId, rule: { enabled: true } },
       include: { rule: { include: { conditions: true, actions: { orderBy: { order: "asc" } } } } },
     });
 
     for (const trigger of matchingTriggers) {
-      if (!compare(trigger.operator, event.state, trigger.value)) continue;
+      if (!trigger.value || !compare(trigger.operator, event.state, trigger.value)) continue;
+      await this.fireRule(trigger.rule.id, trigger.rule.name, trigger.rule.conditions, trigger.rule.actions);
+    }
+  }
+
+  /** Revisa los triggers por horario cada minuto; @nestjs/schedule requiere ScheduleModule.forRoot() en AppModule. */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async evaluateSchedules() {
+    const hhmm = currentHhMm();
+    const weekday = currentWeekday();
+    const minuteKey = `${new Date().toISOString().slice(0, 16)}`; // ...T HH:mm, unico por minuto
+
+    const dueTriggers = await this.prisma.ruleTrigger.findMany({
+      where: { type: RuleTriggerType.schedule, scheduleTime: hhmm, rule: { enabled: true } },
+      include: { rule: { include: { conditions: true, actions: { orderBy: { order: "asc" } } } } },
+    });
+
+    for (const trigger of dueTriggers) {
+      if (trigger.scheduleDays.length > 0 && !trigger.scheduleDays.includes(weekday)) continue;
+      const lastFired = this.lastScheduleFireMinute.get(trigger.id);
+      if (lastFired === minuteKey) continue; // ya disparada este minuto exacto
+      this.lastScheduleFireMinute.set(trigger.id, minuteKey);
       await this.fireRule(trigger.rule.id, trigger.rule.name, trigger.rule.conditions, trigger.rule.actions);
     }
   }
@@ -56,7 +92,7 @@ export class AutomationEngineService implements OnModuleInit, OnModuleDestroy {
   private async fireRule(
     ruleId: string,
     ruleName: string,
-    conditions: { deviceId: string; operator: ComparisonOperator; value: string }[],
+    conditions: { deviceId: string | null; operator: ComparisonOperator; value: string | null }[],
     actions: { deviceId: string; action: "on" | "off"; delayMs: number }[],
   ) {
     try {
@@ -89,9 +125,10 @@ export class AutomationEngineService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async checkConditions(
-    conditions: { deviceId: string; operator: ComparisonOperator; value: string }[],
+    conditions: { deviceId: string | null; operator: ComparisonOperator; value: string | null }[],
   ): Promise<boolean> {
     for (const condition of conditions) {
+      if (!condition.deviceId || condition.value === null) continue;
       const state = await this.prisma.deviceState.findUnique({ where: { deviceId: condition.deviceId } });
       const actual = state?.state ?? "";
       if (!compare(condition.operator, actual, condition.value)) {

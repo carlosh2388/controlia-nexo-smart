@@ -46,7 +46,16 @@ export class AutomationsService {
         description: dto.description,
         enabled: dto.enabled ?? true,
         createdBy: userId,
-        triggers: { create: dto.triggers.map((t) => ({ deviceId: t.deviceId, operator: t.operator, value: t.value })) },
+        triggers: {
+          create: dto.triggers.map((t) => ({
+            type: t.type,
+            deviceId: t.deviceId,
+            operator: t.operator,
+            value: t.value,
+            scheduleTime: t.scheduleTime,
+            scheduleDays: t.scheduleDays ?? [],
+          })),
+        },
         conditions: {
           create: (dto.conditions ?? []).map((c) => ({ deviceId: c.deviceId, operator: c.operator, value: c.value })),
         },
@@ -92,7 +101,16 @@ export class AutomationsService {
           description: dto.description,
           enabled: dto.enabled,
           triggers: dto.triggers
-            ? { create: dto.triggers.map((t) => ({ deviceId: t.deviceId, operator: t.operator, value: t.value })) }
+            ? {
+                create: dto.triggers.map((t) => ({
+                  type: t.type,
+                  deviceId: t.deviceId,
+                  operator: t.operator,
+                  value: t.value,
+                  scheduleTime: t.scheduleTime,
+                  scheduleDays: t.scheduleDays ?? [],
+                })),
+              }
             : undefined,
           conditions: dto.conditions
             ? { create: dto.conditions.map((c) => ({ deviceId: c.deviceId, operator: c.operator, value: c.value })) }

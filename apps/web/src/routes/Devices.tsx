@@ -8,6 +8,8 @@ import { inferDeviceKind, type DeviceKindMeta } from "../utils/deviceKind";
 import AddDeviceForm from "./AddDeviceForm";
 import ImportHomeAssistant from "./ImportHomeAssistant";
 import ImportMqtt from "./ImportMqtt";
+import BuildingView from "./BuildingView";
+import Automations from "./Automations";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { SensorReadingInline, SensorReadingPanel } from "../components/SensorReadingCard";
 import LiveClock from "../components/LiveClock";
@@ -161,6 +163,7 @@ export default function Devices() {
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [search, setSearch] = useState("");
   const [showHiddenPanel, setShowHiddenPanel] = useState(false);
+  const [view, setView] = useState<"classic" | "building" | "automations">("classic");
   const { toasts, push } = useToasts();
 
   useDeviceSocket();
@@ -277,7 +280,7 @@ export default function Devices() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl p-6">
+      <main className={`mx-auto p-6 transition-[max-width] duration-300 ${view === "building" ? "max-w-[1920px]" : "max-w-6xl"}`}>
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-sky-400">
@@ -285,10 +288,47 @@ export default function Devices() {
               Edificio {BUILDING_CONTEXT.building} &middot; {BUILDING_CONTEXT.level}
             </p>
             <h1 className="text-xl font-semibold text-slate-50">Panel de dispositivos</h1>
-            <p className="text-sm text-slate-500">
-              {totalVisible} visible(s){hidden.length > 0 ? ` · ${hidden.length} oculto(s)` : ""}
-            </p>
+            {view === "classic" && (
+              <p className="text-sm text-slate-500">
+                {totalVisible} visible(s){hidden.length > 0 ? ` · ${hidden.length} oculto(s)` : ""}
+              </p>
+            )}
           </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex gap-1 rounded-lg border border-slate-800 bg-slate-900 p-1">
+              <button
+                onClick={() => setView("classic")}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  view === "classic" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Opción 1 · Clásico
+              </button>
+              <button
+                onClick={() => setView("building")}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  view === "building" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Opción 2 · Vista de edificio
+              </button>
+              <button
+                onClick={() => setView("automations")}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  view === "automations" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Opción 3 · Gestión Inteligente
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {view === "automations" && <Automations />}
+
+        {view === "classic" && (
+        <>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => {
@@ -504,6 +544,10 @@ export default function Devices() {
             );
           })}
         </div>
+        </>
+        )}
+
+        {view === "building" && <BuildingView />}
       </main>
 
       <ToastContainer toasts={toasts} />

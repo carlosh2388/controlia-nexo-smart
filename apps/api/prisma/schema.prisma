@@ -41,6 +41,11 @@ enum ComparisonOperator {
   ne
 }
 
+enum RuleTriggerType {
+  device_state
+  schedule
+}
+
 enum RuleExecutionStatus {
   success
   failed
@@ -104,6 +109,8 @@ model Device {
   payloadOff    String         @default("OFF")
   httpBaseUrl   String?
   metadata      Json?
+  areaId        String?
+  area          Area?          @relation(fields: [areaId], references: [id], onDelete: SetNull)
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
@@ -114,7 +121,46 @@ model Device {
   ruleConditions RuleCondition[]
   ruleActions    RuleAction[]
 
+  @@index([areaId])
   @@map("devices")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  building  String
+  level     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  areas Area[]
+
+  @@map("tenants")
+}
+
+/// Zona fisica del piso de un tenant (ej. "CCT", "Sala Presidencial"), con su render/foto e
+/// hitbox (left/top/width/height en % sobre la imagen general) para la Vista de Edificio.
+model Area {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  slug      String
+  imageFile String
+  boxLeft   Float?
+  boxTop    Float?
+  boxWidth  Float?
+  boxHeight Float?
+  /// Contorno real del area sobre imageFile: arreglo [[x,y], ...] en pixeles nativos de la imagen (no porcentaje).
+  points    Json?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  devices Device[]
+
+  @@unique([tenantId, slug])
+  @@map("areas")
 }
 
 model DeviceState {
@@ -171,10 +217,15 @@ model RuleTrigger {
   id       String             @id @default(uuid())
   ruleId   String
   rule     AutomationRule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
-  deviceId String
-  device   Device             @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  type     RuleTriggerType    @default(device_state)
+  deviceId String?
+  device   Device?            @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   operator ComparisonOperator @default(eq)
-  value    String
+  value    String?
+  /// Solo para type=schedule: hora local del servidor en formato "HH:mm" (24h).
+  scheduleTime String?
+  /// Solo para type=schedule: dias de la semana (0=domingo..6=sabado); vacio = todos los dias.
+  scheduleDays Int[]          @default([])
 
   @@index([ruleId])
   @@index([deviceId])
