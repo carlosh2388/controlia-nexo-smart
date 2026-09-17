@@ -41,6 +41,7 @@ services:
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh}
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
       API_PORT: 3000
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
     ports:

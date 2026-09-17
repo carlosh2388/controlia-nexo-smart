@@ -101,7 +101,9 @@ export function useDevices() {
       const { data } = await apiClient.get<Device[]>("/devices");
       return data;
     },
-    refetchInterval: 15_000,
+    staleTime: 5_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -222,7 +224,7 @@ export function useImportZigbee2Mqtt() {
 /**
  * Aplica el nuevo estado al toggle de inmediato (optimista) en vez de esperar la respuesta
  * del backend: el comando real se despacha async via BullMQ y el estado confirmado llega
- * poco despues por WebSocket (useDeviceSocket) o el poll de 15s, que sobreescriben este valor.
+ * poco despues por WebSocket (useDeviceSocket) o el poll de 30s, que sobreescriben este valor.
  * Si el comando falla, se revierte al valor anterior.
  */
 export function useSendDeviceCommand() {

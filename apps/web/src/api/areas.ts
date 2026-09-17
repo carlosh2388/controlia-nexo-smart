@@ -41,6 +41,8 @@ export function useAreas() {
       const { data } = await apiClient.get<AreasResponse>("/areas");
       return data;
     },
-    refetchInterval: 15_000,
+    staleTime: 5_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
   });
 }
