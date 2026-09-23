@@ -91,6 +91,7 @@ const RULES: [RegExp, DeviceKindId][] = [
  */
 export function inferDeviceKind(name: string, backendKind?: DeviceKind): DeviceKindMeta {
   if (backendKind === "sensor") return KINDS.sensor;
+  if (backendKind === "climate") return KINDS.climate;
 
   // Los guiones/guiones bajos no son limite de palabra para \b (son \w), asi que
   // "TIRA_LED_OFICINA" no matcheaba \bled\b: se normalizan a espacios antes de probar.

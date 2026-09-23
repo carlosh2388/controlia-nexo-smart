@@ -1,0 +1,13 @@
+{
+  "name": "bacnet-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Puente HTTP para BACnet/IP. Corre nativo en el host (NO en Docker) porque Docker Desktop en Windows no puede enrutar UDP hacia la LAN real; el API (en Docker) le habla por HTTP via host.docker.internal.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bacstack": "^0.0.1-beta.14"
+  }
+}

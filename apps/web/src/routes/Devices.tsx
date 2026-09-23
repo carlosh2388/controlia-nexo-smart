@@ -4,17 +4,20 @@ import { useDeleteDevice, useDevices, useSendDeviceCommand, useSetDeviceHidden, 
 import { useDeviceSocket } from "../ws/useDeviceSocket";
 import { useAuthStore } from "../store/auth.store";
 import { APP_NAME, BUILDING_CONTEXT } from "../config/brand";
-import { inferDeviceKind, type DeviceKindMeta } from "../utils/deviceKind";
+import { inferDeviceKind, type DeviceKindId, type DeviceKindMeta } from "../utils/deviceKind";
 import AddDeviceForm from "./AddDeviceForm";
 import ImportHomeAssistant from "./ImportHomeAssistant";
 import ImportMqtt from "./ImportMqtt";
+import ImportBacnet from "./ImportBacnet";
 import BuildingView from "./BuildingView";
+import ClimateControlPanel from "../components/ClimateControlPanel";
 import Automations from "./Automations";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { SensorReadingInline, SensorReadingPanel } from "../components/SensorReadingCard";
 import LiveClock from "../components/LiveClock";
 import {
   BuildingIcon,
+  ChevronIcon,
   ChipLogo,
   EditIcon,
   EyeIcon,
@@ -81,17 +84,67 @@ function StatusDot({ isOn }: { isOn: boolean }) {
   );
 }
 
-function StatTile({ label, value, tone }: { label: string; value: number; tone: "sky" | "emerald" | "slate" }) {
+type StatTone = "sky" | "emerald" | "slate" | "amber" | "violet" | "teal";
+
+function StatTile({ label, value, tone }: { label: string; value: number; tone: StatTone }) {
   const toneClass = {
     sky: "text-sky-300",
     emerald: "text-emerald-300",
     slate: "text-slate-200",
+    amber: "text-amber-300",
+    violet: "text-violet-300",
+    teal: "text-teal-300",
   }[tone];
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-4 py-3">
       <div className={`text-2xl font-semibold tabular-nums ${toneClass}`}>{value}</div>
       <div className="text-xs text-slate-500">{label}</div>
     </div>
+  );
+}
+
+/** Etiqueta legible + color por protocolo; orden fijo para que la fila de tarjetas no salte al cambiar los datos. */
+const PROTOCOL_META: Record<string, { label: string; tone: StatTone }> = {
+  http: { label: "HTTP / Home Assistant", tone: "sky" },
+  mqtt: { label: "MQTT", tone: "emerald" },
+  bacnet: { label: "BACnet (aires)", tone: "amber" },
+  lorawan: { label: "LoRaWAN", tone: "violet" },
+  ewelink: { label: "eWeLink LAN", tone: "teal" },
+};
+const PROTOCOL_ORDER = ["http", "mqtt", "bacnet", "lorawan", "ewelink"];
+
+/** Orden fijo de las secciones del panel: primero lo mas numeroso/operativo, sensores y categorias raras al final. */
+const SECTION_ORDER: DeviceKindId[] = ["light", "climate", "sensor", "plug", "water", "lock", "camera", "fan"];
+
+function SectionHeader({
+  kind,
+  count,
+  collapsed,
+  onToggle,
+}: {
+  kind: DeviceKindMeta;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const Icon = kind.Icon;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      className="group mb-3 mt-8 flex w-full items-center gap-3 text-left first:mt-0"
+    >
+      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${kind.accent.bgOn} ${kind.accent.text}`}>
+        <Icon className="h-4 w-4" />
+      </div>
+      <h2 className="text-base font-semibold text-slate-100">{kind.label}</h2>
+      <span className="text-xs text-slate-500">{count} dispositivo(s)</span>
+      <div className="h-px flex-1 bg-slate-800" />
+      <ChevronIcon
+        className={`h-4 w-4 shrink-0 text-slate-500 transition-transform group-hover:text-slate-300 ${collapsed ? "-rotate-90" : ""}`}
+      />
+    </button>
   );
 }
 
@@ -139,6 +192,151 @@ function DeviceRow({
   );
 }
 
+function GroupCard({
+  id,
+  title,
+  kind,
+  members,
+  onToggle,
+  onEdit,
+  onDelete,
+  onHide,
+}: {
+  id: string;
+  title: string;
+  kind: DeviceKindMeta;
+  members: Device[];
+  onToggle: (device: Device, next: boolean) => void;
+  onEdit: (device: Device) => void;
+  onDelete: (device: Device) => void;
+  onHide: (device: Device) => void;
+}) {
+  const groupOn = members.some((m) => m.state?.state === "on");
+  return (
+    <div
+      key={id}
+      className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm transition-colors hover:border-slate-700"
+    >
+      <div className="mb-3 flex items-center gap-3">
+        <DeviceIconBadge kind={kind} isOn={groupOn} />
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate font-medium text-slate-100">{title}</h2>
+          <p className={`text-xs font-medium uppercase tracking-wide ${kind.accent.text}`}>
+            {kind.label} &middot; {members.length} canales
+          </p>
+        </div>
+        <span className="shrink-0 text-xs text-slate-500">{members[0].protocol.toUpperCase()}</span>
+      </div>
+      <div>
+        {members.map((device) => (
+          <DeviceRow
+            key={device.id}
+            device={device}
+            onToggle={onToggle}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onHide={onHide}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DeviceCard({
+  device,
+  kind,
+  onToggle,
+  onEdit,
+  onDelete,
+  onHide,
+  onOpenClimate,
+}: {
+  device: Device;
+  kind: DeviceKindMeta;
+  onToggle: (device: Device, next: boolean) => void;
+  onEdit: (device: Device) => void;
+  onDelete: (device: Device) => void;
+  onHide: (device: Device) => void;
+  onOpenClimate: (device: Device) => void;
+}) {
+  const isSensor = device.kind === "sensor";
+  const isClimate = device.kind === "climate";
+  const isOn = device.state?.state === "on";
+  const roomTemp = device.state?.readings?.roomTemp as number | undefined;
+  const setRoomTemp = device.state?.readings?.setRoomTemp as number | undefined;
+  return (
+    <div className="group relative rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm transition-all hover:border-slate-700 hover:shadow-lg">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <DeviceIconBadge kind={kind} isOn={!isSensor && isOn} />
+          <div className="min-w-0">
+            <h2 className="truncate font-medium text-slate-100">{device.name}</h2>
+            <p className={`text-xs font-medium uppercase tracking-wide ${kind.accent.text}`}>{kind.label}</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {!isSensor && !isClimate && <ToggleSwitch checked={isOn} onChange={(next) => onToggle(device, next)} />}
+          {isClimate && (
+            <button
+              onClick={() => onOpenClimate(device)}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500"
+            >
+              Controlar
+            </button>
+          )}
+          <span className="hidden items-center gap-1 group-hover:flex">
+            <ActionButton onClick={() => onEdit(device)} title="Editar" tone="blue">
+              <EditIcon className="h-4 w-4" />
+            </ActionButton>
+            <ActionButton onClick={() => onHide(device)} title="Ocultar del panel" tone="slate">
+              <EyeOffIcon className="h-4 w-4" />
+            </ActionButton>
+            <ActionButton onClick={() => onDelete(device)} title="Eliminar" tone="red">
+              <TrashIcon className="h-4 w-4" />
+            </ActionButton>
+          </span>
+        </div>
+      </div>
+
+      {isSensor ? (
+        <SensorReadingPanel
+          readings={device.state?.readings ?? null}
+          updatedAt={device.state?.updatedAt}
+          deviceId={device.id}
+          deviceName={device.name}
+        />
+      ) : isClimate ? (
+        <button
+          onClick={() => onOpenClimate(device)}
+          className="flex w-full items-center justify-between border-t border-slate-800/70 pt-3 text-left text-xs text-slate-500 hover:text-slate-300"
+        >
+          <span className="flex items-center gap-1.5">
+            <StatusDot isOn={isOn} />
+            {isOn ? "Encendido" : "Apagado"}
+            {device.state?.readings?.mode ? ` · ${device.state.readings.mode}` : ""}
+          </span>
+          <span className="text-sm font-semibold text-slate-200">
+            {roomTemp !== undefined ? `${roomTemp}°C` : "--"}
+            {setRoomTemp !== undefined && <span className="ml-1 text-slate-500">→ {setRoomTemp}°C</span>}
+          </span>
+        </button>
+      ) : (
+        <div className="flex items-center justify-between border-t border-slate-800/70 pt-3 text-xs text-slate-500">
+          <span className="flex items-center gap-1.5">
+            <StatusDot isOn={isOn} />
+            {isOn ? "Encendido" : "Apagado"}
+          </span>
+          <span>
+            {device.protocol.toUpperCase()} &middot;{" "}
+            {device.state?.updatedAt ? new Date(device.state.updatedAt).toLocaleTimeString() : "sin datos"}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CardSkeleton() {
   return (
     <div className="animate-pulse rounded-2xl border border-slate-800 bg-slate-900 p-5">
@@ -160,19 +358,24 @@ export default function Devices() {
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showImportMqtt, setShowImportMqtt] = useState(false);
+  const [showImportBacnet, setShowImportBacnet] = useState(false);
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
+  const [climateDeviceId, setClimateDeviceId] = useState<string | null>(null);
+  const climateDevice = devices?.find((d) => d.id === climateDeviceId) ?? null;
   const [search, setSearch] = useState("");
   const [showHiddenPanel, setShowHiddenPanel] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Set<DeviceKindId>>(new Set());
   const [view, setView] = useState<"classic" | "building" | "automations">("classic");
   const { toasts, push } = useToasts();
 
   useDeviceSocket();
 
-  const { groups, singles, hidden, stats } = useMemo(() => {
+  const { groups, singles, hidden, stats, protocols, sections } = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const groups = new Map<string, Device[]>();
+    const groupsMap = new Map<string, Device[]>();
     const singles: Device[] = [];
     const hidden: Device[] = [];
+    const protocolCounts = new Map<string, number>();
     let on = 0;
     let off = 0;
     let sensors = 0;
@@ -185,18 +388,67 @@ export default function Devices() {
       if (device.kind === "sensor") sensors += 1;
       else if (device.state?.state === "on") on += 1;
       else if (device.state?.state === "off") off += 1;
+      protocolCounts.set(device.protocol, (protocolCounts.get(device.protocol) ?? 0) + 1);
 
       if (query && !device.name.toLowerCase().includes(query)) continue;
 
       const key = device.metadata?.group?.key;
       if (key) {
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key)!.push(device);
+        if (!groupsMap.has(key)) groupsMap.set(key, []);
+        groupsMap.get(key)!.push(device);
       } else {
         singles.push(device);
       }
     }
-    return { groups, singles, hidden, stats: { total: on + off + sensors, on, off, sensors } };
+
+    // Orden alfabetico (por el titulo visible de cada tarjeta) en vez del orden de llegada de la API,
+    // que es lo que hacia que el panel se viera "todo general" sin ningun criterio.
+    const groupTitle = (members: Device[]) => (members[0].metadata?.group?.label || members[0].name).toLowerCase();
+    const groups = [...groupsMap.entries()].sort((a, b) => groupTitle(a[1]).localeCompare(groupTitle(b[1]), "es"));
+    singles.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase(), "es"));
+
+    const protocols = PROTOCOL_ORDER.filter((key) => protocolCounts.get(key)).map((key) => ({
+      key,
+      count: protocolCounts.get(key)!,
+      ...PROTOCOL_META[key],
+    }));
+
+    // Divide el panel en secciones por tipo (Iluminacion, Climatizacion, Sensores, ...) en vez de una
+    // sola grilla plana: cada tarjeta de grupo o suelta se clasifica con la misma inferDeviceKind que ya
+    // decide su icono/color, y dentro de cada seccion queda ordenada alfabeticamente.
+    type SectionItem =
+      | { type: "group"; key: string; title: string; kind: DeviceKindMeta; members: Device[] }
+      | { type: "single"; device: Device; kind: DeviceKindMeta };
+
+    const bySection = new Map<DeviceKindId, SectionItem[]>();
+    const pushItem = (kindId: DeviceKindId, item: SectionItem) => {
+      if (!bySection.has(kindId)) bySection.set(kindId, []);
+      bySection.get(kindId)!.push(item);
+    };
+
+    for (const [key, members] of groups) {
+      const title = members[0].metadata?.group?.label || members[0].name;
+      const kind = inferDeviceKind(title, members[0].kind);
+      pushItem(kind.id, { type: "group", key, title, kind, members });
+    }
+    for (const device of singles) {
+      const kind = inferDeviceKind(device.name, device.kind);
+      pushItem(kind.id, { type: "single", device, kind });
+    }
+
+    const itemTitle = (item: SectionItem) => (item.type === "group" ? item.title : item.device.name).toLowerCase();
+    const itemDeviceCount = (item: SectionItem) => (item.type === "group" ? item.members.length : 1);
+
+    const sections = SECTION_ORDER.filter((id) => bySection.has(id)).map((id) => {
+      const items = bySection.get(id)!.sort((a, b) => itemTitle(a).localeCompare(itemTitle(b), "es"));
+      return {
+        kind: items[0].kind,
+        items,
+        deviceCount: items.reduce((sum, item) => sum + itemDeviceCount(item), 0),
+      };
+    });
+
+    return { groups, singles, hidden, stats: { total: on + off + sensors, on, off, sensors }, protocols, sections };
   }, [devices, search]);
 
   function handleLogout() {
@@ -221,7 +473,12 @@ export default function Devices() {
     setShowForm(false);
     setShowImport(false);
     setShowImportMqtt(false);
+    setShowImportBacnet(false);
     setEditingDevice(device);
+  }
+
+  function handleOpenClimate(device: Device) {
+    setClimateDeviceId(device.id);
   }
 
   function handleHide(device: Device) {
@@ -235,8 +492,17 @@ export default function Devices() {
     setHidden.mutate({ id: device.id, hidden: false });
   }
 
+  function toggleSection(kindId: DeviceKindId) {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(kindId)) next.delete(kindId);
+      else next.add(kindId);
+      return next;
+    });
+  }
+
   const formOpen = showForm || editingDevice !== null;
-  const totalVisible = groups.size + singles.length;
+  const totalVisible = groups.length + singles.length;
   const isEmpty = !isLoading && !isError && totalVisible === 0 && hidden.length === 0;
   const noResults = !isLoading && !isError && totalVisible === 0 && hidden.length > 0 && !showHiddenPanel;
 
@@ -285,7 +551,8 @@ export default function Devices() {
           <div>
             <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-sky-400">
               <BuildingIcon className="h-3.5 w-3.5" />
-              Edificio {BUILDING_CONTEXT.building} &middot; {BUILDING_CONTEXT.level}
+              Edificio {BUILDING_CONTEXT.building}
+              {view === "building" ? " · Vista de edificio" : ` · ${BUILDING_CONTEXT.level}`}
             </p>
             <h1 className="text-xl font-semibold text-slate-50">Panel de dispositivos</h1>
             {view === "classic" && (
@@ -302,7 +569,7 @@ export default function Devices() {
                   view === "classic" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                Opción 1 · Clásico
+                Vista Operativa
               </button>
               <button
                 onClick={() => setView("building")}
@@ -310,7 +577,7 @@ export default function Devices() {
                   view === "building" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                Opción 2 · Vista de edificio
+                Vista de Edificio
               </button>
               <button
                 onClick={() => setView("automations")}
@@ -318,7 +585,7 @@ export default function Devices() {
                   view === "automations" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                Opción 3 · Gestión Inteligente
+                Gestión Inteligente
               </button>
             </div>
           </div>
@@ -334,6 +601,7 @@ export default function Devices() {
               onClick={() => {
                 setShowImport(false);
                 setShowImportMqtt(false);
+                setShowImportBacnet(false);
                 setEditingDevice(null);
                 setShowForm((v) => !v);
               }}
@@ -346,6 +614,7 @@ export default function Devices() {
               onClick={() => {
                 setShowForm(false);
                 setShowImportMqtt(false);
+                setShowImportBacnet(false);
                 setEditingDevice(null);
                 setShowImport((v) => !v);
               }}
@@ -358,6 +627,7 @@ export default function Devices() {
               onClick={() => {
                 setShowForm(false);
                 setShowImport(false);
+                setShowImportBacnet(false);
                 setEditingDevice(null);
                 setShowImportMqtt((v) => !v);
               }}
@@ -366,15 +636,39 @@ export default function Devices() {
               <ImportIcon className="h-3.5 w-3.5" />
               Sin Home Assistant (MQTT directo)
             </button>
+            <button
+              onClick={() => {
+                setShowForm(false);
+                setShowImport(false);
+                setShowImportMqtt(false);
+                setEditingDevice(null);
+                setShowImportBacnet((v) => !v);
+              }}
+              className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+            >
+              <ImportIcon className="h-3.5 w-3.5" />
+              Aires acondicionados (BACnet)
+            </button>
           </div>
         </div>
 
         {!isLoading && !isError && stats.total > 0 && (
-          <div className={`mb-6 grid gap-3 ${stats.sensors > 0 ? "grid-cols-4 sm:max-w-lg" : "grid-cols-3 sm:max-w-md"}`}>
+          <div className={`mb-3 grid gap-3 ${stats.sensors > 0 ? "grid-cols-4 sm:max-w-lg" : "grid-cols-3 sm:max-w-md"}`}>
             <StatTile label="Dispositivos" value={stats.total} tone="slate" />
             <StatTile label="Encendidos" value={stats.on} tone="emerald" />
             <StatTile label="Apagados" value={stats.off} tone="sky" />
             {stats.sensors > 0 && <StatTile label="Sensores" value={stats.sensors} tone="sky" />}
+          </div>
+        )}
+
+        {!isLoading && !isError && protocols.length > 0 && (
+          <div className="mb-6">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-600">Por protocolo</p>
+            <div className="grid grid-cols-2 gap-3 sm:max-w-lg sm:grid-cols-3 md:grid-cols-5">
+              {protocols.map((p) => (
+                <StatTile key={p.key} label={p.label} value={p.count} tone={p.tone} />
+              ))}
+            </div>
           </div>
         )}
 
@@ -417,6 +711,7 @@ export default function Devices() {
 
         {showImport && <ImportHomeAssistant onDone={() => setShowImport(false)} />}
         {showImportMqtt && <ImportMqtt onDone={() => setShowImportMqtt(false)} />}
+        {showImportBacnet && <ImportBacnet onDone={() => setShowImportBacnet(false)} />}
 
         {formOpen && (
           <AddDeviceForm
@@ -447,108 +742,64 @@ export default function Devices() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {isLoading && (
-            <>
-              <CardSkeleton />
-              <CardSkeleton />
-              <CardSkeleton />
-            </>
-          )}
+        {isLoading && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <CardSkeleton />
+            <CardSkeleton />
+            <CardSkeleton />
+          </div>
+        )}
 
-          {[...groups.entries()].map(([key, members]) => {
-            const title = members[0].metadata?.group?.label || members[0].name;
-            const groupKind = inferDeviceKind(title, members[0].kind);
-            const groupOn = members.some((m) => m.state?.state === "on");
-            return (
-              <div
-                key={key}
-                className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm transition-colors hover:border-slate-700"
-              >
-                <div className="mb-3 flex items-center gap-3">
-                  <DeviceIconBadge kind={groupKind} isOn={groupOn} />
-                  <div className="min-w-0 flex-1">
-                    <h2 className="truncate font-medium text-slate-100">{title}</h2>
-                    <p className={`text-xs font-medium uppercase tracking-wide ${groupKind.accent.text}`}>
-                      {groupKind.label} &middot; {members.length} canales
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-xs text-slate-500">{members[0].protocol.toUpperCase()}</span>
+        {sections.map((section) => {
+          const isCollapsed = collapsedSections.has(section.kind.id);
+          return (
+            <div key={section.kind.id}>
+              <SectionHeader
+                kind={section.kind}
+                count={section.deviceCount}
+                collapsed={isCollapsed}
+                onToggle={() => toggleSection(section.kind.id)}
+              />
+              {!isCollapsed && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {section.items.map((item) =>
+                    item.type === "group" ? (
+                      <GroupCard
+                        key={item.key}
+                        id={item.key}
+                        title={item.title}
+                        kind={item.kind}
+                        members={item.members}
+                        onToggle={handleToggle}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                        onHide={handleHide}
+                      />
+                    ) : (
+                      <DeviceCard
+                        key={item.device.id}
+                        device={item.device}
+                        kind={item.kind}
+                        onToggle={handleToggle}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                        onHide={handleHide}
+                        onOpenClimate={handleOpenClimate}
+                      />
+                    ),
+                  )}
                 </div>
-                <div>
-                  {members.map((device) => (
-                    <DeviceRow
-                      key={device.id}
-                      device={device}
-                      onToggle={handleToggle}
-                      onEdit={handleEdit}
-                      onDelete={handleDelete}
-                      onHide={handleHide}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-
-          {singles.map((device) => {
-            const isSensor = device.kind === "sensor";
-            const isOn = device.state?.state === "on";
-            const kind = inferDeviceKind(device.name, device.kind);
-            return (
-              <div
-                key={device.id}
-                className="group relative rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm transition-all hover:border-slate-700 hover:shadow-lg"
-              >
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <DeviceIconBadge kind={kind} isOn={!isSensor && isOn} />
-                    <div className="min-w-0">
-                      <h2 className="truncate font-medium text-slate-100">{device.name}</h2>
-                      <p className={`text-xs font-medium uppercase tracking-wide ${kind.accent.text}`}>
-                        {kind.label}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {!isSensor && <ToggleSwitch checked={isOn} onChange={(next) => handleToggle(device, next)} />}
-                    <span className="hidden items-center gap-1 group-hover:flex">
-                      <ActionButton onClick={() => handleEdit(device)} title="Editar" tone="blue">
-                        <EditIcon className="h-4 w-4" />
-                      </ActionButton>
-                      <ActionButton onClick={() => handleHide(device)} title="Ocultar del panel" tone="slate">
-                        <EyeOffIcon className="h-4 w-4" />
-                      </ActionButton>
-                      <ActionButton onClick={() => handleDelete(device)} title="Eliminar" tone="red">
-                        <TrashIcon className="h-4 w-4" />
-                      </ActionButton>
-                    </span>
-                  </div>
-                </div>
-
-                {isSensor ? (
-                  <SensorReadingPanel readings={device.state?.readings ?? null} updatedAt={device.state?.updatedAt} />
-                ) : (
-                  <div className="flex items-center justify-between border-t border-slate-800/70 pt-3 text-xs text-slate-500">
-                    <span className="flex items-center gap-1.5">
-                      <StatusDot isOn={isOn} />
-                      {isOn ? "Encendido" : "Apagado"}
-                    </span>
-                    <span>
-                      {device.protocol.toUpperCase()} &middot;{" "}
-                      {device.state?.updatedAt ? new Date(device.state.updatedAt).toLocaleTimeString() : "sin datos"}
-                    </span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+              )}
+            </div>
+          );
+        })}
         </>
         )}
 
         {view === "building" && <BuildingView />}
       </main>
+
+      {climateDevice && <ClimateControlPanel device={climateDevice} onClose={() => setClimateDeviceId(null)} />}
 
       <ToastContainer toasts={toasts} />
     </div>

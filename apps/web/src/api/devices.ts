@@ -7,6 +7,23 @@ export interface SensorReadings {
   battery?: number;
   voltage?: number;
   linkquality?: number;
+  // Calidad de aire (sensores LEO-S592 via LoRaWAN)
+  co2?: number;
+  tvoc?: number;
+  pm2_5?: number;
+  pm10?: number;
+  hcho?: number;
+  barometricPressure?: number;
+  lightLevel?: string;
+  pirStatus?: string;
+  // Climatizacion (BACnet)
+  roomTemp?: number;
+  setRoomTemp?: number;
+  mode?: string;
+  fanSpeed?: string;
+  swing?: boolean;
+  tempRangeLow?: number;
+  tempRangeHigh?: number;
   [key: string]: number | string | boolean | undefined;
 }
 
@@ -47,8 +64,22 @@ export interface EwelinkDeviceConfig {
   channel?: number;
 }
 
-export type DeviceProtocol = "mqtt" | "http" | "ewelink";
-export type DeviceKind = "switch" | "sensor";
+export type DeviceProtocol = "mqtt" | "http" | "ewelink" | "lorawan" | "bacnet";
+export type DeviceKind = "switch" | "sensor" | "climate";
+
+export interface BacnetObjectRef {
+  type: number;
+  instance: number;
+}
+
+export interface BacnetDeviceConfig {
+  host: string;
+  port?: number;
+  unitKey: string;
+  points: Record<string, BacnetObjectRef>;
+  modeStates?: string[];
+  fanStates?: string[];
+}
 
 export interface Device {
   id: string;
@@ -60,7 +91,14 @@ export interface Device {
   httpBaseUrl: string | null;
   payloadOn: string;
   payloadOff: string;
-  metadata: { http?: HttpDeviceConfig; group?: DeviceGroup; hidden?: boolean; ewelink?: EwelinkDeviceConfig } | null;
+  metadata: {
+    http?: HttpDeviceConfig;
+    group?: DeviceGroup;
+    hidden?: boolean;
+    ewelink?: EwelinkDeviceConfig;
+    bacnet?: BacnetDeviceConfig;
+  } | null;
+  areaId: string | null;
   state: DeviceState | null;
 }
 
@@ -76,6 +114,8 @@ export interface CreateDevicePayload {
   group?: DeviceGroup;
   hidden?: boolean;
   ewelinkConfig?: EwelinkDeviceConfig;
+  /** Area a la que pertenece (Vista de edificio). Enviar "" para quitarle el area asignada al editar. */
+  areaId?: string;
 }
 
 export type UpdateDevicePayload = Partial<CreateDevicePayload>;
@@ -217,6 +257,98 @@ export function useImportZigbee2Mqtt() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["devices"] });
+    },
+  });
+}
+
+export type HistoryRange = "today" | "7d" | "15d" | "30d";
+
+export interface DeviceHistoryPoint {
+  t: string;
+  [metric: string]: number | string | boolean | undefined;
+}
+
+export interface DeviceHistoryResponse {
+  deviceId: string;
+  deviceName: string;
+  range: HistoryRange;
+  points: DeviceHistoryPoint[];
+}
+
+export function useDeviceHistory(deviceId: string | null, range: HistoryRange) {
+  return useQuery({
+    queryKey: ["device-history", deviceId, range],
+    queryFn: async () => {
+      const { data } = await apiClient.get<DeviceHistoryResponse>(`/devices/${deviceId}/history`, {
+        params: { range },
+      });
+      return data;
+    },
+    enabled: !!deviceId,
+    staleTime: 30_000,
+  });
+}
+
+export interface DiscoveredBacnetUnit {
+  unitKey: string;
+  name: string;
+  hasMode: boolean;
+  hasFan: boolean;
+  hasSwing: boolean;
+  hasTempRange: boolean;
+  sample: { on: boolean | null; roomTemp: number | null; setRoomTemp: number | null };
+}
+
+export function useDiscoverBacnet() {
+  return useMutation({
+    mutationFn: async (params: { host: string; port?: number }) => {
+      const { data } = await apiClient.post<DiscoveredBacnetUnit[]>("/devices/bacnet/discover", params);
+      return data;
+    },
+  });
+}
+
+export function useImportBacnet() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      host: string;
+      port?: number;
+      units: { unitKey: string; name: string; areaId?: string }[];
+    }) => {
+      const { data } = await apiClient.post<{ created: Device[]; failed: { unitKey: string; error: string }[] }>(
+        "/devices/bacnet/import",
+        params,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["devices"] });
+    },
+  });
+}
+
+export interface ClimateCommand {
+  on?: boolean;
+  mode?: string;
+  temperature?: number;
+  fanSpeed?: string;
+  swing?: boolean;
+  tempRangeLow?: number;
+  tempRangeHigh?: number;
+}
+
+export function useSetClimate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ deviceId, command }: { deviceId: string; command: ClimateCommand }) => {
+      const { data } = await apiClient.post<Device>(`/devices/${deviceId}/climate`, command);
+      return data;
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<Device[]>(["devices"], (old) =>
+        old?.map((d) => (d.id === updated.id ? updated : d)),
+      );
     },
   });
 }

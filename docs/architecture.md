@@ -90,6 +90,27 @@ sequenceDiagram
   Web->>API: refetch cache
 ```
 
+## Cola de Comandos (Redis)
+
+Redis no guarda datos de negocio (eso es Postgres): es el backend de BullMQ, la
+cola de trabajos para comandos hacia dispositivos. La API responde al usuario
+de inmediato sin esperar al dispositivo; el envio real ocurre en paralelo via
+un worker que consume la cola.
+
+```mermaid
+flowchart LR
+  U[Usuario] -->|"1. POST comando"| API[API NestJS]
+  API -.->|"2. 200 OK inmediato"| U
+  API -->|"3. commandsQueue.add()"| R[("Redis: cola")]
+  R -->|"4. worker toma el job"| W["Worker: commands.processor.ts"]
+  W -->|"5. publica"| M[Broker MQTT]
+  M -->|"6. ejecuta comando"| D[Dispositivo]
+```
+
+Si la API se reinicia entre el paso 3 y el 4, el job sigue en Redis y el
+worker lo retoma apenas vuelve a levantar. Sin Redis, ese job viviria solo en
+la memoria del proceso y se perderia.
+
 ## Modulos Backend
 
 ```mermaid

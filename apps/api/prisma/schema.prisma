@@ -17,11 +17,14 @@ enum DeviceProtocol {
   mqtt
   http
   ewelink
+  lorawan
+  bacnet
 }
 
 enum DeviceKind {
   switch
   sensor
+  climate
 }
 
 enum CommandAction {
@@ -116,6 +119,7 @@ model Device {
 
   state    DeviceState?
   commands Command[]
+  readings DeviceReading[]
 
   ruleTriggers   RuleTrigger[]
   ruleConditions RuleCondition[]
@@ -161,6 +165,19 @@ model Area {
 
   @@unique([tenantId, slug])
   @@map("areas")
+}
+
+/// Historico de lecturas de sensores (para graficas de tendencias). Solo se registran
+/// dispositivos kind=sensor - climatizacion/switches no necesitan historial por ahora.
+model DeviceReading {
+  id         String   @id @default(uuid())
+  deviceId   String
+  device     Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  readings   Json
+  recordedAt DateTime @default(now())
+
+  @@index([deviceId, recordedAt])
+  @@map("device_readings")
 }
 
 model DeviceState {

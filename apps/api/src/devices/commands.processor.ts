@@ -1,10 +1,11 @@
 import { Processor, WorkerHost } from "@nestjs/bullmq";
 import { Logger } from "@nestjs/common";
 import { Job } from "bullmq";
-import { CommandStatus } from "@prisma/client";
+import { CommandStatus, DeviceKind } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AdapterRegistry } from "../adapters/adapter-registry.service";
 import { EventLogService } from "../events/event-log.service";
+import { DeviceStateBus } from "../state-bus/device-state-bus.service";
 import { COMMANDS_QUEUE } from "./devices.constants";
 
 interface DispatchJobData {
@@ -19,6 +20,7 @@ export class CommandsProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly adapterRegistry: AdapterRegistry,
     private readonly eventLog: EventLogService,
+    private readonly stateBus: DeviceStateBus,
   ) {
     super();
   }
@@ -49,6 +51,13 @@ export class CommandsProcessor extends WorkerHost {
         deviceId: command.deviceId,
         userId: command.requestedBy ?? undefined,
       });
+
+      // Refleja de inmediato el estado asumido en device_states (y por WS a todos los clientes),
+      // sin esperar el eco MQTT del dispositivo real: si el eco llega despues, lo vuelve a pisar
+      // con el valor confirmado (igual o distinto, segun responda el hardware).
+      if (command.device.kind !== DeviceKind.sensor) {
+        this.stateBus.emit({ deviceId: command.deviceId, state: command.action });
+      }
     } catch (err) {
       const message = (err as Error).message;
 

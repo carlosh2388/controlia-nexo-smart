@@ -37,6 +37,9 @@ services:
       MQTT_URL: mqtt://mosquitto:1883
       MQTT_USERNAME: ""
       MQTT_PASSWORD: ""
+      LORAWAN_MQTT_URL: ${LORAWAN_MQTT_URL:-}
+      LORAWAN_MQTT_USERNAME: ${LORAWAN_MQTT_USERNAME:-}
+      LORAWAN_MQTT_PASSWORD: ${LORAWAN_MQTT_PASSWORD:-}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-change-me-access}
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh}
@@ -44,8 +47,17 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-warn}
       API_PORT: 3000
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      AREA_UPLOADS_DIR: /app/uploads/areas
+      # Puente BACnet/IP (apps/bacnet-bridge): corre en el host, fuera de Docker, porque Docker
+      # Desktop en Windows no puede enrutar UDP/47808 hacia la LAN real del edificio.
+      BACNET_BRIDGE_URL: ${BACNET_BRIDGE_URL:-http://host.docker.internal:3099}
+      BACNET_BRIDGE_TOKEN: ${BACNET_BRIDGE_TOKEN:-}
     ports:
       - "3010:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - area_uploads:/app/uploads
     depends_on:
       - postgres
       - redis
@@ -66,3 +78,4 @@ services:
 
 volumes:
   postgres_data:
+  area_uploads:

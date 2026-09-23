@@ -10,6 +10,14 @@ export function PlusIcon({ className = base }: IconProps) {
   );
 }
 
+export function ChevronIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function ImportIcon({ className = base }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className}>
@@ -242,6 +250,76 @@ export function SignalIcon({ className = base }: IconProps) {
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function WindIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path
+        d="M3 8h11.5a2.5 2.5 0 1 0-2.5-2.5M3 12h15a2.5 2.5 0 1 1-2.5 2.5M3 16h9a2 2 0 1 1-2 2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function DustIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <circle cx="7" cy="8" r="1.6" fill="currentColor" />
+      <circle cx="13" cy="6" r="1.2" fill="currentColor" />
+      <circle cx="17" cy="10" r="1.8" fill="currentColor" />
+      <circle cx="6" cy="14" r="1.2" fill="currentColor" />
+      <circle cx="11" cy="13" r="1.6" fill="currentColor" />
+      <circle cx="16" cy="16" r="1.2" fill="currentColor" />
+      <circle cx="9" cy="18" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function GaugeIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path
+        d="M4 15a8 8 0 1 1 16 0"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path d="M12 15 16 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="12" cy="15" r="1.3" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function PersonIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <circle cx="12" cy="7" r="3.2" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M5 20c0-3.9 3.1-6.5 7-6.5s7 2.6 7 6.5"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function ChartIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path
+        d="M4 19V5M4 19h16M8 16v-5m4 5V8m4 8v-3"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

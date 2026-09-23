@@ -14,6 +14,7 @@ import { DevicesModule } from "./devices/devices.module";
 import { RealtimeModule } from "./realtime/realtime.module";
 import { AutomationsModule } from "./automations/automations.module";
 import { EwelinkModule } from "./adapters/ewelink/ewelink.module";
+import { BacnetModule } from "./adapters/bacnet/bacnet.module";
 import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { AreasModule } from "./areas/areas.module";
 
@@ -49,6 +50,7 @@ import { AreasModule } from "./areas/areas.module";
     RealtimeModule,
     AutomationsModule,
     EwelinkModule,
+    BacnetModule,
     ApiKeysModule,
     AreasModule,
   ],

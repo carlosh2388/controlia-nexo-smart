@@ -5,6 +5,7 @@ import { HttpDeviceConfigDto } from "./http-device-config.dto";
 import { DeviceGroupDto } from "./device-group.dto";
 import { EwelinkDeviceConfigDto } from "./ewelink-device-config.dto";
 import { MqttJsonConfigDto } from "./mqtt-json-config.dto";
+import { BacnetDeviceConfigDto } from "./bacnet-device-config.dto";
 
 /** Actualizacion parcial de un dispositivo. Si se envia httpConfig, reemplaza la configuracion HTTP completa. */
 export class UpdateDeviceDto {
@@ -55,6 +56,11 @@ export class UpdateDeviceDto {
   @IsBoolean()
   hidden?: boolean;
 
+  /** Area a la que pertenece (Vista de edificio). Enviar "" para quitarle el area asignada. */
+  @IsOptional()
+  @IsString()
+  areaId?: string;
+
   @IsOptional()
   @ValidateNested()
   @Type(() => EwelinkDeviceConfigDto)
@@ -64,4 +70,9 @@ export class UpdateDeviceDto {
   @ValidateNested()
   @Type(() => MqttJsonConfigDto)
   mqttJson?: MqttJsonConfigDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BacnetDeviceConfigDto)
+  bacnetConfig?: BacnetDeviceConfigDto;
 }

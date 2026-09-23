@@ -7,6 +7,7 @@ import {
   type DeviceProtocol,
   type HttpMethod,
 } from "../api/devices";
+import { useAllAreas } from "../api/areas";
 import { extractErrorMessage } from "../api/errors";
 import ThinkingIndicator from "../components/ThinkingIndicator";
 
@@ -23,11 +24,13 @@ export default function AddDeviceForm({ device, onDone }: { device?: Device; onD
   const isEditing = Boolean(device);
   const createDevice = useCreateDevice();
   const updateDevice = useUpdateDevice();
+  const { data: allAreas } = useAllAreas();
   const httpConfig = device?.metadata?.http;
   const ewelinkConfig = device?.metadata?.ewelink;
 
   const [protocol, setProtocol] = useState<DeviceProtocol>(device?.protocol ?? "mqtt");
   const [name, setName] = useState(device?.name ?? "");
+  const [areaId, setAreaId] = useState(device?.areaId ?? "");
   const [error, setError] = useState<string | null>(null);
 
   const [payloadOn, setPayloadOn] = useState(device?.payloadOn ?? "ON");
@@ -69,6 +72,7 @@ export default function AddDeviceForm({ device, onDone }: { device?: Device; onD
       protocol,
       payloadOn: payloadOn || undefined,
       payloadOff: payloadOff || undefined,
+      areaId: isEditing ? areaId : areaId || undefined,
     };
 
     if (protocol === "mqtt") {
@@ -153,6 +157,27 @@ export default function AddDeviceForm({ device, onDone }: { device?: Device; onD
             <option value="mqtt">MQTT</option>
             <option value="http">HTTP (Tasmota, Shelly, ESPHome, REST, Home Assistant...)</option>
             <option value="ewelink">eWeLink LAN directo (Sonoff, sin nube ni Home Assistant)</option>
+          </select>
+        </div>
+        <div>
+          <label className={labelClass}>Area (Vista de edificio)</label>
+          <select className={inputClass} value={areaId} onChange={(e) => setAreaId(e.target.value)}>
+            <option value="">Sin asignar</option>
+            {Object.entries(
+              (allAreas ?? []).reduce<Record<string, typeof allAreas>>((groups, area) => {
+                const key = area.tenant.level;
+                (groups[key] ??= []).push(area);
+                return groups;
+              }, {}),
+            ).map(([level, areasInLevel]) => (
+              <optgroup key={level} label={level}>
+                {areasInLevel!.map((area) => (
+                  <option key={area.id} value={area.id}>
+                    {area.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
           </select>
         </div>
       </div>

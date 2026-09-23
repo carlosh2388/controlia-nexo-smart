@@ -46,6 +46,7 @@ export class DevicesService {
     if (dto.hidden !== undefined) metadata.hidden = dto.hidden;
     if (dto.ewelinkConfig) metadata.ewelink = dto.ewelinkConfig;
     if (dto.mqttJson) metadata.mqttJson = dto.mqttJson;
+    if (dto.bacnetConfig) metadata.bacnet = dto.bacnetConfig;
 
     const device = await this.prisma.device.create({
       data: {
@@ -57,6 +58,7 @@ export class DevicesService {
         payloadOn: dto.payloadOn ?? "ON",
         payloadOff: dto.payloadOff ?? "OFF",
         httpBaseUrl: dto.httpBaseUrl,
+        areaId: dto.areaId || undefined,
         metadata: Object.keys(metadata).length ? (metadata as object) : undefined,
       },
     });
@@ -79,13 +81,14 @@ export class DevicesService {
     restoreRedactedSecrets(existing.metadata, dto);
 
     let metadata: Record<string, unknown> | undefined;
-    if (dto.httpConfig || dto.group || dto.hidden !== undefined || dto.ewelinkConfig || dto.mqttJson) {
+    if (dto.httpConfig || dto.group || dto.hidden !== undefined || dto.ewelinkConfig || dto.mqttJson || dto.bacnetConfig) {
       metadata = { ...((existing.metadata as Record<string, unknown> | null) ?? {}) };
       if (dto.httpConfig) metadata.http = dto.httpConfig;
       if (dto.group) metadata.group = dto.group;
       if (dto.hidden !== undefined) metadata.hidden = dto.hidden;
       if (dto.ewelinkConfig) metadata.ewelink = dto.ewelinkConfig;
       if (dto.mqttJson) metadata.mqttJson = dto.mqttJson;
+      if (dto.bacnetConfig) metadata.bacnet = dto.bacnetConfig;
     }
 
     const device = await this.prisma.device.update({
@@ -99,6 +102,7 @@ export class DevicesService {
         payloadOn: dto.payloadOn,
         payloadOff: dto.payloadOff,
         httpBaseUrl: dto.httpBaseUrl,
+        areaId: dto.areaId === undefined ? undefined : dto.areaId === "" ? null : dto.areaId,
         metadata: metadata as object | undefined,
       },
     });

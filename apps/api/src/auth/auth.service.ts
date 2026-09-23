@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import ms from "../common/ms";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventLogService } from "../events/event-log.service";
@@ -53,7 +53,7 @@ export class AuthService {
     });
 
     const refreshExpiresIn = this.configService.get<string>("JWT_REFRESH_EXPIRES_IN", "7d");
-    const refreshToken = await this.jwtService.signAsync(payload, {
+    const refreshToken = await this.jwtService.signAsync({ ...payload, jti: randomUUID() }, {
       secret: this.configService.get<string>("JWT_REFRESH_SECRET"),
       expiresIn: refreshExpiresIn,
     });

@@ -14,6 +14,8 @@ import { DeviceCommandDto } from "./dto/device-command.dto";
 import { ListDevicesQueryDto } from "./dto/list-devices-query.dto";
 import { DiscoverHomeAssistantDto, ImportHomeAssistantDto } from "./dto/home-assistant-import.dto";
 import { DiscoverZigbee2MqttDto, ImportZigbee2MqttDto } from "./dto/zigbee2mqtt-import.dto";
+import { DeviceHistoryQueryDto } from "./dto/device-history-query.dto";
+import { DeviceHistoryService } from "./device-history.service";
 
 @Controller("devices")
 @UseGuards(AuthGuard, RolesGuard)
@@ -22,6 +24,7 @@ export class DevicesController {
     private readonly devicesService: DevicesService,
     private readonly haImportService: HomeAssistantImportService,
     private readonly zigbee2mqttImportService: Zigbee2MqttImportService,
+    private readonly historyService: DeviceHistoryService,
   ) {}
 
   @Version("1")
@@ -34,6 +37,12 @@ export class DevicesController {
   @Get(":id")
   findOne(@Param("id") id: string) {
     return this.devicesService.findOne(id);
+  }
+
+  @Version("1")
+  @Get(":id/history")
+  getHistory(@Param("id") id: string, @Query() query: DeviceHistoryQueryDto) {
+    return this.historyService.getHistory(id, query.range);
   }
 
   @Version("1")
