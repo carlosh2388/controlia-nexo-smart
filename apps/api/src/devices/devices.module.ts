@@ -6,6 +6,7 @@ import { HomeAssistantImportService } from "./home-assistant-import.service";
 import { Zigbee2MqttImportService } from "./zigbee2mqtt-import.service";
 import { DeviceHistoryService } from "./device-history.service";
 import { DeviceHistoryRecorderService } from "./device-history-recorder.service";
+import { AgentSyncService } from "./agent-sync.service";
 import { CommandsProcessor } from "./commands.processor";
 import { COMMANDS_QUEUE } from "./devices.constants";
 import { AdaptersModule } from "../adapters/adapters.module";
@@ -27,6 +28,7 @@ import { EventsModule } from "../events/events.module";
     Zigbee2MqttImportService,
     DeviceHistoryService,
     DeviceHistoryRecorderService,
+    AgentSyncService,
   ],
   exports: [DevicesService],
 })

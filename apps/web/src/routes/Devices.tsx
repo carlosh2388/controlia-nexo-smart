@@ -1,23 +1,35 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useDeleteDevice, useDevices, useSendDeviceCommand, useSetDeviceHidden, type Device } from "../api/devices";
+import {
+  useDeleteDevice,
+  useDevices,
+  useSendDeviceCommand,
+  useSetDeviceHidden,
+  isAgentReadOnly,
+  type Device,
+} from "../api/devices";
 import { useDeviceSocket } from "../ws/useDeviceSocket";
 import { useAuthStore } from "../store/auth.store";
 import { APP_NAME, BUILDING_CONTEXT } from "../config/brand";
-import { inferDeviceKind, type DeviceKindId, type DeviceKindMeta } from "../utils/deviceKind";
+import { inferDeviceKind, SECTION_ORDER, type DeviceKindId, type DeviceKindMeta } from "../utils/deviceKind";
+import { PROTOCOL_META, PROTOCOL_ORDER } from "../utils/protocol";
 import AddDeviceForm from "./AddDeviceForm";
 import ImportHomeAssistant from "./ImportHomeAssistant";
 import ImportMqtt from "./ImportMqtt";
 import ImportBacnet from "./ImportBacnet";
 import BuildingView from "./BuildingView";
+import AgentDevices from "./AgentDevices";
 import ClimateControlPanel from "../components/ClimateControlPanel";
 import Automations from "./Automations";
 import ToggleSwitch from "../components/ToggleSwitch";
+import { StatTile } from "../components/StatTile";
+import AgentReadOnlyBadge from "../components/AgentReadOnlyBadge";
+import DeviceIconBadge from "../components/DeviceIconBadge";
+import SectionHeader from "../components/SectionHeader";
 import { SensorReadingInline, SensorReadingPanel } from "../components/SensorReadingCard";
 import LiveClock from "../components/LiveClock";
 import {
   BuildingIcon,
-  ChevronIcon,
   ChipLogo,
   EditIcon,
   EyeIcon,
@@ -59,21 +71,6 @@ function ActionButton({
   );
 }
 
-function DeviceIconBadge({ kind, isOn, size = "md" }: { kind: DeviceKindMeta; isOn: boolean; size?: "md" | "sm" }) {
-  const Icon = kind.Icon;
-  const box = size === "md" ? "h-11 w-11 rounded-xl" : "h-8 w-8 rounded-lg";
-  const iconSize = size === "md" ? "h-5 w-5" : "h-4 w-4";
-  return (
-    <div
-      className={`flex shrink-0 items-center justify-center transition-all ${box} ${
-        isOn ? `${kind.accent.bgOn} ${kind.accent.text} shadow-lg ${kind.accent.glow}` : "bg-slate-800 text-slate-500"
-      }`}
-    >
-      <Icon className={iconSize} />
-    </div>
-  );
-}
-
 function StatusDot({ isOn }: { isOn: boolean }) {
   return (
     <span
@@ -84,69 +81,10 @@ function StatusDot({ isOn }: { isOn: boolean }) {
   );
 }
 
-type StatTone = "sky" | "emerald" | "slate" | "amber" | "violet" | "teal";
 
-function StatTile({ label, value, tone }: { label: string; value: number; tone: StatTone }) {
-  const toneClass = {
-    sky: "text-sky-300",
-    emerald: "text-emerald-300",
-    slate: "text-slate-200",
-    amber: "text-amber-300",
-    violet: "text-violet-300",
-    teal: "text-teal-300",
-  }[tone];
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-4 py-3">
-      <div className={`text-2xl font-semibold tabular-nums ${toneClass}`}>{value}</div>
-      <div className="text-xs text-slate-500">{label}</div>
-    </div>
-  );
-}
-
-/** Etiqueta legible + color por protocolo; orden fijo para que la fila de tarjetas no salte al cambiar los datos. */
-const PROTOCOL_META: Record<string, { label: string; tone: StatTone }> = {
-  http: { label: "HTTP / Home Assistant", tone: "sky" },
-  mqtt: { label: "MQTT", tone: "emerald" },
-  bacnet: { label: "BACnet (aires)", tone: "amber" },
-  lorawan: { label: "LoRaWAN", tone: "violet" },
-  ewelink: { label: "eWeLink LAN", tone: "teal" },
-};
-const PROTOCOL_ORDER = ["http", "mqtt", "bacnet", "lorawan", "ewelink"];
-
-/** Orden fijo de las secciones del panel: primero lo mas numeroso/operativo, sensores y categorias raras al final. */
-const SECTION_ORDER: DeviceKindId[] = ["light", "climate", "sensor", "plug", "water", "lock", "camera", "fan"];
-
-function SectionHeader({
-  kind,
-  count,
-  collapsed,
-  onToggle,
-}: {
-  kind: DeviceKindMeta;
-  count: number;
-  collapsed: boolean;
-  onToggle: () => void;
-}) {
-  const Icon = kind.Icon;
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={!collapsed}
-      className="group mb-3 mt-8 flex w-full items-center gap-3 text-left first:mt-0"
-    >
-      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${kind.accent.bgOn} ${kind.accent.text}`}>
-        <Icon className="h-4 w-4" />
-      </div>
-      <h2 className="text-base font-semibold text-slate-100">{kind.label}</h2>
-      <span className="text-xs text-slate-500">{count} dispositivo(s)</span>
-      <div className="h-px flex-1 bg-slate-800" />
-      <ChevronIcon
-        className={`h-4 w-4 shrink-0 text-slate-500 transition-transform group-hover:text-slate-300 ${collapsed ? "-rotate-90" : ""}`}
-      />
-    </button>
-  );
-}
+// StatTile, PROTOCOL_META/PROTOCOL_ORDER, DeviceIconBadge, SectionHeader y SECTION_ORDER viven en
+// archivos compartidos para que AgentDevices.tsx pueda armar exactamente las mismas secciones y
+// tarjetas sin importar de este archivo (evita el import circular Devices<->AgentDevices).
 
 function DeviceRow({
   device,
@@ -173,6 +111,8 @@ function DeviceRow({
       <div className="flex shrink-0 items-center gap-2">
         {isSensor ? (
           <SensorReadingInline readings={device.state?.readings ?? null} />
+        ) : isAgentReadOnly(device) ? (
+          <AgentReadOnlyBadge isOn={isOn} />
         ) : (
           <ToggleSwitch checked={isOn} onChange={(next) => onToggle(device, next)} />
         )}
@@ -276,7 +216,13 @@ function DeviceCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!isSensor && !isClimate && <ToggleSwitch checked={isOn} onChange={(next) => onToggle(device, next)} />}
+          {!isSensor &&
+            !isClimate &&
+            (isAgentReadOnly(device) ? (
+              <AgentReadOnlyBadge isOn={isOn} />
+            ) : (
+              <ToggleSwitch checked={isOn} onChange={(next) => onToggle(device, next)} />
+            ))}
           {isClimate && (
             <button
               onClick={() => onOpenClimate(device)}
@@ -365,7 +311,7 @@ export default function Devices() {
   const [search, setSearch] = useState("");
   const [showHiddenPanel, setShowHiddenPanel] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<DeviceKindId>>(new Set());
-  const [view, setView] = useState<"classic" | "building" | "automations">("classic");
+  const [view, setView] = useState<"classic" | "building" | "automations" | "agent">("classic");
   const { toasts, push } = useToasts();
 
   useDeviceSocket();
@@ -505,6 +451,7 @@ export default function Devices() {
   const totalVisible = groups.length + singles.length;
   const isEmpty = !isLoading && !isError && totalVisible === 0 && hidden.length === 0;
   const noResults = !isLoading && !isError && totalVisible === 0 && hidden.length > 0 && !showHiddenPanel;
+  const agentPendingCount = devices?.filter((d) => d.metadata?.agent?.pendingReview).length ?? 0;
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -587,11 +534,25 @@ export default function Devices() {
               >
                 Gestión Inteligente
               </button>
+              <button
+                onClick={() => setView("agent")}
+                className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  view === "agent" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Agente Go
+                {agentPendingCount > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-slate-950">
+                    {agentPendingCount}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
         </div>
 
         {view === "automations" && <Automations />}
+        {view === "agent" && <AgentDevices />}
 
         {view === "classic" && (
         <>

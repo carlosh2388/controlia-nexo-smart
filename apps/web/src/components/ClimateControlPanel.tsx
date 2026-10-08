@@ -19,7 +19,7 @@ export default function ClimateControlPanel({ device, onClose }: { device: Devic
   const bacnet = device.metadata?.bacnet;
   const readings = device.state?.readings;
 
-  const initial = useMemo(
+  const mountedValues = useMemo(
     () => ({
       on: device.state?.state === "on",
       mode: readings?.mode as string | undefined,
@@ -31,12 +31,16 @@ export default function ClimateControlPanel({ device, onClose }: { device: Devic
     [device.id],
   );
 
+  // Base contra la que se calcula "hay cambios": arranca con lo leido del equipo y pasa a lo
+  // aplicado tras un "Aplicar" exitoso, para que el boton no quede habilitado con cambios fantasma.
+  const [initial, setInitial] = useState(mountedValues);
   const [on, setOn] = useState(initial.on);
   const [mode, setMode] = useState(initial.mode);
   const [fanSpeed, setFanSpeed] = useState(initial.fanSpeed);
   const [temperature, setTemperature] = useState(initial.temperature);
   const [swing, setSwing] = useState(initial.swing);
   const [error, setError] = useState<string | null>(null);
+  const [applied, setApplied] = useState(false);
 
   const rangeLow = (readings?.tempRangeLow as number | undefined) ?? 16;
   const rangeHigh = (readings?.tempRangeHigh as number | undefined) ?? 30;
@@ -60,8 +64,11 @@ export default function ClimateControlPanel({ device, onClose }: { device: Devic
 
   async function handleApply() {
     setError(null);
+    setApplied(false);
     try {
       await setClimate.mutateAsync({ deviceId: device.id, command: dirty });
+      setInitial({ on, mode, fanSpeed, temperature, swing });
+      setApplied(true);
     } catch (err) {
       setError(extractErrorMessage(err, "No se pudo aplicar el cambio."));
     }
@@ -168,6 +175,7 @@ export default function ClimateControlPanel({ device, onClose }: { device: Devic
         )}
 
         {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
+        {applied && !hasChanges && <p className="mb-3 text-sm text-emerald-400">Cambios aplicados al equipo.</p>}
 
         <button
           onClick={handleApply}

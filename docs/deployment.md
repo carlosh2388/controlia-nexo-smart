@@ -43,6 +43,44 @@ VITE_API_URL=http://192.168.70.4:3010/api/v1
 VITE_WS_URL=ws://192.168.70.4:3010/ws
 ```
 
+## Puente BACnet (aires acondicionados)
+
+`apps/bacnet-bridge` corre nativo en el servidor (fuera de Docker, usuario `api`), lo arranca
+`~/siasa-iot-platform/start-bacnet-bridge.sh` desde el crontab (`@reboot`) y escribe en
+`logs/bacnet-bridge.log`. El API en Docker le habla directo por
+`BACNET_BRIDGE_URL=http://host.docker.internal:3099` (`extra_hosts` en `docker-compose.yml`).
+El token debe ser el mismo en `.env` y en `start-bacnet-bridge.sh`.
+
+Solo un puente debe consultar el gateway (`10.3.0.11`) a la vez: no dejar corriendo otro en un
+PC de desarrollo contra el mismo gateway.
+
+```bash
+# reiniciar el puente
+pkill -f "apps/bacnet-bridge/server.js"; setsid nohup sh ./start-bacnet-bridge.sh >/dev/null 2>&1 &
+tail -f logs/bacnet-bridge.log
+```
+
+En este servidor el Who-Is no recibe respuesta del gateway (el I-Am sale por broadcast en la red
+10.3.0.x y no llega), pero las lecturas y escrituras unicast si funcionan. Por eso
+`start-bacnet-bridge.sh` pasa `BACNET_KNOWN_DEVICES=10.3.0.11=9000`: con el deviceId conocido,
+`POST /discover` se salta el Who-Is.
+
+Ojo al reiniciar por SSH: `pkill -f`/`pgrep -f` con el nombre del script tambien matchea la propia
+linea de comando de la sesion SSH y la mata. Usar el PID (`ss -lntp | grep 3099`).
+
+## Agente_Go (servidor)
+
+Instalado en `~/agente-go/` (binario `agente-go` linux/amd64, `config.yaml` con permisos 600 y la
+API key `role=agent` "Agente TEC3 (servidor)"). Lo arranca `~/agente-go/start-agente-go.sh` desde
+el crontab (`@reboot`), que lo reinicia si se cae; log en `~/agente-go/agente-go.log`.
+`buildingKey: tec3-nivel10`, fuentes LoRaWAN (`192.168.70.6`) y BACnet (via el puente local).
+El estado del ultimo sync se ve en la pestaña "Agente Go" (`GET /devices/agent-status`).
+
+```bash
+tail -f ~/agente-go/agente-go.log
+kill $(pgrep -x agente-go)   # el script lo vuelve a levantar en 5s
+```
+
 ## Pipeline del Contenedor API
 
 ```mermaid

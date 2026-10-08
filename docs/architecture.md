@@ -1,5 +1,9 @@
 # Arquitectura
 
+> Este documento cubre TEC 3 (adaptadores en proceso dentro de `apps/api`). Para edificios nuevos,
+> gestionados por un agente local en vez de adaptadores en proceso, ver
+> [`agente-go.md`](./agente-go.md).
+
 ## Vista General
 
 ```mermaid
@@ -12,9 +16,15 @@ flowchart LR
   A --> M[Broker MQTT Mosquitto]
   A --> HA[Home Assistant API]
   A --> EW[eWeLink HTTP API]
+  A --> LW[Broker MQTT LoRaWAN / ChirpStack]
+  A -->|HTTP| BB["bacnet-bridge (Node, host, no Docker)"]
+  BB -->|UDP/47808| BAC["Gateway BACnet/IP (ej. VRF aires)"]
   A --> EXT[Gateway externo x-api-key]
   M --> Z2M[Zigbee2MQTT / Dispositivos MQTT]
   RT --> W
+
+  AG["Agente_Go (edificios nuevos)"] -->|"POST /devices/agent-sync\nx-api-key role=agent"| A
+  AG -.->|"ver agente-go.md"| BB
 ```
 
 ## Componentes
@@ -129,11 +139,19 @@ flowchart TB
 
   DevicesModule --> BullMQ
   DevicesModule --> AdapterRegistry
+  DevicesModule --> AgentSyncService
   AdapterRegistry --> MqttAdapter
   AdapterRegistry --> HttpAdapter
   AdapterRegistry --> EwelinkAdapter
+  AdapterRegistry --> LorawanAdapter
+  AdapterRegistry --> BacnetAdapter
+  BacnetAdapter -->|HTTP| BacnetBridge["bacnet-bridge (fuera de Docker)"]
   MqttAdapter --> StateBusModule
+  LorawanAdapter --> StateBusModule
+  BacnetAdapter --> StateBusModule
   StateBusModule --> RealtimeModule
   StateBusModule --> AutomationsModule
+
+  AgentSyncService -.->|"dispositivos de Agente_Go\n(edificios nuevos, ver agente-go.md)"| PrismaModule
 ```
 

@@ -81,13 +81,35 @@ export class AreasService {
       include: { devices: { include: { state: true } } },
     });
 
+    const shared = await this.findSharedDevices(areas.map((a) => a.id));
+
     return {
       tenant,
       areas: areas.map((area) => ({
         ...area,
-        devices: area.devices.map(sanitizeDevice),
+        devices: [...area.devices, ...shared.filter((d) => this.extraAreaIds(d).includes(area.id))].map(
+          sanitizeDevice,
+        ),
       })),
     };
+  }
+
+  /**
+   * Dispositivos que ademas de su area principal (areaId) dan servicio a otras areas, listadas en
+   * metadata.extraAreaIds - ej. un solo AC VRF ("GERENTES") que climatiza varias oficinas. Aparecen
+   * en cada una de esas areas, pero siguen siendo un solo dispositivo (un solo polling/estado).
+   */
+  private async findSharedDevices(areaIds: string[]) {
+    if (areaIds.length === 0) return [];
+    return this.prisma.device.findMany({
+      where: { OR: areaIds.map((id) => ({ metadata: { path: ["extraAreaIds"], array_contains: [id] } })) },
+      include: { state: true },
+    });
+  }
+
+  private extraAreaIds(device: { metadata: unknown; areaId: string | null }): string[] {
+    const ids = (device.metadata as { extraAreaIds?: unknown } | null)?.extraAreaIds;
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string" && id !== device.areaId) : [];
   }
 
   /** Todas las areas de todos los tenants, para selectores globales (ej. asignar area a un dispositivo). */
@@ -147,6 +169,7 @@ export class AreasService {
     if (!area) {
       throw new NotFoundException("Area no encontrada");
     }
-    return { ...area, devices: area.devices.map(sanitizeDevice) };
+    const shared = (await this.findSharedDevices([id])).filter((d) => this.extraAreaIds(d).includes(id));
+    return { ...area, devices: [...area.devices, ...shared].map(sanitizeDevice) };
   }
 }

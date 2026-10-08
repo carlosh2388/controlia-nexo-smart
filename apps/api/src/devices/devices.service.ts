@@ -81,7 +81,15 @@ export class DevicesService {
     restoreRedactedSecrets(existing.metadata, dto);
 
     let metadata: Record<string, unknown> | undefined;
-    if (dto.httpConfig || dto.group || dto.hidden !== undefined || dto.ewelinkConfig || dto.mqttJson || dto.bacnetConfig) {
+    if (
+      dto.httpConfig ||
+      dto.group ||
+      dto.hidden !== undefined ||
+      dto.ewelinkConfig ||
+      dto.mqttJson ||
+      dto.bacnetConfig ||
+      dto.clearAgentPendingReview
+    ) {
       metadata = { ...((existing.metadata as Record<string, unknown> | null) ?? {}) };
       if (dto.httpConfig) metadata.http = dto.httpConfig;
       if (dto.group) metadata.group = dto.group;
@@ -89,6 +97,9 @@ export class DevicesService {
       if (dto.ewelinkConfig) metadata.ewelink = dto.ewelinkConfig;
       if (dto.mqttJson) metadata.mqttJson = dto.mqttJson;
       if (dto.bacnetConfig) metadata.bacnet = dto.bacnetConfig;
+      if (dto.clearAgentPendingReview && metadata.agent) {
+        metadata.agent = { ...(metadata.agent as Record<string, unknown>), pendingReview: false };
+      }
     }
 
     const device = await this.prisma.device.update({

@@ -1,0 +1,50 @@
+# Copia este archivo a config.yaml (o el nombre que le pases con -config) y completa los
+# valores reales de ESTE edificio. No subas config.yaml a git: tiene la API key.
+
+# Identifica de que edificio/sitio vienen los dispositivos que este agente reporta. Una vez
+# elegido, no lo cambies: la API usa buildingKey + externalId para saber si un dispositivo
+# ya existe o es nuevo.
+buildingKey: "tec3-nivel10"
+
+api:
+  # URL base de la API de Nodivo, CON /api/v1 al final.
+  baseUrl: "http://192.168.70.4:3010/api/v1"
+  # API key con role=agent (NO uses una de role=admin aca). Se crea asi, como admin:
+  #   POST /api-keys  { "name": "Agente TEC3", "role": "agent" }
+  # La respuesta trae el valor una sola vez - guardalo aca en ese momento.
+  apiKey: "siasa_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Cada cuantos segundos se reenvia el snapshot completo conocido a la API (heartbeat + resync).
+syncIntervalSeconds: 30
+
+mqtt:
+  enabled: true
+  # URL del broker MQTT de ESTE edificio (Zigbee2MQTT u otro puente compatible).
+  brokerUrl: "tcp://192.168.70.25:1883"
+  username: ""
+  password: ""
+  # Prefijo de topicos de Zigbee2MQTT; default "zigbee2mqtt" si se omite.
+  baseTopic: "zigbee2mqtt"
+
+# Sensores LoRaWAN: tambien "hablan MQTT" (el network server ChirpStack republica sus uplinks ahi),
+# pero es un broker/topico distinto al de Zigbee2MQTT - por eso es una seccion aparte, no mas
+# baseTopics dentro de "mqtt". Los sensores LoRaWAN son siempre de solo lectura.
+lorawan:
+  enabled: true
+  brokerUrl: "tcp://192.168.70.6:1883"
+  username: ""
+  password: ""
+
+# Gateways BACnet/IP (ej. centrales VRF de aires acondicionados). El agente NO habla BACnet/IP
+# directo: le pide a un apps/bacnet-bridge corriendo aparte (ver ese README) - probado en vivo que
+# la unica libreria BACnet nativa de Go disponible no decodifica bien las respuestas de gateways
+# reales, asi que se reusa el bridge ya construido y verificado en vez de arriesgar datos malos.
+bacnet:
+  enabled: true
+  # El bridge debe estar corriendo en una maquina que alcance el gateway BACnet por UDP.
+  bridgeUrl: "http://localhost:3099"
+  bridgeToken: ""
+  pollIntervalSeconds: 20
+  devices:
+    - name: "AC Smart 5"
+      host: "10.3.0.11"

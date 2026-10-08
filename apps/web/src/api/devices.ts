@@ -81,6 +81,15 @@ export interface BacnetDeviceConfig {
   fanStates?: string[];
 }
 
+/** Solo presente en dispositivos que llegaron via un Agente_Go (ver docs/agente-go.md), no via el flujo manual. */
+export interface AgentMetadata {
+  buildingKey: string;
+  externalId: string;
+  source: "go-agent";
+  discoveredAt: string;
+  pendingReview: boolean;
+}
+
 export interface Device {
   id: string;
   name: string;
@@ -97,6 +106,7 @@ export interface Device {
     hidden?: boolean;
     ewelink?: EwelinkDeviceConfig;
     bacnet?: BacnetDeviceConfig;
+    agent?: AgentMetadata;
   } | null;
   areaId: string | null;
   state: DeviceState | null;
@@ -116,9 +126,28 @@ export interface CreateDevicePayload {
   ewelinkConfig?: EwelinkDeviceConfig;
   /** Area a la que pertenece (Vista de edificio). Enviar "" para quitarle el area asignada al editar. */
   areaId?: string;
+  /** Confirma un dispositivo descubierto por un Agente_Go: le saca metadata.agent.pendingReview. */
+  clearAgentPendingReview?: boolean;
 }
 
 export type UpdateDevicePayload = Partial<CreateDevicePayload>;
+
+/** true si este dispositivo lo trajo un Agente_Go (ver docs/agente-go.md), sin importar si es controlable o no. */
+export function isAgentDiscovered(device: Device): boolean {
+  return Boolean(device.metadata?.agent);
+}
+
+/**
+ * true si, ADEMAS de venir de un Agente_Go, todavia no tiene forma real de recibir comandos
+ * (protocol mqtt sin commandTopic, o cualquier protocolo sin canal de control - hoy bacnet/lorawan
+ * siempre caen aca). Cuando el agente SI reporto un commandTopic real (mqttsource, ver
+ * docs/agente-go.md), el dispositivo queda controlable apenas se confirma - mismo mecanismo que
+ * "Sin Home Assistant (MQTT directo)" - y esto devuelve false, asi que se muestra un toggle normal
+ * en vez del badge de "Solo lectura".
+ */
+export function isAgentReadOnly(device: Device): boolean {
+  return isAgentDiscovered(device) && !device.commandTopic;
+}
 
 /** Oculta o vuelve a mostrar un dispositivo en el panel principal sin eliminarlo. */
 export function useSetDeviceHidden() {
@@ -131,6 +160,34 @@ export function useSetDeviceHidden() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["devices"] });
     },
+  });
+}
+
+export interface AgentSyncStatus {
+  buildingKey: string;
+  created: number;
+  updated: number;
+  skippedExisting: number;
+  byProtocol: Record<string, number>;
+  syncedAt: string;
+  agentVersion?: string;
+}
+
+/**
+ * Ultimo sync real de cada Agente_Go activo, incluso si no creo ningun dispositivo nuevo (un
+ * edificio ya totalmente importado autodescubre todo pero no crea filas - eso es exito, no
+ * silencio). Es la prueba de que el agente esta funcionando de verdad.
+ */
+export function useAgentStatus() {
+  return useQuery({
+    queryKey: ["devices", "agent-status"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<AgentSyncStatus[]>("/devices/agent-status");
+      return data;
+    },
+    staleTime: 5_000,
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: false,
   });
 }
 

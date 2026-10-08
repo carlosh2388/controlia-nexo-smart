@@ -18,6 +18,16 @@ export function ChevronIcon({ className = base }: IconProps) {
   );
 }
 
+export function RadarIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="7" stroke="currentColor" strokeWidth="1.6" opacity="0.6" />
+      <circle cx="12" cy="12" r="10.5" stroke="currentColor" strokeWidth="1.6" opacity="0.3" />
+    </svg>
+  );
+}
+
 export function ImportIcon({ className = base }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className}>

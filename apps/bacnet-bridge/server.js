@@ -102,14 +102,30 @@ const POINT_KEYS = {
   MalfunctionCode: "malfunctionCode",
 };
 
+// Gateways con deviceId conocido: "10.3.0.11=9000,10.3.0.12=9001". Si el bridge esta en otra
+// subred que el gateway, el I-Am de respuesta al Who-Is puede salir por broadcast en la red del
+// gateway y nunca llegar (verificado desde 192.168.70.4 contra 10.3.0.11), aunque ReadProperty
+// unicast funcione perfecto. Con el deviceId conocido, discover se salta el Who-Is.
+const KNOWN_DEVICES = new Map(
+  (process.env.BACNET_KNOWN_DEVICES || "")
+    .split(",")
+    .map((pair) => pair.trim().split("="))
+    .filter(([h, id]) => h && id && !Number.isNaN(Number(id)))
+    .map(([h, id]) => [h, Number(id)]),
+);
+
 async function discover(host) {
   return serialize(async () => {
     let device;
-    try {
-      device = await whoIs(host);
-    } catch (err) {
-      console.warn(`[bacnet-bridge] Who-Is unicast fallo para ${host}: ${err.message}; probando broadcast ${BACNET_BROADCAST_ADDRESS}`);
-      device = await whoIs(host, true);
+    if (KNOWN_DEVICES.has(host)) {
+      device = { deviceId: KNOWN_DEVICES.get(host), vendorId: null };
+    } else {
+      try {
+        device = await whoIs(host);
+      } catch (err) {
+        console.warn(`[bacnet-bridge] Who-Is unicast fallo para ${host}: ${err.message}; probando broadcast ${BACNET_BROADCAST_ADDRESS}`);
+        device = await whoIs(host, true);
+      }
     }
     const objListValues = await readProp(host, { type: 8, instance: device.deviceId }, DEVICE_OBJECT_LIST_PROP);
     const allObjects = objListValues.map((o) => o.value).filter((o) => o.type !== 8);
@@ -195,7 +211,21 @@ async function readMany(host, reads) {
   );
 }
 
-function encodeValue(valueType, value) {
+// Tipos de objeto BACnet (ObjectType) cuyo Present_Value NO es del tipo "obvio":
+// - Binary Input/Output/Value (3/4/5): Present_Value es BACnetBinaryPV -> ENUMERATED 0/1, no BOOLEAN.
+// - Multi-state Input/Output/Value (13/14/19): Present_Value es Unsigned, no ENUMERATED.
+// Verificado contra el AC Smart 5 real: escribir BOOLEAN a un BO o ENUMERATED a un MSO devuelve
+// BacnetError Class:2 Code:9 (property / invalid-data-type).
+const BINARY_OBJECT_TYPES = new Set([3, 4, 5]);
+const MULTISTATE_OBJECT_TYPES = new Set([13, 14, 19]);
+
+function encodeValue(valueType, value, objectType) {
+  if (BINARY_OBJECT_TYPES.has(objectType)) {
+    return [{ type: ApplicationTags.ENUMERATED, value: value ? 1 : 0 }];
+  }
+  if (MULTISTATE_OBJECT_TYPES.has(objectType)) {
+    return [{ type: ApplicationTags.UNSIGNED_INTEGER, value: Number(value) }];
+  }
   switch (valueType) {
     case "boolean":
       return [{ type: ApplicationTags.BOOLEAN, value: !!value }];
@@ -209,7 +239,7 @@ function encodeValue(valueType, value) {
 }
 
 async function writeOne(host, object, valueType, value, priority) {
-  return serialize(() => writeProp(host, object, PRESENT_VALUE_PROP, encodeValue(valueType, value), priority));
+  return serialize(() => writeProp(host, object, PRESENT_VALUE_PROP, encodeValue(valueType, value, object.type), priority));
 }
 
 function readBody(req) {

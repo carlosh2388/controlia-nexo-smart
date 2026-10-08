@@ -84,6 +84,9 @@ const RULES: [RegExp, DeviceKindId][] = [
   [/ventilador|\bfan\b|extractor/i, "fan"],
 ];
 
+/** Orden fijo de las secciones del panel: primero lo mas numeroso/operativo, sensores y categorias raras al final. */
+export const SECTION_ORDER: DeviceKindId[] = ["light", "climate", "sensor", "plug", "water", "lock", "camera", "fan"];
+
 /**
  * Deduce el widget a mostrar. Si el backend ya sabe que es un sensor (Device.kind), eso manda:
  * un "Sensor TH-RECEPCION" no debe caer en las reglas de nombre (podria matchear cualquier cosa).

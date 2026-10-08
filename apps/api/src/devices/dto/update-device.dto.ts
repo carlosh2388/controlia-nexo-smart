@@ -56,6 +56,11 @@ export class UpdateDeviceDto {
   @IsBoolean()
   hidden?: boolean;
 
+  /** Saca metadata.agent.pendingReview (lo puso un Agente_Go al descubrirlo) al confirmarlo desde la UI. */
+  @IsOptional()
+  @IsBoolean()
+  clearAgentPendingReview?: boolean;
+
   /** Area a la que pertenece (Vista de edificio). Enviar "" para quitarle el area asignada. */
   @IsOptional()
   @IsString()

@@ -16,6 +16,8 @@ import { DiscoverHomeAssistantDto, ImportHomeAssistantDto } from "./dto/home-ass
 import { DiscoverZigbee2MqttDto, ImportZigbee2MqttDto } from "./dto/zigbee2mqtt-import.dto";
 import { DeviceHistoryQueryDto } from "./dto/device-history-query.dto";
 import { DeviceHistoryService } from "./device-history.service";
+import { AgentSyncService } from "./agent-sync.service";
+import { AgentSyncDto } from "./dto/agent-sync.dto";
 
 @Controller("devices")
 @UseGuards(AuthGuard, RolesGuard)
@@ -25,12 +27,20 @@ export class DevicesController {
     private readonly haImportService: HomeAssistantImportService,
     private readonly zigbee2mqttImportService: Zigbee2MqttImportService,
     private readonly historyService: DeviceHistoryService,
+    private readonly agentSyncService: AgentSyncService,
   ) {}
 
   @Version("1")
   @Get()
   findAll(@Query() query: ListDevicesQueryDto) {
     return this.devicesService.findAll(query.protocol);
+  }
+
+  /** Ultimo sync de cada Agente_Go activo (por buildingKey) - antes de ":id" para que no lo capture ese param. */
+  @Version("1")
+  @Get("agent-status")
+  agentStatus() {
+    return this.agentSyncService.getStatus();
   }
 
   @Version("1")
@@ -92,6 +102,14 @@ export class DevicesController {
   @Delete(":id")
   remove(@Param("id") id: string) {
     return this.devicesService.remove(id);
+  }
+
+  /** Llamado por un Agente_Go (API key con role=agent) cada vez que termina un ciclo de descubrimiento/poll. */
+  @Version("1")
+  @Roles(Role.agent, Role.admin)
+  @Post("agent-sync")
+  agentSync(@Body() dto: AgentSyncDto) {
+    return this.agentSyncService.sync(dto);
   }
 
   @Version("1")

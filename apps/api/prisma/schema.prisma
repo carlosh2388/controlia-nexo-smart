@@ -11,6 +11,8 @@ enum Role {
   admin
   operator
   viewer
+  /// Rol de las API keys que usa un Agente_Go: solo puede llamar POST /devices/agent-sync, nada mas.
+  agent
 }
 
 enum DeviceProtocol {

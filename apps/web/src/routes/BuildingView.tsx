@@ -10,7 +10,8 @@ import {
   GENERAL_IMAGE_WIDTH,
   GENERAL_IMAGE_HEIGHT,
 } from "../api/areas";
-import { useSendDeviceCommand } from "../api/devices";
+import { useSendDeviceCommand, isAgentReadOnly } from "../api/devices";
+import AgentReadOnlyBadge from "../components/AgentReadOnlyBadge";
 import { extractErrorMessage } from "../api/errors";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { SensorReadingPanel } from "../components/SensorReadingCard";
@@ -65,8 +66,9 @@ function AreaDeviceRow({ area, onOpenClimate }: { area: Area; onOpenClimate: (de
   const climates = area.devices.filter(isClimateDevice);
   const switches = area.devices.filter((d) => d.kind !== "sensor" && !isClimateDevice(d));
   const sensors = area.devices.filter((d) => d.kind === "sensor");
-  // El maestro no incluye los switches de privacidad (vidrio/tinte): son un control aparte, no iluminacion.
-  const lightSwitches = switches.filter((d) => !isPrivacyDevice(d.name));
+  // El maestro no incluye los switches de privacidad (vidrio/tinte, son un control aparte) ni los
+  // dispositivos de un Agente_Go (todavia no se pueden comandar - ver AgentReadOnlyBadge).
+  const lightSwitches = switches.filter((d) => !isPrivacyDevice(d.name) && !isAgentReadOnly(d));
   const onCount = lightSwitches.filter((d) => d.state?.state === "on").length;
   const allOn = lightSwitches.length > 0 && onCount === lightSwitches.length;
 
@@ -149,7 +151,11 @@ function AreaDeviceRow({ area, onOpenClimate }: { area: Area; onOpenClimate: (de
                   )}
                   <span className="truncate">{device.name}</span>
                 </span>
-                <ToggleSwitch checked={isOn} onChange={(next) => handleToggle(device.id, next)} />
+                {isAgentReadOnly(device) ? (
+                  <AgentReadOnlyBadge isOn={isOn} />
+                ) : (
+                  <ToggleSwitch checked={isOn} onChange={(next) => handleToggle(device.id, next)} />
+                )}
               </div>
             );
           })}
