@@ -18,7 +18,7 @@ flowchart LR
   A --> EW[eWeLink HTTP API]
   A --> LW[Broker MQTT LoRaWAN / ChirpStack]
   A -->|HTTP| BB["bacnet-bridge (Node, host, no Docker)"]
-  BB -->|UDP/47808| BAC["Gateway BACnet/IP (ej. VRF aires)"]
+  BB -->|UDP/47808 BACnet/IP| BAC["Gateway BACnet/IP AV/climatizacion\n(ej. VRF aires)"]
   A --> EXT[Gateway externo x-api-key]
   M --> Z2M[Zigbee2MQTT / Dispositivos MQTT]
   RT --> W
@@ -39,7 +39,7 @@ Responsabilidades:
 - Panel clasico de dispositivos.
 - Vista de edificio con imagenes, areas y poligonos.
 - Gestion inteligente de automatizaciones.
-- Importacion desde Home Assistant y MQTT/Zigbee2MQTT.
+- Importacion desde Home Assistant, MQTT/Zigbee2MQTT y BACnet/IP para dispositivos AV/climatizacion.
 - Consumo REST via Axios y sincronizacion con React Query.
 - Actualizacion en tiempo real via WebSocket.
 
@@ -52,11 +52,24 @@ Responsabilidades:
 - Autenticacion JWT y refresh tokens.
 - Gestion de usuarios y API keys.
 - CRUD de dispositivos.
-- Despacho de comandos por MQTT, HTTP/Home Assistant y eWeLink.
+- Despacho de comandos por MQTT, HTTP/Home Assistant, eWeLink y BACnet/IP para AV/climatizacion.
 - Lectura de estados y publicacion al bus interno.
 - Areas/tenants para la vista de edificio.
 - Reglas de automatizacion por estado y horario.
 - Gateway externo opcional para integraciones con `x-api-key`.
+
+## Protocolos de Dispositivos
+
+La plataforma modela el protocolo en `Device.protocol` y selecciona el adaptador
+correspondiente desde `AdapterRegistry`.
+
+| Protocolo | Uso principal | Canal |
+| --- | --- | --- |
+| `mqtt` | Zigbee2MQTT y dispositivos MQTT locales | Broker Mosquitto |
+| `http` | Dispositivos importados desde Home Assistant | API REST de Home Assistant |
+| `ewelink` | Sonoff/eWeLink LAN | HTTP local |
+| `lorawan` | Sensores LoRaWAN via ChirpStack | MQTT ChirpStack |
+| `bacnet` | Dispositivos AV/climatizacion, como VRF/aires | API -> `bacnet-bridge` -> BACnet/IP UDP 47808 |
 
 ### Infraestructura
 
@@ -146,6 +159,7 @@ flowchart TB
   AdapterRegistry --> LorawanAdapter
   AdapterRegistry --> BacnetAdapter
   BacnetAdapter -->|HTTP| BacnetBridge["bacnet-bridge (fuera de Docker)"]
+  BacnetBridge -->|UDP/47808 BACnet/IP| BacnetGateway["Gateway BACnet AV/climatizacion"]
   MqttAdapter --> StateBusModule
   LorawanAdapter --> StateBusModule
   BacnetAdapter --> StateBusModule
