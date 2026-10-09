@@ -251,6 +251,39 @@ siendo Fase 3.
 | 4 | Adaptadores HTTP por fabricante (Shelly, Tasmota...) como plugins del agente | pendiente |
 | 5 | Empaquetado (releases por SO/arch), instalacion como servicio | parcial (ver README, systemd) |
 | 6 | Piloto en un segundo edificio real | pendiente |
+| 7 | Driver Modbus TCP (`modbussource`) + pestaña **Sedes** (IGSS Escuintla como sede modelo) | ✅ hecho - ver abajo |
+| 8 | Eventos en el agente (`internal/events`): deteccion en tiempo real, buffer en disco, historial `SiteEvent`, pestaña Sedes > Eventos | ✅ hecho - ver `docs/sedes-igss.md` |
+
+### Sedes IGSS: Modbus TCP + LoRaWAN (sede modelo Escuintla)
+
+> Documento completo y actualizado (incluye eventos, cadena de frio y el hallazgo de los
+> generadores): **`docs/sedes-igss.md`**. Lo de abajo es el resumen de la fase 7.
+
+- **Config**: `apps/Agente_Go/config.igss-escuintla.example.yaml` (`buildingKey: igss-escuintla`).
+  Para otra sede se copia y se cambian IPs y la lista de equipos; el codigo no cambia.
+- **Modbus**: el EBO AS-P de la sede (10.0.6.26, unit 1) concentra los 6 ION7400, los 7 PM2130 y
+  los 2 generadores, cada uno en un bloque fijo de registros. `modbussource` aplica un **perfil**
+  por modelo (`ion7400`, `ion7400-b`, `pm2130`, `generator` en `modbussource/profiles.go`) copiado
+  del lector que ya funciona en produccion (`api-SIASA/modbus_cliente/lectura_Ebo_v2.js`): registro
+  N = direccion N-1, float32 ABCD con respaldo CDAB, THD/flicker con escala autodetectada, generador
+  int32 CDAB ×0.01. Cliente Modbus propio (funciones 03/04 solamente): **el agente no puede escribir**.
+- **Autodescubrimiento**: Modbus no permite preguntar "que equipos hay". Cada ciclo el agente lee
+  todos los bloques configurados y solo reporta los que traen datos validos para su perfil; un
+  equipo ya visto que deja de responder pasa a `offline`.
+- **LoRaWAN**: `lorawansource` ahora reporta tambien `model` (`deviceProfileName` de ChirpStack),
+  los tags del dispositivo (`tag_area`, `tag_code`, `tag_sensor_type`...) y RSSI/SNR/fCnt del ultimo uplink.
+- **API**: `protocol=modbus` (adaptador pasivo de solo lectura), `metadata.model` y
+  `metadata.attributes` desde `agent-sync`, historial en `DeviceReading` (max. 1 fila/min por
+  equipo) y rangos `1h`/`24h` en `GET /devices/:id/history`.
+- **Web**: pestaña **Sedes** (`routes/Sedes.tsx`, `components/sedes/*`): energia (generadores,
+  ION7400, PM2130) y sensores LoRaWAN (puertas S595, EVA, WISE, calidad de aire S592) con boton de
+  tendencias por tarjeta. Si el agente de la sede modelo aun no reporto, muestra datos de demostracion marcados como tales.
+- **Verificado en vivo (2026-10-08)**, desde una PC en la red, contra el EBO y ChirpStack reales:
+  14/15 equipos Modbus con datos coherentes (≈125 V, 59.96 Hz, cargas reales por fase, S1 comercial = 1)
+  y 88 sensores LoRaWAN en los primeros minutos. **Pendiente de revisar en sitio**: el bloque del
+  "Generador Módulos" (5743-5779) esta todo en 0 en el EBO, y el de "Generador Planta Hospital" solo
+  tiene 3 registros distintos de 0 (bateria = 27 crudo, que con la escala ×0.01 de api-SIASA da
+  0.27 V) - el controlador del generador probablemente no esta publicando sus datos al EBO.
 
 ### Por que BACnet no habla el protocolo directo en Go
 

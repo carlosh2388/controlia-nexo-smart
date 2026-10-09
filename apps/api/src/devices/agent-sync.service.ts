@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventLogService } from "../events/event-log.service";
 import { AgentSyncDto } from "./dto/agent-sync.dto";
+import { SiteEventsService } from "../site-events/site-events.service";
 
 export interface AgentMetadata {
   buildingKey: string;
@@ -32,6 +33,7 @@ export class AgentSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventLog: EventLogService,
+    private readonly siteEvents: SiteEventsService,
   ) {}
 
   async sync(dto: AgentSyncDto) {
@@ -74,14 +76,21 @@ export class AgentSyncService {
         // Si el dispositivo se creo antes de que el source supiera reportar topics (o con otra
         // version del agente), completarlos ahora: pasa de "solo lectura" a controlable sin
         // duplicar el dispositivo ni pedirle al usuario que lo re-confirme.
+        const existingMeta = (existing.metadata as Record<string, unknown> | null) ?? {};
         const needsNameUpdate = item.name !== existing.name;
         const needsTopicUpdate =
           (item.stateTopic && item.stateTopic !== existing.stateTopic) ||
           (item.commandTopic && item.commandTopic !== existing.commandTopic);
-        if (needsNameUpdate || needsTopicUpdate) {
+        const needsDescriptorUpdate =
+          (item.model !== undefined && item.model !== existingMeta.model) ||
+          (item.attributes !== undefined && JSON.stringify(item.attributes) !== JSON.stringify(existingMeta.attributes));
+        if (needsNameUpdate || needsTopicUpdate || needsDescriptorUpdate) {
           let metadata: Record<string, unknown> | undefined;
-          if (item.mqttJson) {
-            metadata = { ...((existing.metadata as Record<string, unknown> | null) ?? {}), mqttJson: item.mqttJson };
+          if (item.mqttJson || needsDescriptorUpdate) {
+            metadata = { ...existingMeta };
+            if (item.mqttJson) metadata.mqttJson = item.mqttJson;
+            if (item.model !== undefined) metadata.model = item.model;
+            if (item.attributes !== undefined) metadata.attributes = item.attributes;
           }
           await this.prisma.device.update({
             where: { id: existing.id },
@@ -95,7 +104,7 @@ export class AgentSyncService {
         }
         updated += 1;
       } else {
-        const metadata: { agent: AgentMetadata; mqttJson?: unknown } = {
+        const metadata: { agent: AgentMetadata; mqttJson?: unknown; model?: string; attributes?: Record<string, unknown> } = {
           agent: {
             buildingKey: dto.buildingKey,
             externalId: item.externalId,
@@ -105,6 +114,8 @@ export class AgentSyncService {
           },
         };
         if (item.mqttJson) metadata.mqttJson = item.mqttJson;
+        if (item.model) metadata.model = item.model;
+        if (item.attributes) metadata.attributes = item.attributes;
 
         const device = await this.prisma.device.create({
           data: {
@@ -122,6 +133,9 @@ export class AgentSyncService {
         created += 1;
       }
     }
+
+    // Despues de los dispositivos, para que los eventos de un equipo recien creado ya encuentren su deviceId.
+    const eventsRecorded = await this.siteEvents.record(dto.buildingKey, dto.events ?? []);
 
     await this.eventLog.log({
       type: "agent.sync",
@@ -141,7 +155,15 @@ export class AgentSyncService {
       `agent-sync buildingKey=${dto.buildingKey} total=${dto.devices.length} created=${created} updated=${updated} skippedExisting=${skippedExisting}`,
     );
 
-    return { total: dto.devices.length, created, updated, skippedExisting, byProtocol };
+    return {
+      total: dto.devices.length,
+      created,
+      updated,
+      skippedExisting,
+      byProtocol,
+      eventsReceived: dto.events?.length ?? 0,
+      eventsRecorded,
+    };
   }
 
   /**
@@ -223,6 +245,10 @@ export class AgentSyncService {
   private async applyState(deviceId: string, item: AgentSyncDto["devices"][number]) {
     if (!item.state && !item.readings) return;
 
+    if (item.readings && item.kind === "sensor") {
+      await this.recordHistory(deviceId, item.readings);
+    }
+
     await this.prisma.deviceState.upsert({
       where: { deviceId },
       create: {
@@ -236,4 +262,25 @@ export class AgentSyncService {
       },
     });
   }
+
+  /**
+   * Historial para las graficas de tendencias de la pestaña Sedes. Los dispositivos de un agente
+   * no pasan por DeviceStateBus (y por lo tanto tampoco por DeviceHistoryRecorderService), asi que
+   * se registran aca. El agente reenvia el snapshot completo cada ciclo aunque nada haya cambiado,
+   * por eso se guarda como mucho una fila por dispositivo cada HISTORY_MIN_INTERVAL_MS: con ~140
+   * equipos por sede son ~200k filas/dia en el peor caso, en vez de una por cada sync.
+   */
+  private async recordHistory(deviceId: string, readings: Record<string, unknown>) {
+    const now = Date.now();
+    const last = this.lastHistoryAt.get(deviceId) ?? 0;
+    if (now - last < AgentSyncService.HISTORY_MIN_INTERVAL_MS) return;
+    this.lastHistoryAt.set(deviceId, now);
+
+    await this.prisma.deviceReading.create({
+      data: { deviceId, readings: readings as Prisma.InputJsonValue },
+    });
+  }
+
+  private static readonly HISTORY_MIN_INTERVAL_MS = 60_000;
+  private readonly lastHistoryAt = new Map<string, number>();
 }

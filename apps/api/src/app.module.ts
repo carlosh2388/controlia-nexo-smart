@@ -17,6 +17,7 @@ import { EwelinkModule } from "./adapters/ewelink/ewelink.module";
 import { BacnetModule } from "./adapters/bacnet/bacnet.module";
 import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { AreasModule } from "./areas/areas.module";
+import { SiteEventsModule } from "./site-events/site-events.module";
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { AreasModule } from "./areas/areas.module";
     BacnetModule,
     ApiKeysModule,
     AreasModule,
+    SiteEventsModule,
   ],
 })
 export class AppModule {}

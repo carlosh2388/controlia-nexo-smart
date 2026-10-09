@@ -1,0 +1,139 @@
+# Agente_Go para la sede modelo IGSS Escuintla. Copia este archivo a config.yaml (o pasalo con
+# -config) y completa api.apiKey. No subas el archivo con la key a git.
+#
+# Fuentes de esta sede:
+#   - Modbus TCP: el EBO AS-P "EBO-ASP-ESCUINTLA" (10.0.6.26) concentra los 6 ION7400, los 7 PM2130
+#     y los 2 generadores en una sola unidad (unit 1), cada equipo en su bloque de registros.
+#     El mapa de bloques es el mismo que ya usa api-SIASA en produccion (modbus_cliente/lectura_Ebo_v2.js).
+#   - LoRaWAN: ChirpStack publica los uplinks de los ~121 sensores en el broker MQTT 10.0.6.35.
+# Todo es solo lectura.
+
+buildingKey: "igss-escuintla"
+
+api:
+  baseUrl: "http://localhost:3010/api/v1"
+  # API key con role=agent:  POST /api-keys { "name": "Agente IGSS Escuintla", "role": "agent" }
+  apiKey: "siasa_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+syncIntervalSeconds: 15
+
+# Eventos pendientes de enviar + estado de alarmas (sobrevive reinicios y caidas de la API).
+dataDir: "./data"
+
+# Deteccion de eventos en el agente (ver docs/sedes-igss.md, "Catalogo de eventos").
+# Todo lo que se omita usa el default indicado.
+events:
+  enabled: true
+  thresholds:
+    nominalVoltage: 120         # V fase-neutro
+    voltageTolerancePct: 10     # alarma fuera de 108-132 V
+    frequencyMin: 59.5
+    frequencyMax: 60.5
+    thdVoltageMaxPct: 8         # IEEE 519 (< 1 kV)
+    overloadPct: 80             # % de capacityKva del ION7400
+    phaseLossPct: 50            # fase < 50 % de la mayor = perdida de fase
+    generatorFuelMinPct: 25
+    generatorBatteryMinV: 24
+    generatorCoolantMaxC: 95
+    co2MaxPpm: 1000
+    batteryMinPct: 20           # sensores LoRaWAN
+    doorOpenMaxMinutes: 10
+    sensorStaleMinutes: 60      # sensor LoRaWAN sin uplinks -> "sin comunicacion"
+    siteSilentMinutes: 15       # ningun sensor LoRaWAN -> ChirpStack/gateway caido
+    # Temperatura: solo para sensores SIN tag threshold_min/max en ChirpStack. 0/0 = desactivado.
+    temperatureMin: 0
+    temperatureMax: 0
+
+lorawan:
+  enabled: true
+  brokerUrl: "tcp://10.0.6.35:1883"
+  username: ""
+  password: ""
+
+modbus:
+  enabled: true
+  name: "EBO-ASP-ESCUINTLA"
+  host: "10.0.6.26"
+  port: 502
+  unitId: 1
+  pollIntervalSeconds: 15
+  timeoutMs: 10000
+  readDelayMs: 50
+  devices:
+    # ---------- Generadores ----------
+    - name: "Generador Planta Hospital"
+      profile: generator
+      start: 5705
+      attributes: { area: "Cuarto eléctrico", feeds: "ANALIZADOR-1", code: "HES107" }
+    - name: "Generador Módulos"
+      profile: generator
+      start: 5743
+      attributes: { area: "Módulos", feeds: "ANALIZADOR-5", code: "HES109" }
+
+    # ---------- Analizadores ION7400 ----------
+    - name: "ANALIZADOR-1"
+      profile: ion7400
+      start: 255
+      extra:
+        - { key: s1_commercial_energy_status, register: 695 }
+        - { key: s2_generator_energy_status, register: 697 }
+        - { key: s1_commercial_transition_count, register: 5781 }
+        - { key: s2_generator_transition_count, register: 5783 }
+      attributes: { area: "Cuarto eléctrico", code: "HES107", phase: "Trifásica", capacityKva: 300, generator: "Generador Planta Hospital" }
+    - name: "ANALIZADOR-2"
+      profile: ion7400-b
+      start: 325
+      attributes: { area: "Cuarto eléctrico", code: "HES108", phase: "Trifásica", capacityKva: 200 }
+    - name: "ANALIZADOR-3"
+      profile: ion7400-b
+      start: 399
+      attributes: { area: "Consulta Externa", room: "Sala de Espera", code: "HES105", phase: "Trifásica", capacityKva: 225 }
+    - name: "ANALIZADOR-4"
+      profile: ion7400-b
+      start: 473
+      attributes: { area: "Consulta Externa", room: "Sala de Espera", code: "HES106", phase: "Monofásica", capacityKva: 22 }
+    - name: "ANALIZADOR-5"
+      profile: ion7400-b
+      start: 547
+      extra:
+        - { key: s1_commercial_energy_status, register: 587 }
+        - { key: s2_generator_energy_status, register: 589 }
+        - { key: s1_commercial_transition_count, register: 5785 }
+        - { key: s2_generator_transition_count, register: 5787 }
+      attributes: { area: "Módulos", code: "HES109", phase: "Trifásica", capacityKva: 750, generator: "Generador Módulos" }
+    - name: "ANALIZADOR-6"
+      profile: ion7400-b
+      start: 621
+      attributes: { area: "Módulos", code: "HES110", phase: "Trifásica", capacityKva: 750 }
+
+    # ---------- Medidores PM2130 ----------
+    - name: "PM2130-1"
+      profile: pm2130
+      start: 101
+      attributes: { area: "Emergencia", code: "HES111", phase: "Trifásica" }
+    - name: "PM2130-2"
+      profile: pm2130
+      start: 123
+      attributes: { area: "Quirófanos", code: "HES116", phase: "Trifásica" }
+    - name: "PM2130-3"
+      profile: pm2130
+      start: 145
+      attributes: { area: "Quirófanos", code: "HES117", phase: "Trifásica" }
+    - name: "PM2130-4"
+      profile: pm2130
+      start: 167
+      attributes: { area: "Laboratorio", code: "HES114", phase: "Trifásica" }
+    - name: "PM2130-5"
+      profile: pm2130
+      start: 189
+      attributes: { area: "Banco de Sangre", code: "HES112", phase: "Trifásica" }
+    - name: "PM2130-6"
+      profile: pm2130
+      start: 211
+      attributes: { area: "Intensivos", code: "HES113", phase: "Trifásica" }
+    - name: "PM2130-7"
+      profile: pm2130
+      start: 233
+      # api-SIASA tenia que probar varios inicios para este medidor.
+      startCandidates: [231, 235, 229, 237, 239]
+      attributes: { area: "Intensivos Neonatología", code: "HES115", phase: "Monofásica" }

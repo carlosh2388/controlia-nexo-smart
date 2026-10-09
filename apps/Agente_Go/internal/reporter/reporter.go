@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"agente-go/internal/discovery"
+	"agente-go/internal/events"
 )
 
 type Client struct {
@@ -28,12 +29,16 @@ type SyncResult struct {
 	// Ya existia un dispositivo con esta misma identidad fisica creado por otra via (import
 	// manual, adaptador en proceso) - la API no lo toco para no duplicarlo ni pelearle el estado.
 	SkippedExisting int `json:"skippedExisting"`
+	EventsReceived  int `json:"eventsReceived"`
+	// Nuevos guardados; los reenviados que la API ya tenia no cuentan (idempotente por id).
+	EventsRecorded int `json:"eventsRecorded"`
 }
 
 type syncRequest struct {
-	BuildingKey  string              `json:"buildingKey"`
-	AgentVersion string              `json:"agentVersion,omitempty"`
-	Devices      []discovery.Device  `json:"devices"`
+	BuildingKey  string             `json:"buildingKey"`
+	AgentVersion string             `json:"agentVersion,omitempty"`
+	Devices      []discovery.Device `json:"devices"`
+	Events       []events.Event     `json:"events,omitempty"`
 }
 
 func New(baseURL, apiKey string) *Client {
@@ -44,8 +49,8 @@ func New(baseURL, apiKey string) *Client {
 	}
 }
 
-func (c *Client) Sync(buildingKey, agentVersion string, devices []discovery.Device) (*SyncResult, error) {
-	body, err := json.Marshal(syncRequest{BuildingKey: buildingKey, AgentVersion: agentVersion, Devices: devices})
+func (c *Client) Sync(buildingKey, agentVersion string, devices []discovery.Device, evs []events.Event) (*SyncResult, error) {
+	body, err := json.Marshal(syncRequest{BuildingKey: buildingKey, AgentVersion: agentVersion, Devices: devices, Events: evs})
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo serializar el lote: %w", err)
 	}

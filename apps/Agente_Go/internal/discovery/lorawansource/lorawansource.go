@@ -9,6 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
+	"strconv"
+	"strings"
 	"sync"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -22,11 +25,18 @@ const uplinkTopic = "application/+/device/+/event/up"
 
 type chirpstackUplink struct {
 	DeviceInfo *struct {
-		DevEui     string            `json:"devEui"`
-		DeviceName string            `json:"deviceName"`
-		Tags       map[string]string `json:"tags"`
+		DevEui            string            `json:"devEui"`
+		DeviceName        string            `json:"deviceName"`
+		DeviceProfileName string            `json:"deviceProfileName"`
+		Tags              map[string]string `json:"tags"`
 	} `json:"deviceInfo"`
 	Object map[string]interface{} `json:"object"`
+	FCnt   *int                   `json:"fCnt"`
+	Time   string                 `json:"time"`
+	RxInfo []struct {
+		Rssi *float64 `json:"rssi"`
+		Snr  *float64 `json:"snr"`
+	} `json:"rxInfo"`
 }
 
 type Source struct {
@@ -85,6 +95,31 @@ func (s *Source) Stop() {
 	}
 }
 
+// addScaledChannels convierte las entradas analogicas 4-20 mA de los WISE a su magnitud real usando
+// los tags que la sede ya tiene cargados en ChirpStack por canal (tag ai0_multiplier, ai0_offset,
+// ai0_type...): valor = mA * multiplier + offset. En IGSS los WISE son monitores de cadena de frio
+// (ai0_type = temperature), asi que aparece ai0_temperature en °C junto al ai0_value original.
+// Verificado contra lecturas reales: 11.13 mA -> -32.6 °C en un ultracongelador (-40..-30 °C).
+func addScaledChannels(readings map[string]interface{}, tags map[string]string) {
+	for k := 0; k < 8; k++ {
+		ch := fmt.Sprintf("ai%d", k)
+		raw, ok := readings[ch+"_value"].(float64)
+		if !ok {
+			continue
+		}
+		mult, err1 := strconv.ParseFloat(tags["ai"+strconv.Itoa(k)+"_multiplier"], 64)
+		off, err2 := strconv.ParseFloat(tags["ai"+strconv.Itoa(k)+"_offset"], 64)
+		if err1 != nil || err2 != nil || mult == 0 {
+			continue
+		}
+		suffix := "_scaled"
+		if strings.EqualFold(tags["ai"+strconv.Itoa(k)+"_type"], "temperature") {
+			suffix = "_temperature"
+		}
+		readings[ch+suffix] = math.Round((raw*mult+off)*100) / 100
+	}
+}
+
 func (s *Source) handleUplink(_ mqtt.Client, msg mqtt.Message) {
 	var uplink chirpstackUplink
 	if err := json.Unmarshal(msg.Payload(), &uplink); err != nil {
@@ -100,13 +135,41 @@ func (s *Source) handleUplink(_ mqtt.Client, msg mqtt.Message) {
 		name = "LoRaWAN " + devEui
 	}
 
+	// Datos del enlace del ultimo uplink (mejor gateway) para el panel "Uplinks MQTT en vivo".
+	attrs := map[string]interface{}{"devEui": devEui}
+	for k, v := range uplink.DeviceInfo.Tags {
+		attrs["tag_"+k] = v
+	}
+	if uplink.FCnt != nil {
+		attrs["fCnt"] = *uplink.FCnt
+	}
+	if uplink.Time != "" {
+		attrs["lastUplinkAt"] = uplink.Time
+	}
+	for _, rx := range uplink.RxInfo {
+		if rx.Rssi == nil {
+			continue
+		}
+		if best, ok := attrs["rssi"].(float64); !ok || *rx.Rssi > best {
+			attrs["rssi"] = *rx.Rssi
+			if rx.Snr != nil {
+				attrs["snr"] = *rx.Snr
+			}
+		}
+	}
+
+	readings := uplink.Object
+	addScaledChannels(readings, uplink.DeviceInfo.Tags)
+
 	device := discovery.Device{
 		ExternalID: "lorawan:" + devEui,
 		Name:       name,
 		Protocol:   protocolName,
 		Kind:       "sensor",
 		State:      "online",
-		Readings:   uplink.Object,
+		Readings:   readings,
+		Model:      uplink.DeviceInfo.DeviceProfileName,
+		Attributes: attrs,
 	}
 
 	s.mu.Lock()

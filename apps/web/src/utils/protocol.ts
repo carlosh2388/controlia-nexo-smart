@@ -7,6 +7,7 @@ export const PROTOCOL_META: Record<string, { label: string; tone: StatTone }> = 
   bacnet: { label: "BACnet (aires)", tone: "amber" },
   lorawan: { label: "LoRaWAN", tone: "violet" },
   ewelink: { label: "eWeLink LAN", tone: "teal" },
+  modbus: { label: "Modbus (energía)", tone: "amber" },
 };
 
-export const PROTOCOL_ORDER = ["http", "mqtt", "bacnet", "lorawan", "ewelink"];
+export const PROTOCOL_ORDER = ["http", "mqtt", "bacnet", "lorawan", "ewelink", "modbus"];

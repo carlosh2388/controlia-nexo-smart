@@ -21,6 +21,8 @@ enum DeviceProtocol {
   ewelink
   lorawan
   bacnet
+  /// Medidores/generadores leidos por un Agente_Go via Modbus TCP (ej. EBO AS-P de una sede IGSS). Solo lectura.
+  modbus
 }
 
 enum DeviceKind {
@@ -122,6 +124,7 @@ model Device {
   state    DeviceState?
   commands Command[]
   readings DeviceReading[]
+  events   SiteEvent[]
 
   ruleTriggers   RuleTrigger[]
   ruleConditions RuleCondition[]
@@ -180,6 +183,36 @@ model DeviceReading {
 
   @@index([deviceId, recordedAt])
   @@map("device_readings")
+}
+
+enum EventSeverity {
+  info
+  warning
+  critical
+}
+
+/// Evento detectado en tiempo real por el Agente_Go de una sede (transferencia del ATS, arranque de
+/// generador, alarma por umbral, puerta abierta, equipo sin comunicacion...). Es el historial que
+/// muestra la pestaña Sedes > Eventos. agentEventId lo genera el agente y hace idempotente el reenvio
+/// (el agente guarda los eventos en disco y los reintenta si la API no respondio).
+model SiteEvent {
+  id           String        @id @default(uuid())
+  agentEventId String        @unique
+  buildingKey  String
+  deviceId     String?
+  device       Device?       @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  externalId   String?
+  type         String
+  severity     EventSeverity @default(info)
+  message      String
+  value        Float?
+  data         Json?
+  occurredAt   DateTime
+  receivedAt   DateTime      @default(now())
+
+  @@index([buildingKey, occurredAt])
+  @@index([deviceId, occurredAt])
+  @@map("site_events")
 }
 
 model DeviceState {

@@ -29,6 +29,11 @@ type Device struct {
 	StateTopic  string                 `json:"stateTopic,omitempty"`
 	CommandTopic string                `json:"commandTopic,omitempty"`
 	MqttJson    *MqttJson              `json:"mqttJson,omitempty"`
+	// Model es el perfil/modelo del equipo ("ION7400", "PM2130", "generator", o el
+	// deviceProfileName de ChirpStack). La pestaña Sedes elige la tarjeta con esto.
+	Model string `json:"model,omitempty"`
+	// Attributes son datos descriptivos fijos (area, codigo, fase, capacidad, RSSI/SNR...).
+	Attributes map[string]interface{} `json:"attributes,omitempty"`
 }
 
 // Source es lo que implementa cada driver de protocolo (mqttsource, bacnetsource, ...).

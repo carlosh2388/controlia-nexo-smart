@@ -1,0 +1,39 @@
+# Agente_Go para el piloto LoRaWAN DIRECTO en TEC 3 (oficina): el gateway de pruebas apunta su
+# "Network Server" a la IP de la maquina donde corre este agente (puertos 1700), sin ChirpStack.
+# Ver docs/lorawan-directo.md.
+
+buildingKey: "tec3-oficina"
+
+api:
+  baseUrl: "http://localhost:3010/api/v1"
+  # API key con role=agent (POST /api-keys {"name":"Agente TEC3 oficina","role":"agent"})
+  apiKey: "siasa_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+syncIntervalSeconds: 15
+dataDir: "./data-tec3-oficina"
+
+loraGateway:
+  enabled: true
+  # 0.0.0.0:1700 = cualquier interfaz. El firewall de la maquina debe permitir ENTRADA UDP 1700.
+  listen: "0.0.0.0:1700"
+  gatewayTimeoutSeconds: 90
+  maxRadioDevices: 300
+  # Llaves de los sensores del piloto (cuando las tengamos). Sin llaves, cada sensor se registra
+  # igual como "escuchado por radio" (DevAddr, RSSI, SNR, contador, join requests).
+  keys: []
+  #  - name: "Sensor piloto 1"
+  #    model: "LEO-S592-AQG0-P"
+  #    devEui: "24e124..."
+  #    # Sesion activa (ABP u OTAA ya unido):
+  #    devAddr: "01abcdef"
+  #    nwkSKey: "<32 hex>"
+  #    appSKey: "<32 hex>"
+  #    # OTAA (para la fase activa, aceptar el join):
+  #    appKey: "<32 hex>"
+  #    attributes: { area: "Oficina" }
+
+events:
+  enabled: true
+  thresholds:
+    sensorStaleMinutes: 60
+    siteSilentMinutes: 15

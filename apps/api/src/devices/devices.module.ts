@@ -12,6 +12,7 @@ import { COMMANDS_QUEUE } from "./devices.constants";
 import { AdaptersModule } from "../adapters/adapters.module";
 import { AuthModule } from "../auth/auth.module";
 import { EventsModule } from "../events/events.module";
+import { SiteEventsModule } from "../site-events/site-events.module";
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { EventsModule } from "../events/events.module";
     AdaptersModule,
     AuthModule,
     EventsModule,
+    SiteEventsModule,
   ],
   controllers: [DevicesController],
   providers: [

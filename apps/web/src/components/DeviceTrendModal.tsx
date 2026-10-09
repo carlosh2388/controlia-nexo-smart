@@ -3,7 +3,7 @@ import { useDeviceHistory, type HistoryRange } from "../api/devices";
 import TrendChart, { type TrendPoint } from "./TrendChart";
 import ThinkingIndicator from "./ThinkingIndicator";
 
-const RANGES: { value: HistoryRange; label: string }[] = [
+const RANGES: { value: Exclude<HistoryRange, "1h" | "24h">; label: string }[] = [
   { value: "today", label: "Hoy" },
   { value: "7d", label: "7 dias" },
   { value: "15d", label: "15 dias" },
@@ -30,7 +30,8 @@ export default function DeviceTrendModal({
   deviceName: string;
   onClose: () => void;
 }) {
-  const [range, setRange] = useState<HistoryRange>("today");
+  // Este modal (sensores del panel operativo) usa solo los rangos largos; "1h"/"24h" son de la pestaña Sedes.
+  const [range, setRange] = useState<Exclude<HistoryRange, "1h" | "24h">>("today");
   const { data, isLoading, isError } = useDeviceHistory(deviceId, range);
 
   const metricsWithData = METRICS.filter((m) => data?.points.some((p) => typeof p[m.key] === "number"));

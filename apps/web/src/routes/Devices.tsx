@@ -19,6 +19,7 @@ import ImportMqtt from "./ImportMqtt";
 import ImportBacnet from "./ImportBacnet";
 import BuildingView from "./BuildingView";
 import AgentDevices from "./AgentDevices";
+import Sedes from "./Sedes";
 import ClimateControlPanel from "../components/ClimateControlPanel";
 import Automations from "./Automations";
 import ToggleSwitch from "../components/ToggleSwitch";
@@ -311,7 +312,7 @@ export default function Devices() {
   const [search, setSearch] = useState("");
   const [showHiddenPanel, setShowHiddenPanel] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<DeviceKindId>>(new Set());
-  const [view, setView] = useState<"classic" | "building" | "automations" | "agent">("classic");
+  const [view, setView] = useState<"classic" | "building" | "automations" | "agent" | "sedes">("classic");
   const { toasts, push } = useToasts();
 
   useDeviceSocket();
@@ -493,15 +494,20 @@ export default function Devices() {
         </div>
       </header>
 
-      <main className={`mx-auto p-6 transition-[max-width] duration-300 ${view === "building" ? "max-w-[1920px]" : "max-w-6xl"}`}>
+      <main
+        className={`mx-auto p-6 transition-[max-width] duration-300 ${
+          view === "building" ? "max-w-[1920px]" : view === "sedes" ? "max-w-[1360px]" : "max-w-6xl"
+        }`}
+      >
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-sky-400">
               <BuildingIcon className="h-3.5 w-3.5" />
-              Edificio {BUILDING_CONTEXT.building}
-              {view === "building" ? " · Vista de edificio" : ` · ${BUILDING_CONTEXT.level}`}
+              {view === "sedes"
+                ? "IGSS · Sedes"
+                : `Edificio ${BUILDING_CONTEXT.building}${view === "building" ? " · Vista de edificio" : ` · ${BUILDING_CONTEXT.level}`}`}
             </p>
-            <h1 className="text-xl font-semibold text-slate-50">Panel de dispositivos</h1>
+            <h1 className="text-xl font-semibold text-slate-50">{view === "sedes" ? "Monitoreo de sedes" : "Panel de dispositivos"}</h1>
             {view === "classic" && (
               <p className="text-sm text-slate-500">
                 {totalVisible} visible(s){hidden.length > 0 ? ` · ${hidden.length} oculto(s)` : ""}
@@ -535,6 +541,14 @@ export default function Devices() {
                 Gestión Inteligente
               </button>
               <button
+                onClick={() => setView("sedes")}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  view === "sedes" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Sedes
+              </button>
+              <button
                 onClick={() => setView("agent")}
                 className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                   view === "agent" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
@@ -553,6 +567,7 @@ export default function Devices() {
 
         {view === "automations" && <Automations />}
         {view === "agent" && <AgentDevices />}
+        {view === "sedes" && <Sedes />}
 
         {view === "classic" && (
         <>

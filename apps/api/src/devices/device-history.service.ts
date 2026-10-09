@@ -6,6 +6,10 @@ import type { HistoryRange } from "./dto/device-history-query.dto";
 function sinceFor(range: HistoryRange): Date {
   const now = new Date();
   switch (range) {
+    case "1h":
+      return new Date(now.getTime() - 60 * 60 * 1000);
+    case "24h":
+      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
     case "today": {
       const start = new Date(now);
       start.setHours(0, 0, 0, 0);

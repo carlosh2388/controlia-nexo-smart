@@ -2,6 +2,7 @@ import { Type } from "class-transformer";
 import { ArrayMaxSize, IsArray, IsEnum, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength, ValidateNested } from "class-validator";
 import { DeviceKind, DeviceProtocol } from "@prisma/client";
 import { MqttJsonConfigDto } from "./mqtt-json-config.dto";
+import { AgentEventDto } from "../../site-events/dto/site-event.dto";
 
 /** Un dispositivo tal como lo reporta el Agente_Go: crudo, sin areaId (eso lo asigna un humano despues). */
 export class AgentSyncDeviceDto {
@@ -34,6 +35,25 @@ export class AgentSyncDeviceDto {
   @IsOptional()
   @IsObject()
   readings?: Record<string, unknown>;
+
+  /**
+   * Modelo/perfil del equipo segun el source (ej. "ION7400", "PM2130", "generator" para modbus;
+   * el deviceProfileName de ChirpStack para lorawan, ej. "LEO-S595"). La pestaña Sedes elige con
+   * esto que tarjeta dibujar. Se guarda en Device.metadata.model.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  model?: string;
+
+  /**
+   * Datos descriptivos fijos que el source conoce del equipo (area, codigo de inventario, fase,
+   * capacidad en kVA, a quien respalda un generador, RSSI/SNR del ultimo uplink...). Se guarda en
+   * Device.metadata.attributes y se reemplaza completo en cada sync.
+   */
+  @IsOptional()
+  @IsObject()
+  attributes?: Record<string, unknown>;
 
   /**
    * Solo para protocol="mqtt": si el source del agente conoce los topics reales (ej. mqttsource,
@@ -76,4 +96,15 @@ export class AgentSyncDto {
   @ValidateNested({ each: true })
   @Type(() => AgentSyncDeviceDto)
   devices!: AgentSyncDeviceDto[];
+
+  /**
+   * Eventos detectados por el agente desde el sync anterior (o pendientes de syncs que fallaron).
+   * Se guardan en SiteEvent de forma idempotente por id. Ver docs/sedes-igss.md "Eventos".
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(1000)
+  @ValidateNested({ each: true })
+  @Type(() => AgentEventDto)
+  events?: AgentEventDto[];
 }

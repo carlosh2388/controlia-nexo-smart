@@ -64,7 +64,7 @@ export interface EwelinkDeviceConfig {
   channel?: number;
 }
 
-export type DeviceProtocol = "mqtt" | "http" | "ewelink" | "lorawan" | "bacnet";
+export type DeviceProtocol = "mqtt" | "http" | "ewelink" | "lorawan" | "bacnet" | "modbus";
 export type DeviceKind = "switch" | "sensor" | "climate";
 
 export interface BacnetObjectRef {
@@ -107,6 +107,10 @@ export interface Device {
     ewelink?: EwelinkDeviceConfig;
     bacnet?: BacnetDeviceConfig;
     agent?: AgentMetadata;
+    /** Modelo/perfil que reporta el Agente_Go ("ION7400", "PM2130", "generator", deviceProfileName de ChirpStack). */
+    model?: string;
+    /** Datos descriptivos del equipo que reporta el Agente_Go (area, codigo, fase, capacityKva, rssi, snr, fCnt...). */
+    attributes?: Record<string, unknown>;
   } | null;
   areaId: string | null;
   state: DeviceState | null;
@@ -318,7 +322,7 @@ export function useImportZigbee2Mqtt() {
   });
 }
 
-export type HistoryRange = "today" | "7d" | "15d" | "30d";
+export type HistoryRange = "1h" | "24h" | "today" | "7d" | "15d" | "30d";
 
 export interface DeviceHistoryPoint {
   t: string;
@@ -332,7 +336,7 @@ export interface DeviceHistoryResponse {
   points: DeviceHistoryPoint[];
 }
 
-export function useDeviceHistory(deviceId: string | null, range: HistoryRange) {
+export function useDeviceHistory(deviceId: string | null, range: HistoryRange, options?: { refetchIntervalMs?: number }) {
   return useQuery({
     queryKey: ["device-history", deviceId, range],
     queryFn: async () => {
@@ -343,6 +347,7 @@ export function useDeviceHistory(deviceId: string | null, range: HistoryRange) {
     },
     enabled: !!deviceId,
     staleTime: 30_000,
+    refetchInterval: options?.refetchIntervalMs,
   });
 }
 

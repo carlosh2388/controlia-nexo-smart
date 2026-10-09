@@ -15,12 +15,14 @@ import (
 	"agente-go/internal/config"
 	"agente-go/internal/discovery"
 	"agente-go/internal/discovery/bacnetsource"
+	"agente-go/internal/discovery/gatewaysource"
 	"agente-go/internal/discovery/lorawansource"
+	"agente-go/internal/discovery/modbussource"
 	"agente-go/internal/discovery/mqttsource"
 	"agente-go/internal/reporter"
 )
 
-const version = "0.1.0"
+const version = "0.4.0"
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "ruta al archivo de configuracion (ver config.example.yaml)")
@@ -43,6 +45,16 @@ func main() {
 			sources = append(sources, bacnetsource.New(*cfg.BACnet, dev))
 		}
 	}
+	if cfg.Modbus != nil && cfg.Modbus.Enabled {
+		sources = append(sources, modbussource.New(*cfg.Modbus))
+	}
+	if cfg.LoRaGateway != nil && cfg.LoRaGateway.Enabled {
+		gw, err := gatewaysource.New(*cfg.LoRaGateway)
+		if err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		sources = append(sources, gw)
+	}
 	// Fase 4 (adaptadores HTTP por fabricante): se agrega aca del mismo modo, como su propio
 	// discovery.Source - ver docs/agente-go.md "Como agregar un protocolo nuevo".
 
@@ -51,7 +63,10 @@ func main() {
 	}
 
 	rep := reporter.New(cfg.API.BaseURL, cfg.API.APIKey)
-	ag := agent.New(cfg, sources, rep, version)
+	ag, err := agent.New(cfg, sources, rep, version)
+	if err != nil {
+		log.Fatalf("agente: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
