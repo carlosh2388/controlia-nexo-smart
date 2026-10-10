@@ -124,3 +124,20 @@ func FullFCnt(last uint32, fcnt16 uint32) uint32 {
 	}
 	return candidate
 }
+
+// NewSessionKeys arma las llaves de sesion a partir de los textos hex de la config.
+func NewSessionKeys(devAddr, nwkSKey, appSKey string) (*SessionKeys, error) {
+	addr, err := parseDevAddr(devAddr)
+	if err != nil {
+		return nil, err
+	}
+	nwk, err := parseKey(nwkSKey)
+	if err != nil {
+		return nil, err
+	}
+	app, err := parseKey(appSKey)
+	if err != nil {
+		return nil, err
+	}
+	return &SessionKeys{DevAddr: addr, NwkSKey: nwk, AppSKey: app}, nil
+}

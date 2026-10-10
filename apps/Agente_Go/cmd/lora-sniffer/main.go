@@ -26,6 +26,9 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
+	"gopkg.in/yaml.v3"
+
+	"agente-go/internal/config"
 	"agente-go/internal/discovery/gatewaysource"
 )
 
@@ -79,6 +82,7 @@ func phyPayloadFromUplinkFrame(b []byte) []byte {
 type appUp struct {
 	DevAddr    string `json:"devAddr"`
 	FCnt       uint32 `json:"fCnt"`
+	Object     map[string]interface{} `json:"object"`
 	DeviceInfo struct {
 		DevEui     string `json:"devEui"`
 		DeviceName string `json:"deviceName"`
@@ -89,7 +93,38 @@ func main() {
 	broker := flag.String("broker", "tcp://192.168.70.6:1883", "broker MQTT donde publican los gateways")
 	seconds := flag.Int("seconds", 60, "segundos de captura")
 	replayTo := flag.String("replay-to", "", "opcional: reenviar cada trama cruda como PUSH_DATA (Semtech UDP) a esta direccion, ej. 127.0.0.1:17000, para probar el receptor directo del agente de punta a punta")
+	keysFile := flag.String("keys", "", "opcional: YAML con el bloque keys (salida de chirpstack-keys) para descifrar las tramas crudas y comparar las metricas contra las del servidor de red")
 	flag.Parse()
+
+	sess := map[string]*gatewaysource.SessionKeys{}
+	models := map[string]string{}
+	fcnts := map[string]uint32{}
+	if *keysFile != "" {
+		data, err := os.ReadFile(*keysFile)
+		if err != nil {
+			log.Fatalf("keys: %v", err)
+		}
+		var kf struct {
+			Keys []config.LoRaDeviceKeys `yaml:"keys"`
+		}
+		if err := yaml.Unmarshal(data, &kf); err != nil {
+			log.Fatalf("keys: %v", err)
+		}
+		for _, k := range kf.Keys {
+			if k.DevAddr == "" {
+				continue
+			}
+			sk, err := gatewaysource.NewSessionKeys(k.DevAddr, k.NwkSKey, k.AppSKey)
+			if err != nil {
+				continue
+			}
+			a := strings.ToLower(k.DevAddr)
+			sess[a], models[a], fcnts[a] = sk, k.Model, k.FCntUp
+		}
+		log.Printf("%d sesion(es) cargadas para descifrar", len(sess))
+	}
+	decoded := map[string]map[string]interface{}{}
+	micOK, micBad := 0, 0
 
 	var replay *net.UDPConn
 	if *replayTo != "" {
@@ -144,7 +179,8 @@ func main() {
 			if len(parts) > 2 {
 				sendReplay(parts[2], phy)
 			}
-			f, err := gatewaysource.DecodeFrame(phy, func(string) *gatewaysource.SessionKeys { return nil }, func(_ string, c uint32) uint32 { return c })
+			f, err := gatewaysource.DecodeFrame(phy, func(a string) *gatewaysource.SessionKeys { return sess[a] },
+				func(a string, c uint32) uint32 { return gatewaysource.FullFCnt(fcnts[a], c) })
 			if err != nil {
 				rawErrors++
 				return
@@ -154,7 +190,20 @@ func main() {
 				fmt.Printf("  join request  DevEUI %s\n", f.DevEUI)
 				return
 			}
-			raw[fmt.Sprintf("%s|%d", f.DevAddr, f.FCnt16)]++
+			key := fmt.Sprintf("%s|%d", f.DevAddr, f.FCnt16)
+			raw[key]++
+			if f.MICValid != nil {
+				if *f.MICValid {
+					micOK++
+					if f.Payload != nil {
+						if m, _ := gatewaysource.DecodeMilesight(models[f.DevAddr], f.Payload); len(m) > 0 {
+							decoded[key] = m
+						}
+					}
+				} else {
+					micBad++
+				}
+			}
 		})
 		c.Subscribe("application/+/device/+/event/up", 0, func(_ mqtt.Client, m mqtt.Message) {
 			var u appUp
@@ -196,8 +245,22 @@ func main() {
 			mark = "SI"
 		}
 		fmt.Printf("  [%s] %-40s DevAddr %s FCnt %d\n", mark, u.DeviceInfo.DeviceName, u.DevAddr, u.FCnt)
+		if d, ok := decoded[k]; ok {
+			same, diff := 0, []string{}
+			for name, want := range u.Object {
+				if fmt.Sprint(d[name]) == fmt.Sprint(want) {
+					same++
+				} else {
+					diff = append(diff, fmt.Sprintf("%s agente=%v servidor=%v", name, d[name], want))
+				}
+			}
+			fmt.Printf("        descifrado por el agente: %d/%d metricas iguales %v\n", same, len(u.Object), diff)
+		}
 	}
 	fmt.Printf("\nCoinciden %d de %d uplinks del servidor de red.\n", matched, len(app))
+	if len(sess) > 0 {
+		fmt.Printf("Descifrado con llaves: MIC valido %d, MIC invalido %d, con metricas %d\n", micOK, micBad, len(decoded))
+	}
 	if len(app) > 0 && matched < len(app) {
 		os.Exit(2)
 	}
