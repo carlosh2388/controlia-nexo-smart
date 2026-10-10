@@ -59,6 +59,8 @@ type radioDevice struct {
 	DevNonce     uint16
 	Payload      []byte
 	MICValid     *bool
+	Decoded      map[string]interface{}
+	DecodeOK     bool
 	Encrypted    bool
 	HasKeys      bool
 }
@@ -255,10 +257,13 @@ func (s *Source) handleRX(gw *gatewayState, rx rxpk, now time.Time) {
 			if d := s.devices["addr:"+devAddr]; d != nil {
 				return FullFCnt(d.FCnt32, fcnt16)
 			}
-			if e := s.keysByAdr[devAddr]; e != nil && e.cfg.DevEUI != "" {
-				if d := s.devices["eui:"+strings.ToLower(e.cfg.DevEUI)]; d != nil {
-					return FullFCnt(d.FCnt32, fcnt16)
+			if e := s.keysByAdr[devAddr]; e != nil {
+				if e.cfg.DevEUI != "" {
+					if d := s.devices["eui:"+strings.ToLower(e.cfg.DevEUI)]; d != nil && d.FCnt32 > 0 {
+						return FullFCnt(d.FCnt32, fcnt16)
+					}
 				}
+				return FullFCnt(e.cfg.FCntUp, fcnt16)
 			}
 			return fcnt16
 		})
@@ -329,6 +334,9 @@ func (s *Source) handleRX(gw *gatewayState, rx rxpk, now time.Time) {
 	d.Encrypted = frame.Encrypted
 	if frame.Payload != nil {
 		d.Payload = frame.Payload
+		if d.Model != "" {
+			d.Decoded, d.DecodeOK = DecodeMilesight(d.Model, frame.Payload)
+		}
 	}
 }
 
@@ -425,6 +433,12 @@ func (s *Source) publish(now time.Time) {
 		}
 		if len(d.Payload) > 0 {
 			readings["payload_hex"] = hex.EncodeToString(d.Payload)
+		}
+		for k, v := range d.Decoded {
+			readings[k] = v
+		}
+		if d.Decoded != nil {
+			attrs["decoded"] = d.DecodeOK
 		}
 
 		name := d.Name

@@ -1,0 +1,267 @@
+{
+ "LEO-S592-AQG0-P": [
+  {
+   "hex": "0367ea0004689a05000106cb01077d9504087d6e00097317260a7d04000b7d0f000c7d1500",
+   "object": {
+    "lightLevel": "6-50 lux",
+    "co2": 1173,
+    "hcho": 0.04,
+    "humidity": 77,
+    "pm10": 21,
+    "pirStatus": "Occupied",
+    "pm2_5": 15,
+    "tvoc": 1.1,
+    "barometricPressure": 975.1,
+    "temperature": 23.4
+   }
+  },
+  {
+   "hex": "0367e50004687105000006cb00077dcf01087d640009730d260a7d03000b7d10000c7d1000",
+   "object": {
+    "humidity": 56.5,
+    "pirStatus": "Vacant",
+    "co2": 463,
+    "tvoc": 1,
+    "pm2_5": 16,
+    "lightLevel": "0-5 lux",
+    "barometricPressure": 974.1,
+    "hcho": 0.03,
+    "temperature": 22.9,
+    "pm10": 16
+   }
+  },
+  {
+   "hex": "0367e20004687305000006cb02077d1804087df400097312260a7d06000b7d07000c7d0800",
+   "object": {
+    "tvoc": 2.44,
+    "hcho": 0.06,
+    "temperature": 22.6,
+    "pm10": 8,
+    "barometricPressure": 974.6,
+    "pm2_5": 7,
+    "co2": 1048,
+    "humidity": 57.5,
+    "lightLevel": "51-100 lux",
+    "pirStatus": "Vacant"
+   }
+  },
+  {
+   "hex": "0367ec0004688e05000106cb02077d9302087d8e0009730c260a7d00000b7d29000c7d3a00",
+   "object": {
+    "lightLevel": "51-100 lux",
+    "co2": 659,
+    "tvoc": 1.42,
+    "pm2_5": 41,
+    "humidity": 71,
+    "pm10": 58,
+    "pirStatus": "Occupied",
+    "barometricPressure": 974,
+    "hcho": 0,
+    "temperature": 23.6
+   }
+  },
+  {
+   "hex": "0367f60004688c05000106cb01077d5402087d0301097308260a7d01000b7d0f000c7d0f00",
+   "object": {
+    "pm10": 15,
+    "co2": 596,
+    "temperature": 24.6,
+    "pirStatus": "Occupied",
+    "lightLevel": "6-50 lux",
+    "humidity": 70,
+    "barometricPressure": 973.6,
+    "tvoc": 2.59,
+    "pm2_5": 15,
+    "hcho": 0.01
+   }
+  },
+  {
+   "hex": "0367eb0004687e05000106cb02077d2d03087d640009730c260a7d00000b7d0f000c7d0f00",
+   "object": {
+    "co2": 813,
+    "pm2_5": 15,
+    "temperature": 23.5,
+    "humidity": 63,
+    "hcho": 0,
+    "pm10": 15,
+    "barometricPressure": 974,
+    "tvoc": 1,
+    "pirStatus": "Occupied",
+    "lightLevel": "51-100 lux"
+   }
+  },
+  {
+   "hex": "0367eb000468a205000106cb01077d3b02087d6a00097311260a7d01000b7d15000c7d1700",
+   "object": {
+    "pm2_5": 21,
+    "temperature": 23.5,
+    "humidity": 81,
+    "pirStatus": "Occupied",
+    "barometricPressure": 974.5,
+    "co2": 571,
+    "pm10": 23,
+    "lightLevel": "6-50 lux",
+    "tvoc": 1.06,
+    "hcho": 0.01
+   }
+  },
+  {
+   "hex": "0367bf0004687c05000006cb02077d0904087d6400097315260a7d03000b7d10000c7d1500",
+   "object": {
+    "tvoc": 1,
+    "hcho": 0.03,
+    "pm2_5": 16,
+    "barometricPressure": 974.9,
+    "lightLevel": "51-100 lux",
+    "humidity": 62,
+    "pm10": 21,
+    "temperature": 19.1,
+    "pirStatus": "Vacant",
+    "co2": 1033
+   }
+  },
+  {
+   "hex": "0367e70004686805000106cb00077d0002087d6400097316260a7d04000b7d05000c7d0500",
+   "object": {
+    "temperature": 23.1,
+    "humidity": 52,
+    "co2": 512,
+    "pm2_5": 5,
+    "pirStatus": "Occupied",
+    "tvoc": 1,
+    "barometricPressure": 975,
+    "pm10": 5,
+    "lightLevel": "0-5 lux",
+    "hcho": 0.04
+   }
+  },
+  {
+   "hex": "03670d0104688905000006cb00077dd101087d64000973ff250a7d02000b7d14000c7d1400",
+   "object": {
+    "tvoc": 1,
+    "temperature": 26.9,
+    "co2": 465,
+    "pm10": 20,
+    "pm2_5": 20,
+    "hcho": 0.02,
+    "lightLevel": "0-5 lux",
+    "barometricPressure": 972.7,
+    "humidity": 68.5,
+    "pirStatus": "Vacant"
+   }
+  },
+  {
+   "hex": "0367f10004686a05000006cb02077d3b02087d6400097316260a7d03000b7d0d000c7d0d00",
+   "object": {
+    "pm2_5": 13,
+    "tvoc": 1,
+    "pm10": 13,
+    "barometricPressure": 975,
+    "humidity": 53,
+    "temperature": 24.1,
+    "pirStatus": "Vacant",
+    "lightLevel": "51-100 lux",
+    "hcho": 0.03,
+    "co2": 571
+   }
+  },
+  {
+   "hex": "0367d70004686a05000006cb02077d7a02087d6400097300260a7d03000b7d0d000c7d0f00",
+   "object": {
+    "pm10": 15,
+    "pirStatus": "Vacant",
+    "pm2_5": 13,
+    "co2": 634,
+    "barometricPressure": 972.8,
+    "temperature": 21.5,
+    "tvoc": 1,
+    "hcho": 0.03,
+    "humidity": 53,
+    "lightLevel": "51-100 lux"
+   }
+  },
+  {
+   "hex": "0367030104688305000006cb00077d6202087d7b00097311260a7d01000b7d1c000c7d1d00",
+   "object": {
+    "co2": 610,
+    "barometricPressure": 974.5,
+    "temperature": 25.9,
+    "tvoc": 1.23,
+    "humidity": 65.5,
+    "pirStatus": "Vacant",
+    "lightLevel": "0-5 lux",
+    "pm2_5": 28,
+    "pm10": 29,
+    "hcho": 0.01
+   }
+  },
+  {
+   "hex": "0367d10004687305000006cb03077d5502087d6400097312260a7d03000b7d0f000c7d1000",
+   "object": {
+    "lightLevel": "101-500 lux",
+    "pm10": 16,
+    "hcho": 0.03,
+    "tvoc": 1,
+    "barometricPressure": 974.6,
+    "temperature": 20.9,
+    "pirStatus": "Vacant",
+    "co2": 597,
+    "pm2_5": 15,
+    "humidity": 57.5
+   }
+  },
+  {
+   "hex": "0367180104688705000006cb02077ddc01087d7700097312260a7d01000b7d19000c7d1b00",
+   "object": {
+    "co2": 476,
+    "pm10": 27,
+    "humidity": 67.5,
+    "pirStatus": "Vacant",
+    "tvoc": 1.19,
+    "lightLevel": "51-100 lux",
+    "hcho": 0.01,
+    "barometricPressure": 974.6,
+    "pm2_5": 25,
+    "temperature": 28
+   }
+  }
+ ],
+ "LEO-S595-MSG0": [
+  {
+   "hex": "017528030000040000",
+   "object": {
+    "magnet_status": "close",
+    "battery": 40,
+    "tamper_status": "installed"
+   }
+  },
+  {
+   "hex": "017528030000040000",
+   "object": {
+    "magnet_status": "close",
+    "tamper_status": "installed",
+    "battery": 40
+   }
+  },
+  {
+   "hex": "017528030000040000",
+   "object": {
+    "tamper_status": "installed",
+    "battery": 40,
+    "magnet_status": "close"
+   }
+  },
+  {
+   "hex": "030001",
+   "object": {
+    "magnet_status": "open"
+   }
+  },
+  {
+   "hex": "030000",
+   "object": {
+    "magnet_status": "close"
+   }
+  }
+ ]
+}

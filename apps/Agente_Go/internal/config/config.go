@@ -121,6 +121,9 @@ type LoRaDeviceKeys struct {
 	AppSKey string `yaml:"appSKey"`
 	// OTAA: con la AppKey se valida el join request (y en la fase activa se aceptara el join).
 	AppKey string `yaml:"appKey"`
+	// Ultimo contador de subida conocido (de la sesion activa). Necesario si el sensor ya paso de
+	// 65535 tramas: por radio solo viajan los 16 bits bajos y sin esto el MIC no valida.
+	FCntUp uint32 `yaml:"fCntUp"`
 	// Atributos libres que se reenvian a Nodivo (area, codigo...).
 	Attributes map[string]interface{} `yaml:"attributes"`
 }
