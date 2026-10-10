@@ -127,7 +127,7 @@ func (s *Source) Start(onUpdate func([]discovery.Device)) error {
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(s.cfg.BrokerURL).
-		SetClientID("agente-go-" + s.cfg.BaseTopic).
+		SetClientID(discovery.ClientID("agente-go-" + s.cfg.BaseTopic)).
 		SetAutoReconnect(true).
 		SetCleanSession(true)
 	if s.cfg.Username != "" {
