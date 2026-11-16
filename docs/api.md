@@ -30,6 +30,22 @@ La mayoria de rutas usan `Authorization: Bearer <token>`.
 | POST | `/devices/zigbee2mqtt/discover` | Descubre entidades Zigbee2MQTT |
 | POST | `/devices/zigbee2mqtt/import` | Importa entidades Zigbee2MQTT |
 
+## Agentes Go (configuracion remota)
+
+Detalle en `docs/agentes-go-manual.md`, seccion 8.1.
+
+| Metodo | Ruta | Quien | Descripcion |
+| --- | --- | --- | --- |
+| GET | `/agents` | Usuarios | Agentes conocidos, version guardada/aplicada, ultimo sync |
+| GET | `/agents/:buildingKey/config` | Usuarios, agente | Config de protocolos (secretos enmascarados salvo para el agente) |
+| PUT | `/agents/:buildingKey/config` | admin | Guarda `{ config, baseVersion }` como version nueva (409 si `baseVersion` quedo vieja) |
+| POST | `/agents/:buildingKey/config/seed` | agente | Crea la v1 desde el `config.yaml` del agente (no pisa una existente) |
+| GET | `/agents/:buildingKey/control` | agente | `{ configVersion, scan }` |
+| POST | `/agents/:buildingKey/config/applied` | agente | `{ version, error?, rejected? }` |
+| POST | `/agents/:buildingKey/scan` | admin, operator | `{ items: [{ protocol, targets, port?, unitIds? }] }` |
+| GET | `/agents/:buildingKey/scan` | Usuarios | Estado y resultados de la ultima busqueda |
+| POST | `/agents/:buildingKey/scan/:scanId/result` | agente | Avance/resultado de la busqueda |
+
 ## Areas
 
 | Metodo | Ruta | Descripcion |

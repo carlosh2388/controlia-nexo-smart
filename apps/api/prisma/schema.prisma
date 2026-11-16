@@ -64,6 +64,15 @@ model User {
   username     String   @unique
   passwordHash String
   role         Role     @default(viewer)
+  /// Mantenimiento de usuarios (Centro de mando): datos de contacto, sedes que puede ver (vacio =
+  /// todas), pestaña con la que abre la app, y si esta activo (inactivo = no puede iniciar sesion).
+  fullName            String?
+  email               String?
+  sites               String[]  @default([])
+  homeTab             String    @default("centro")
+  active              Boolean   @default(true)
+  receivesAlarmEmails Boolean   @default(false)
+  lastLoginAt         DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -125,6 +134,7 @@ model Device {
   commands Command[]
   readings DeviceReading[]
   events   SiteEvent[]
+  gaps     ReadingGap[]
 
   ruleTriggers   RuleTrigger[]
   ruleConditions RuleCondition[]
@@ -185,6 +195,57 @@ model DeviceReading {
   @@map("device_readings")
 }
 
+/// Calidad de cada lectura del historial (piloto Gravix): real = leida en vivo, recuperada = traida
+/// de la memoria del medidor, estimada = calculada (ej. energia de un hueco por diferencia de contador).
+enum ReadingQuality {
+  real
+  recuperada
+  estimada
+}
+
+/// Historial detallado de equipos de energia (Fase A del piloto Gravix): una fila por variable y
+/// lectura. Es una hypertable de TimescaleDB particionada por "time" (ver la migracion
+/// add_timeseries_readings): se comprime sola despues de 7 dias. Sin relacion a Device a proposito:
+/// una FK en una tabla de millones de filas haria muy caro borrar un dispositivo.
+/// La llave (deviceId, metric, time) hace idempotente cualquier reenvio.
+model Reading {
+  time     DateTime       @db.Timestamptz(3)
+  deviceId String
+  metric   String
+  value    Float
+  quality  ReadingQuality @default(real)
+
+  @@id([deviceId, metric, time])
+  @@map("readings")
+}
+
+enum GapStatus {
+  open
+  closed
+  recovered
+  partial
+  estimated
+  unrecoverable
+}
+
+/// Periodo en que un equipo no entrego lecturas nuevas (detectado por GapDetectorService). "endedAt"
+/// queda null mientras el hueco sigue abierto.
+model ReadingGap {
+  id        String    @id @default(uuid())
+  deviceId  String
+  device    Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  startedAt DateTime  @db.Timestamptz(3)
+  endedAt   DateTime? @db.Timestamptz(3)
+  cause     String
+  status    GapStatus @default(open)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([deviceId, startedAt])
+  @@index([status])
+  @@map("reading_gaps")
+}
+
 enum EventSeverity {
   info
   warning
@@ -213,6 +274,28 @@ model SiteEvent {
   @@index([buildingKey, occurredAt])
   @@index([deviceId, occurredAt])
   @@map("site_events")
+}
+
+/// Configuracion remota de un Agente_Go: que protocolos escucha, en que IP y puertos. Se edita desde
+/// la web (Agente Go > Configuracion) y el agente la descarga y la aplica sin reiniciar; su config.yaml
+/// local solo necesita buildingKey + credenciales de la API. Cada guardado sube version; el agente
+/// reporta appliedVersion cuando la termino de aplicar. scanRequest/scanResult son el pedido de
+/// descubrimiento en la red de la sede y su resultado (ver docs/agentes-go-manual.md).
+model AgentConfig {
+  buildingKey    String    @id
+  version        Int       @default(1)
+  /// Mismas secciones que config.yaml (mqtt, lorawan, bacnet, modbusServers, loraGateway) + discovery.
+  config         Json
+  appliedVersion Int?
+  appliedAt      DateTime?
+  applyError     String?
+  scanRequest    Json?
+  scanResult     Json?
+  updatedById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("agent_configs")
 }
 
 model DeviceState {
@@ -339,4 +422,30 @@ model EventLog {
   @@index([deviceId])
   @@index([type])
   @@map("event_logs")
+}
+
+/// Permisos de cada perfil (rol) en el menu: pestañas que ve y acciones que puede hacer. El admin
+/// siempre tiene todo (no se guarda). Lo edita el administrador en "Usuarios y permisos".
+model RolePermission {
+  role      Role     @id
+  tabs      String[]
+  actions   String[]
+  updatedAt DateTime @updatedAt
+
+  @@map("role_permissions")
+}
+
+/// Centro de mando: foto de cada medidor de las sedes que se leen por el EBO (api-SIASA), tomada
+/// del monitoreo central cada minuto. Da historial y tendencias a esas sedes. Hypertable.
+model CentroLectura {
+  time      DateTime @db.Timestamptz(3)
+  sede      String
+  medidor   String
+  kw        Float?
+  vProm     Float?
+  aProm     Float?
+  estado    String
+
+  @@id([sede, medidor, time])
+  @@map("centro_lecturas")
 }

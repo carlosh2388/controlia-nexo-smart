@@ -97,8 +97,9 @@ func (s *Source) Stop() {
 
 // addScaledChannels convierte las entradas analogicas 4-20 mA de los WISE a su magnitud real usando
 // los tags que la sede ya tiene cargados en ChirpStack por canal (tag ai0_multiplier, ai0_offset,
-// ai0_type...): valor = mA * multiplier + offset. En IGSS los WISE son monitores de cadena de frio
-// (ai0_type = temperature), asi que aparece ai0_temperature en °C junto al ai0_value original.
+// ai0_type...): valor = mA * multiplier + offset (el offset viene con signo, ej. -138.45; catalogo en
+// docs/formulas-4-20ma.md). ai0_type = temperature (cadena de frio) -> ai0_temperature en °C; cualquier
+// otro tipo (water_pressure, water_heater_temperature...) -> ai0_scaled, con la unidad del tag ai0_unit.
 // Verificado contra lecturas reales: 11.13 mA -> -32.6 °C en un ultracongelador (-40..-30 °C).
 func addScaledChannels(readings map[string]interface{}, tags map[string]string) {
 	for k := 0; k < 8; k++ {
@@ -118,6 +119,20 @@ func addScaledChannels(readings map[string]interface{}, tags map[string]string) 
 		}
 		readings[ch+suffix] = math.Round((raw*mult+off)*100) / 100
 	}
+}
+
+// mergeReadings conserva las metricas del uplink anterior que no vienen en el nuevo. Los WISE
+// alternan dos tramas: una con las entradas analogicas (ai*) y otra solo con la digital (di0_*,
+// total_length=145); sin esto, cada trama digital borraba la temperatura/presion del equipo.
+func mergeReadings(prev, next map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(prev)+len(next))
+	for k, v := range prev {
+		out[k] = v
+	}
+	for k, v := range next {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *Source) handleUplink(_ mqtt.Client, msg mqtt.Message) {
@@ -160,6 +175,13 @@ func (s *Source) handleUplink(_ mqtt.Client, msg mqtt.Message) {
 
 	readings := uplink.Object
 	addScaledChannels(readings, uplink.DeviceInfo.Tags)
+
+	s.mu.Lock()
+	prev, hadPrev := s.devices["lorawan:"+devEui]
+	s.mu.Unlock()
+	if hadPrev {
+		readings = mergeReadings(prev.Readings, readings)
+	}
 
 	device := discovery.Device{
 		ExternalID: "lorawan:" + devEui,

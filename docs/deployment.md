@@ -20,6 +20,13 @@ Servicios publicados por defecto:
 
 En el servidor `192.168.70.4`, el puerto `5432` ya estaba ocupado por otro contenedor, por lo que Postgres del proyecto se deja interno en Docker y la API accede por hostname `postgres`.
 
+Postgres usa la imagen `siasa-postgres-timescale:16.15-2.31.0` (`docker/postgres/Dockerfile`). En el
+servidor se carga sin compilar alli: `docker save siasa-postgres-timescale:16.15-2.31.0 | gzip | ssh
+api@192.168.70.4 'gunzip | docker load'` y luego `docker compose up -d --no-build postgres` (mismo
+volumen de datos). Antes de tocar la base: `pg_dump -Fc` a `~/backups/`.
+
+El servidor no es un repositorio git: se despliega copiando los archivos (tar) a `~/siasa-iot-platform`.
+
 ## Variables
 
 API:

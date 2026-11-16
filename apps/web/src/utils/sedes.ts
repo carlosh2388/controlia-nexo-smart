@@ -175,11 +175,11 @@ export function metricsFor(d: SedeDevice): MetricDef[] {
         return cold.map((c) => ({
           key: c.key,
           label: c.name,
-          unit: "°C",
+          unit: c.unit,
           dec: 1,
           limit: c.max ?? undefined,
           limitMin: c.min ?? undefined,
-          limitLabel: c.min != null && c.max != null ? `Rango ${c.min} a ${c.max} °C` : undefined,
+          limitLabel: c.min != null && c.max != null ? `Rango ${c.min} a ${c.max} ${c.unit}` : undefined,
         }));
       }
       const keys = aiKeys(d.readings);
@@ -222,34 +222,106 @@ export function metricsFor(d: SedeDevice): MetricDef[] {
 }
 
 export interface ColdChainChannel {
-  key: string; // ej. "ai0_temperature"
+  key: string; // ej. "ai0_temperature" o "ai0_scaled"
   channel: string; // "AI0"
   name: string; // "Refrigerador Unidades No Liberadas"
   code: string;
-  category: string; // "Refrigerador" | "Ultra congelador"
+  category: string; // "Refrigerador" | "Ultra congelador" | "Calentador"
+  /** Tag aiN_type: "temperature" (cadena de frio), "water_pressure", "water_heater_temperature"... */
+  type: string;
+  unit: string; // tag aiN_unit: "°C", "PSI"
   min: number | null;
   max: number | null;
   value: number | null;
+  /** Sonda desconectada/dañada: corriente pegada a 4 o 20 mA o circuito abierto (el valor convertido no es real). */
+  fault: boolean;
+  /** Escala completa del transmisor segun su formula: valor a 4 mA y a 20 mA (para el dial). */
+  scaleMin: number | null;
+  scaleMax: number | null;
+}
+
+/** Proposito de un WISE (el mismo equipo se usa para cosas distintas, segun el tipo de sus canales). */
+export type WiseGroup = "coldchain" | "pump" | "heating" | "other";
+
+export function wiseGroup(d: SedeDevice): WiseGroup {
+  const types = new Set<string>();
+  for (let k = 0; k < 8; k++) {
+    const t = str(d.attrs[`tag_ai${k}_type`]).toLowerCase();
+    if (t) types.add(t);
+  }
+  if (types.has("water_pressure")) return "pump";
+  if (Array.from(types).some((t) => t.includes("heater") || t.includes("boiler"))) return "heating";
+  if (types.has("temperature")) return "coldchain";
+  // Sin tags por canal: por el area de ChirpStack.
+  const area = str(d.attrs.tag_area).toLowerCase();
+  if (/bombeo/.test(area)) return "pump";
+  if (/calder|calent/.test(area)) return "heating";
+  return "coldchain";
+}
+
+/** Codigo de inventario de un sensor de puerta (tag code / code_inventory de ChirpStack), ej. "HES010". */
+export function doorCode(d: SedeDevice): string {
+  return str(d.attrs.tag_code || d.attrs.tag_code_inventory).trim().toUpperCase();
+}
+
+/** Puertas por codigo de equipo: un refrigerador puede tener 2 sensores (2 puertas) con el mismo codigo. */
+export function doorsByCode(doors: SedeDevice[]): Map<string, SedeDevice[]> {
+  const out = new Map<string, SedeDevice[]>();
+  for (const d of doors) {
+    const code = doorCode(d);
+    if (!code) continue;
+    out.set(code, [...(out.get(code) ?? []), d].sort((a, b) => a.name.localeCompare(b.name, "es", { numeric: true })));
+  }
+  return out;
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  temperature: "Cadena de frío",
+  water_pressure: "Bombeo de agua",
+  water_heater_temperature: "Calderas y calentadores",
+};
+
+/** Titulo de la tarjeta segun el tipo de sus canales (todos los canales de un WISE suelen ser del mismo tipo). */
+export function analogGroupLabel(channels: ColdChainChannel[]): string {
+  const kinds = Array.from(new Set(channels.map((c) => c.type)));
+  return kinds.length === 1 ? TYPE_LABEL[kinds[0]] ?? "Entradas 4-20 mA" : "Entradas 4-20 mA";
 }
 
 /**
- * Canales de cadena de frio de un WISE: el Agente_Go convierte cada entrada 4-20 mA a °C con los
- * tags de ChirpStack (aiN_multiplier/offset) y reenvia nombre, codigo y rango permitido por canal.
+ * Canales convertidos de un WISE: el Agente_Go aplica a cada entrada 4-20 mA la formula de sus tags
+ * de ChirpStack (aiN_multiplier/offset, docs/formulas-4-20ma.md). Cadena de frio llega como
+ * aiN_temperature; bombeo de agua, calentadores y calderas como aiN_scaled con su unidad (aiN_unit).
  */
 export function coldChainChannels(d: SedeDevice): ColdChainChannel[] {
   const out: ColdChainChannel[] = [];
   for (let k = 0; k < 8; k++) {
-    const key = `ai${k}_temperature`;
-    if (!(key in d.readings)) continue;
+    const key = [`ai${k}_temperature`, `ai${k}_scaled`].find((x) => x in d.readings);
+    if (!key) continue;
     const t = (s: string) => str(d.attrs[`tag_ai${k}_${s}`]);
     const min = t("threshold_min") === "" ? null : Number(t("threshold_min"));
     const max = t("threshold_max") === "" ? null : Number(t("threshold_max"));
+    const type = t("type") || (key.endsWith("_temperature") ? "temperature" : "");
+    // Mismo criterio que el agente (io.sensor_fault): 4.00 mA -> -100.4 °C o -36 PSI no son lecturas reales.
+    const mA = num(d.readings, `ai${k}_value`);
+    const fault = (mA != null && (mA <= 4.05 || mA >= 19.95)) || num(d.readings, `ai${k}_open_circuit`) === 1;
+    const mult = Number(t("multiplier"));
+    const off = Number(t("offset"));
+    const hasFormula = t("multiplier") !== "" && Number.isFinite(mult) && mult !== 0 && Number.isFinite(off);
     out.push({
+      fault,
+      scaleMin: hasFormula ? Math.round((4 * mult + off) * 10) / 10 : null,
+      scaleMax: hasFormula ? Math.round((20 * mult + off) * 10) / 10 : null,
       key,
       channel: `AI${k}`,
-      name: t("operative_area") || `Canal AI${k}`,
+      name:
+        t("operative_area") ||
+        t("category") ||
+        (type === "water_pressure" ? "Presión de línea" : type.includes("heater") ? "Temperatura del agua" : TYPE_LABEL[type]) ||
+        `Canal AI${k}`,
       code: t("code"),
       category: t("category"),
+      type,
+      unit: t("unit") || (key.endsWith("_temperature") ? "°C" : ""),
       min: Number.isFinite(min) ? min : null,
       max: Number.isFinite(max) ? max : null,
       value: num(d.readings, key),

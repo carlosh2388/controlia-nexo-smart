@@ -1,0 +1,38 @@
+/* Centro de mando (mockup aprobado "Diseño final"). Todo bajo .cm para no tocar el resto de la web. */
+.cm { --ok: #22c55e; --warn: #f59e0b; --crit: #ef4444; --line: #1f2d47; --panel: #0b1220; --panel2: #0e1626; --muted: #96a6c0; }
+.cm .panel { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.cm .eyebrow { font-size: 11px; letter-spacing: .1em; color: var(--muted); font-weight: 700; text-transform: uppercase; }
+.cm .mono { font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace; }
+
+@keyframes cm-flujo { to { stroke-dashoffset: -24; } }
+@keyframes cm-onda { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(2.6); opacity: 0; } }
+@keyframes cm-latido { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes cm-entrar { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.cm .flujo { stroke-dasharray: 4 8; animation: cm-flujo 1.2s linear infinite; }
+.cm .onda { position: absolute; left: -10px; top: -10px; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--crit); animation: cm-onda 1.6s infinite; }
+.cm .latido { animation: cm-latido 1.6s infinite; }
+.cm .entrar { animation: cm-entrar .3s ease-out; }
+
+.cm .mapa { position: relative; width: 100%; aspect-ratio: 640 / 420; border-radius: 12px; overflow: hidden; border: 1px solid #1a2742; }
+.cm .nodo { position: absolute; width: 0; height: 0; padding: 0; border: 0; background: none; cursor: pointer; }
+.cm .nodo:focus-visible .punto { outline: 2px solid #8ab8ff; outline-offset: 3px; }
+.cm .placa { position: absolute; display: flex; flex-direction: column; align-items: flex-start; padding: 5px 10px; border-radius: 8px; background: rgba(11, 18, 32, .92); white-space: nowrap; text-align: left; }
+.cm .ficha { position: absolute; width: 270px; padding: 12px; border-radius: 12px; background: #0e1626; border: 1px solid #2b3d5f; box-shadow: 0 18px 40px rgba(0, 0, 0, .6); display: flex; flex-direction: column; gap: 7px; pointer-events: none; z-index: 5; }
+
+/* tarjeta de equipo con su frente en 3D (componentes de Piloto Gravix) */
+.cm .eq-art { position: relative; height: 180px; overflow: hidden; background: radial-gradient(circle at 50% 30%, #1c2a47, #0a1222); }
+.cm .eq-art .mini { position: absolute; left: 50%; top: 50%; pointer-events: none; }
+.cm .gx .scene { perspective: 1400px; }
+
+/* ventana del equipo */
+.cm-modal { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 14px; background: rgba(3, 6, 12, .75); backdrop-filter: blur(4px); }
+.cm-modal .caja { width: min(1240px, 100%); max-height: 100%; overflow: auto; border-radius: 16px; background: #0b1220; border: 1px solid #2b3d5f; box-shadow: 0 30px 80px rgba(0, 0, 0, .7); }
+.cm-modal .gx .dstage { height: 520px; border-radius: 0; }
+@media (max-width: 760px) {
+  .cm-modal { padding: 0; }
+  .cm-modal .caja { border-radius: 0; height: 100%; }
+  .cm-modal .gx .dstage { height: 400px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm *, .cm-modal * { animation: none !important; transition: none !important; }
+}

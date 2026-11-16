@@ -1,0 +1,1555 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import InteractiveChart, { type ChartSeries } from "../components/charts/InteractiveChart";
+import type { Access } from "../api/access";
+import { downloadFile } from "../api/access";
+import {
+  useCentroEventos,
+  useCentroHistorial,
+  useCentroVista,
+  type CentroDispositivo,
+  type CentroEvento,
+  type CentroSede,
+  type CentroVista,
+  type Nivel,
+  esInstrumentacion,
+} from "../api/centro";
+import { usePilotDevices, usePilotGaps, usePilotSeries, type PilotDevice } from "../api/pilot";
+import { extractErrorMessage } from "../api/errors";
+import { DeviceBox, DIM, initialScreen, ION_HARM_SCREENS, kindOf, metricRows, POWER_METRIC, pressKey, screenTitle, type DeviceKind, type ScreenState } from "../components/gravix/DeviceArt";
+import { CompareTab, METRIC_LABEL, Stage3D } from "./Gravix";
+import "../components/gravix/gravix.css";
+import "../components/centro/centro.css";
+import { NormasCumplimiento, Prediccion } from "../components/centro/Calidad";
+import { ArmonicosPanel } from "../components/gravix/Armonicos";
+
+/**
+ * Centro de mando (mockup aprobado "Diseño final"): las 10 sedes del IGSS en una sola pantalla.
+ *  - Datos de las sedes: monitoreo central (EBO -> api-SIASA de cada sede), via la API de Nodivo.
+ *  - Escuintla: ademas los equipos del piloto Gravix (lectura directa + historial en TimescaleDB).
+ * Solo lectura: no envia comandos a ningun equipo ni cambia nada en las sedes.
+ */
+
+const ESCUINTLA = "escuintla";
+const GRAVIX_KEY = "igss-escuintla";
+
+const COLOR: Record<Nivel, string> = { ok: "#22c55e", advertencia: "#f59e0b", critico: "#ef4444", sin_respuesta: "#ef4444" };
+const NIVEL_TXT: Record<Nivel, string> = { ok: "Operando", advertencia: "Advertencia", critico: "Crítico", sin_respuesta: "Sin respuesta" };
+const EVENTO_TXT: Record<string, string> = {
+  MEDIDOR_FUERA_DE_LINEA: "Fuera de línea",
+  MEDIDOR_EN_CERO: "Voltaje en cero",
+  MEDIDOR_SIN_CAMBIO: "Sin cambio en sus valores",
+  GENERADOR_EN_MARCHA: "Generador en marcha",
+  DATOS_CONGELADOS: "Datos congelados",
+  LECTURA_ATASCADA: "Lectura atascada",
+  RECONEXIONES_FRECUENTES: "Reconexiones frecuentes",
+  MEDIDOR_VIGILANTES_DESCONECTADOS: "Vigilantes desconectados (comercial / generador)",
+};
+const ESTADO_TXT: Record<string, string> = {
+  ok: "En línea",
+  fuera_de_linea: "Fuera de línea",
+  en_cero: "Voltaje en cero",
+  sin_cambio: "Sin cambio",
+  generador_en_marcha: "Generador en marcha",
+  en_espera_generador_apagado: "En espera",
+};
+const OK_ESTADOS = new Set(["ok", "generador_en_marcha", "en_espera_generador_apagado"]);
+
+const fmt = (v: number | null | undefined, d = 1) => (v == null || !Number.isFinite(v) ? "—" : v.toFixed(d));
+const fechaHora = (s: string | null | undefined) => (s ? new Date(s).toLocaleString("es-GT", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+const hace = (s: string | null | undefined) => {
+  if (!s) return "—";
+  const m = Math.round((Date.now() - new Date(s).getTime()) / 60000);
+  if (m < 1) return "hace segundos";
+  if (m < 60) return `hace ${m} min`;
+  if (m < 1440) return `hace ${Math.floor(m / 60)} h ${m % 60} min`;
+  return fechaHora(s);
+};
+const duracion = (s: number | null) => {
+  if (s == null) return "sigue activa";
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+};
+
+/* ---------------- modelo de equipo (une monitoreo central + Gravix) ---------------- */
+
+interface Equipo {
+  key: string;
+  sedeId: string;
+  sedeNombre: string;
+  nombre: string;
+  area: string | null;
+  inventario: string | null;
+  kind: DeviceKind;
+  ok: boolean;
+  estadoTxt: string;
+  /** Equipo para dibujar (Gravix real o armado con lo del monitoreo central). */
+  art: PilotDevice;
+  central: CentroDispositivo | null;
+  /** Equipo del piloto Gravix (lectura por el AS-P) y su pareja leida directo. */
+  pilot: PilotDevice | null;
+  pilotDirect: PilotDevice | null;
+}
+
+function kindDeCentral(d: CentroDispositivo): DeviceKind {
+  if (d.generador) return "gen";
+  if (d.lectura?.tipo_kw === "potencia" || /ANALIZ|ION/i.test(d.nombre)) return "ion";
+  return "pm";
+}
+
+/** Arma un equipo "dibujable" con lo poco que entrega el monitoreo central (kW, V y A promedio). */
+function artDeCentral(sede: CentroSede, d: CentroDispositivo, kind: DeviceKind): PilotDevice {
+  const l = d.lectura;
+  const fuera = d.estado === "fuera_de_linea";
+  const r: Record<string, unknown> = {};
+  if (!fuera && l) {
+    if (kind === "ion") Object.assign(r, { active_power_total: l.kw, voltage_a_n: l.v_prom, current_a: l.a_prom });
+    if (kind === "pm") Object.assign(r, { demand_total: l.kw, voltage_a_n: l.v_prom, current_a: l.a_prom });
+    if (kind === "gen") Object.assign(r, { gen_kw_total_metering: l.kw });
+  }
+  return {
+    id: `${sede.id}:${d.id}`,
+    name: d.nombre,
+    model: kind === "ion" ? "ION7400" : kind === "pm" ? "PM2130" : "generator",
+    attributes: { category: kind === "gen" ? "generator" : kind === "pm" ? "circuit_meter" : "power_meter", area: d.area, code: d.inventario },
+    externalId: null,
+    state: fuera ? "offline" : "online",
+    readings: r,
+    updatedAt: d.ultimo_cambio,
+    directConnection: null,
+    historySince: null,
+    gaps: { pending: 0, openNow: 0, total: 0, missingMinutes: 0 },
+    completeness: null,
+  };
+}
+
+function useEquipos(vista: CentroVista | undefined, pilot: PilotDevice[], pilotDirect: PilotDevice[]) {
+  return useMemo(() => {
+    const porSede = new Map<string, Equipo[]>();
+    for (const s of vista?.sedes ?? []) {
+      const lista: Equipo[] = [];
+      if (s.id === ESCUINTLA && pilot.length) {
+        // Escuintla: los equipos del piloto Gravix (15) con su estado del monitoreo central por codigo.
+        const usados = new Set<string>();
+        for (const p of pilot) {
+          const k = kindOf(p);
+          const code = String(p.attributes.code ?? "");
+          const c = s.dispositivos.find((d) => !usados.has(d.id) && (d.nombre === p.name || (code && d.inventario === code && (kindDeCentral(d) === "gen") === (k === "gen")))) ?? null;
+          if (c) usados.add(c.id);
+          const direct = pilotDirect.find((x) => x.name === p.name) ?? null;
+          const offline = p.state === "offline" && (!direct || direct.state === "offline");
+          lista.push({
+            key: `${s.id}:${p.id}`,
+            sedeId: s.id,
+            sedeNombre: s.nombre,
+            nombre: p.name,
+            area: String(p.attributes.area ?? c?.area ?? "") || null,
+            inventario: code || c?.inventario || null,
+            kind: k,
+            ok: !offline,
+            estadoTxt: offline ? "Fuera de línea" : k === "gen" ? "En espera" : "En línea",
+            art: direct && direct.updatedAt ? direct : p,
+            central: c,
+            pilot: p,
+            pilotDirect: direct,
+          });
+        }
+        // Lo que el monitoreo central tenga y Gravix no.
+        for (const d of s.dispositivos.filter((x) => !usados.has(x.id))) lista.push(equipoCentral(s, d));
+      } else {
+        for (const d of s.dispositivos) lista.push(equipoCentral(s, d));
+      }
+      porSede.set(s.id, lista);
+    }
+    return porSede;
+  }, [vista, pilot, pilotDirect]);
+}
+
+function equipoCentral(s: CentroSede, d: CentroDispositivo): Equipo {
+  const kind = kindDeCentral(d);
+  const ok = !s.sin_respuesta && OK_ESTADOS.has(d.estado);
+  return {
+    key: `${s.id}:${d.id}`,
+    sedeId: s.id,
+    sedeNombre: s.nombre,
+    nombre: d.nombre,
+    area: d.area,
+    inventario: d.inventario,
+    kind,
+    ok,
+    estadoTxt: s.sin_respuesta ? "Sin datos (sede sin respuesta)" : ESTADO_TXT[d.estado] ?? d.estado,
+    art: artDeCentral(s, d, kind),
+    central: d,
+    pilot: null,
+    pilotDirect: null,
+  };
+}
+
+/* ============================================================ */
+
+export default function CentroMando({ access }: { access: Access }) {
+  const vista = useCentroVista();
+  const conEscuintla = access.sites.length === 0 || access.sites.includes(ESCUINTLA);
+  const pilot = usePilotDevices(conEscuintla ? GRAVIX_KEY : "__ninguna__");
+  const pilotDir = usePilotDevices(conEscuintla ? `${GRAVIX_KEY}-directo` : "__ninguna__");
+  const equipos = useEquipos(vista.data, pilot.data?.devices ?? [], pilotDir.data?.devices ?? []);
+  const [sedeId, setSedeId] = useState<string | null>(null);
+  const [sobre, setSobre] = useState<string | null>(null);
+  const [abierto, setAbierto] = useState<Equipo | null>(null);
+  const [filtro, setFiltro] = useState<"todos" | DeviceKind>("todos");
+  const [arbolMovil, setArbolMovil] = useState(false);
+  /** Sede cuyos equipos estan desplegados en el arbol (clic en la misma sede = abrir / cerrar). */
+  const [desplegada, setDesplegada] = useState<string | null>(null);
+  const [vistaRed, setVistaRed] = useState<"mapa" | "incidentes" | "ranking" | "normas" | "prediccion">("mapa");
+  const [sala, setSala] = useState(false);
+
+  if (vista.isLoading) return <div className="cm py-16 text-center text-slate-400">Cargando el centro de mando…</div>;
+  if (vista.isError || !vista.data)
+    return (
+      <div className="cm panel mx-auto max-w-2xl p-6 text-center">
+        <p className="font-semibold text-slate-100">No se pudo cargar el centro de mando</p>
+        <p className="mt-1 text-sm text-slate-400">{extractErrorMessage(vista.error)}</p>
+      </div>
+    );
+
+  const v = vista.data;
+  const sede = v.sedes.find((s) => s.id === sedeId) ?? null;
+  const abrirSede = (id: string) => {
+    setSedeId(id);
+    setDesplegada(id);
+    setFiltro("todos");
+    setSobre(null);
+  };
+  /** Clic en una sede del arbol: la abre y despliega; si ya esta abierta, despliega / pliega sus equipos. */
+  const clicSedeArbol = (id: string) => {
+    if (sedeId === id) setDesplegada((d) => (d === id ? null : id));
+    else abrirSede(id);
+  };
+  const abrirEquipo = (sedeIdEq: string, ref: string | null) => {
+    const lista = equipos.get(sedeIdEq) ?? [];
+    const e = ref ? lista.find((x) => x.inventario === ref || x.nombre === ref || x.central?.nombre === ref) : null;
+    abrirSede(sedeIdEq);
+    if (e) setAbierto(e);
+  };
+
+  return (
+    <div className="cm flex flex-col gap-4">
+      <div className="grid gap-4 lg:grid-cols-[250px_minmax(0,1fr)]">
+        {/* ---------- arbol del sistema ---------- */}
+        <aside aria-label="Árbol del sistema" className="panel flex flex-col gap-1 p-3 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+          <div className="flex items-center justify-between px-1 pb-1">
+            <span className="eyebrow">Árbol del sistema</span>
+            <span className="text-xs text-slate-500">{v.sedes.length} sedes</span>
+          </div>
+          <button type="button" onClick={() => setArbolMovil((x) => !x)} aria-expanded={arbolMovil} className="flex min-h-[44px] items-center justify-between rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm font-semibold text-slate-100 lg:hidden">
+            {arbolMovil ? "Ocultar sedes y equipos" : "Ver sedes y equipos"} <span>{arbolMovil ? "▴" : "▾"}</span>
+          </button>
+          <div className={`${arbolMovil ? "flex" : "hidden"} flex-col gap-1 lg:flex`}>
+            <button type="button" onClick={() => setSedeId(null)} className={`flex min-h-[38px] items-center gap-2 rounded-lg px-2.5 text-left text-sm font-semibold ${!sede ? "bg-slate-800 text-white" : "text-slate-200 hover:bg-slate-800/60"}`}>
+              <span aria-hidden="true">◎</span> Red IGSS · mapa
+            </button>
+            {v.sedes.map((s) => {
+              const lista = equipos.get(s.id) ?? [];
+              const en = lista.filter((e) => e.ok).length;
+              const elegida = sede?.id === s.id;
+              const abiertoS = elegida && desplegada === s.id;
+              return (
+                <div key={s.id} className="flex flex-col">
+                  <button type="button" onClick={() => clicSedeArbol(s.id)} aria-expanded={abiertoS} title={abiertoS ? "Clic para ocultar sus equipos" : "Clic para ver sus equipos"} className={`flex min-h-[38px] items-center gap-2 rounded-lg pl-5 pr-2.5 text-left text-sm ${elegida ? "bg-slate-800" : "hover:bg-slate-800/60"}`}>
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: COLOR[s.nivel], boxShadow: `0 0 8px ${COLOR[s.nivel]}` }} />
+                    <span className="flex-1 font-semibold text-slate-100">{s.nombre}</span>
+                    {s.id === ESCUINTLA && pilot.data?.devices.length ? <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-emerald-300">GRAVIX</span> : null}
+                    <span className={`mono text-[11px] ${en < lista.length ? "text-rose-300" : "text-slate-400"}`}>{s.sin_respuesta ? "—" : `${en}/${lista.length}`}</span>
+                  </button>
+                  {abiertoS && (
+                    <div className="ml-6 flex flex-col border-l border-dashed border-slate-700 pb-1.5 pl-3">
+                      {(["ion", "pm", "gen"] as const).map((k) => {
+                        const items = lista.filter((e) => e.kind === k);
+                        if (!items.length) return null;
+                        return (
+                          <div key={k} className="flex flex-col">
+                            <span className="px-1.5 pb-0.5 pt-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">{k === "ion" ? "Analizadores ION7400" : k === "pm" ? "Medidores PM2130" : "Generadores"}</span>
+                            {items.map((e) => (
+                              <button key={e.key} type="button" onClick={() => setAbierto(e)} className={`flex min-h-[32px] items-center gap-2 rounded-md px-2 text-left text-[13px] text-slate-300 hover:bg-slate-800/70 ${abierto?.key === e.key ? "bg-slate-800" : ""}`}>
+                                <span className="h-[7px] w-[7px] shrink-0 rounded-sm" style={{ background: e.ok ? COLOR.ok : COLOR.critico }} />
+                                <span className="flex-1 truncate">{e.nombre}</span>
+                                <span className={`text-[9px] font-bold ${e.pilotDirect ? "text-emerald-300" : "text-slate-500"}`}>{e.pilotDirect ? "DIR" : "EBO"}</span>
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <div className="mt-2 flex flex-col gap-1 border-t border-slate-800 px-1 pt-3 text-[11px] text-slate-500">
+              <span><b className="rounded bg-emerald-950 px-1 text-[9px] text-emerald-300">DIR</b> Leído directo del equipo (Gravix)</span>
+              <span><b className="rounded bg-slate-800 px-1 text-[9px] text-slate-300">EBO</b> Vía EBO AS-P → api-SIASA</span>
+            </div>
+          </div>
+        </aside>
+
+        {/* ---------- area de trabajo ---------- */}
+        <div className="flex min-w-0 flex-col gap-4">
+          <nav aria-label="Ubicación" className="flex flex-wrap items-center gap-1 text-sm">
+            <button type="button" onClick={() => setSedeId(null)} className="rounded px-2 py-1 text-sky-300 hover:bg-slate-800">Red IGSS</button>
+            {sede && (
+              <>
+                <span className="text-slate-600">/</span>
+                <span className="px-2 font-semibold text-slate-100">{sede.nombre}</span>
+              </>
+            )}
+            <button type="button" onClick={() => setSala(true)} title="Pantalla completa para un monitor fijo: recorre las sedes con problema" className="ml-auto flex min-h-[30px] items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900 px-3 text-xs font-semibold text-slate-200 hover:border-sky-600">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+              Modo sala de control
+            </button>
+            <span className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${v.atrasado ? "bg-amber-950 text-amber-200" : "bg-emerald-950 text-emerald-300"}`}>
+              <span className={`h-2 w-2 rounded-full ${v.atrasado ? "bg-amber-400" : "latido bg-emerald-400"}`} />
+              {v.atrasado ? `Desactualizado · ${hace(v.recibido)}` : `En vivo · ${hace(v.recibido)}`}
+            </span>
+          </nav>
+
+          <Banda vista={v} onIr={abrirEquipo} />
+
+          {!sede ? (
+            <>
+              <div role="tablist" aria-label="Vista de la red" className="flex w-fit flex-wrap gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1">
+                {([["mapa", "Mapa en vivo"], ["incidentes", "Línea de tiempo de incidentes"], ["ranking", "Ranking de sedes"], ["normas", "Normas y cumplimiento"], ["prediccion", "Predicción"]] as const).map(([k, t]) => (
+                  <button key={k} type="button" role="tab" aria-selected={vistaRed === k} onClick={() => setVistaRed(k)} className={`min-h-[36px] rounded-lg px-3.5 text-[13px] font-bold ${vistaRed === k ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>{t}</button>
+                ))}
+              </div>
+              {vistaRed === "mapa" && (
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                  <Mapa vista={v} equipos={equipos} sobre={sobre} setSobre={setSobre} onAbrir={abrirSede} />
+                  <div className="flex flex-col gap-4">
+                    <Disponibilidad vista={v} gravix={pilotDir.data?.devices.filter((d) => d.updatedAt).length ?? 0} />
+                    <Actividad vista={v} onIr={(id) => abrirSede(id)} />
+                  </div>
+                </div>
+              )}
+              {vistaRed === "incidentes" && <Incidentes vista={v} onIr={abrirSede} />}
+              {vistaRed === "ranking" && <Ranking vista={v} equipos={equipos} onIr={abrirSede} />}
+              {vistaRed === "normas" && <NormasCumplimiento />}
+              {vistaRed === "prediccion" && <Prediccion />}
+            </>
+          ) : (
+            <SedeVista sede={sede} equipos={equipos.get(sede.id) ?? []} filtro={filtro} setFiltro={setFiltro} onAbrir={setAbierto} />
+          )}
+        </div>
+      </div>
+
+      <PanelAlarmas vista={v} onIr={abrirEquipo} />
+
+      {abierto && <VentanaEquipo equipo={abierto} equiposSede={equipos.get(abierto.sedeId) ?? []} access={access} onCerrar={() => setAbierto(null)} />}
+      {sala && <SalaControl vista={v} equipos={equipos} onSalir={() => setSala(false)} />}
+    </div>
+  );
+}
+
+/* ---------------- banda de estado ---------------- */
+function Banda({ vista, onIr }: { vista: CentroVista; onIr: (sede: string, ref: string | null) => void }) {
+  const t = vista.totales;
+  const con = vista.sedes.filter((s) => s.nivel !== "ok");
+  const peor: Nivel = con.find((s) => s.nivel === "critico" || s.nivel === "sin_respuesta")?.nivel ?? con[0]?.nivel ?? "ok";
+  const items = con.flatMap((s) =>
+    s.sin_respuesta
+      ? [{ k: `${s.id}-sr`, sede: s.id, ref: null as string | null, t: `${s.nombre} no responde`, sub: s.error ?? "sin datos", nivel: "sin_respuesta" as Nivel }]
+      : s.abiertos.length
+        ? s.abiertos.map((a) => ({ k: a.codigo, sede: s.id, ref: a.inventario ?? a.dispositivo, t: `${s.nombre} · ${a.inventario ?? a.dispositivo ?? ""} ${a.titulo.toLowerCase()}`, sub: hace(a.desde), nivel: (a.severidad === "critico" ? "critico" : "advertencia") as Nivel }))
+        : [{ k: `${s.id}-n`, sede: s.id, ref: null, t: `${s.nombre} · ${NIVEL_TXT[s.nivel].toLowerCase()}`, sub: s.estado?.motivo ?? "", nivel: s.nivel }],
+  );
+  const bg = peor === "ok" ? "border-emerald-900 bg-emerald-950/40" : peor === "advertencia" ? "border-amber-900 bg-amber-950/30" : "border-rose-900 bg-rose-950/30";
+  return (
+    <section aria-label="Estado general" className={`entrar flex flex-wrap items-center gap-x-5 gap-y-3 rounded-2xl border px-5 py-4 ${bg}`}>
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-lg font-bold text-slate-950" style={{ background: COLOR[peor] }} aria-hidden="true">
+        {peor === "ok" ? "✓" : "!"}
+      </span>
+      <div className="min-w-[260px] flex-1">
+        <strong className="block text-[17px] text-slate-50">{con.length ? `${con.length} ${con.length === 1 ? "sede requiere" : "sedes requieren"} atención` : "Todo en orden"}</strong>
+        <span className="text-sm text-slate-300">
+          {t.sedes_responden} de {t.sedes} sedes respondiendo · {t.medidores_ok} de {t.medidores} medidores en línea · {t.criticos ? `${t.criticos} eventos críticos abiertos` : "sin eventos críticos"}
+        </span>
+      </div>
+      {items.slice(0, 3).map((i) => (
+        <button key={i.k} type="button" onClick={() => onIr(i.sede, i.ref)} className="flex min-h-[44px] flex-col justify-center rounded-lg border px-3 py-1.5 text-left" style={{ borderColor: `${COLOR[i.nivel]}66`, background: "#0b1220" }}>
+          <strong className="text-[13px] text-slate-100">{i.t}</strong>
+          <span className="text-[11px] text-slate-400">{i.sub}</span>
+        </button>
+      ))}
+      {items.length > 3 && <span className="text-xs text-slate-400">y {items.length - 3} más</span>}
+    </section>
+  );
+}
+
+/* ---------------- mapa (misma proyeccion que el monitoreo central) ---------------- */
+const W = 640, H = 420, LON0 = -91.95, LON1 = -90.25, LAT0 = 13.8, LAT1 = 14.8;
+const px = (lon: number) => ((lon - LON0) / (LON1 - LON0)) * W;
+const py = (lat: number) => ((LAT1 - lat) / (LAT1 - LAT0)) * H;
+const COSTA: [number, number][] = [[-91.95, 14.33], [-91.82, 14.25], [-91.7, 14.18], [-91.58, 14.11], [-91.45, 14.05], [-91.3, 13.98], [-91.15, 13.93], [-90.98, 13.92], [-90.82, 13.92], [-90.65, 13.9], [-90.48, 13.89], [-90.25, 13.82]];
+const costaD = COSTA.map(([lo, la], i) => `${i ? "L" : "M"}${px(lo).toFixed(1)} ${py(la).toFixed(1)}`).join(" ");
+const tierraD = `M0 0 L${W} 0 L${W} ${py(13.82).toFixed(1)} ${COSTA.slice().reverse().map(([lo, la]) => `L${px(lo).toFixed(1)} ${py(la).toFixed(1)}`).join(" ")} Z`;
+const CENTRAL = { x: px(-90.42), y: py(14.7) };
+const ETQ: Record<string, [number, number]> = { gineco: [16, -2], villanueva: [16, 2], amatitlan: [-16, -6], palin: [16, 10], escuintla: [16, 16], santalucia: [0, 32], gomera: [16, 0], tiquisate: [0, 30], mazatenango: [0, -30], retalhuleu: [0, 30] };
+
+interface Caja { x: number; y: number; w: number; h: number }
+const COMPLETA: Caja = { x: 0, y: 0, w: W, h: H };
+const ZOOM_MAX = 5, PASO = 1.35;
+function ajustar(c: Caja): Caja {
+  const w = Math.min(W, Math.max(W / ZOOM_MAX, c.w));
+  const h = (w / W) * H;
+  return { w, h, x: Math.min(W - w, Math.max(0, c.x)), y: Math.min(H - h, Math.max(0, c.y)) };
+}
+
+function Mapa({ vista, equipos, sobre, setSobre, onAbrir }: { vista: CentroVista; equipos: Map<string, Equipo[]>; sobre: string | null; setSobre: (id: string | null) => void; onAbrir: (id: string) => void }) {
+  const [vb, setVb] = useState<Caja>(COMPLETA);
+  const [ampliado, setAmpliado] = useState(false);
+  const cajaRef = useRef<HTMLDivElement>(null);
+  const arrastre = useRef<{ x: number; y: number; vb: Caja; movio: boolean } | null>(null);
+  const zoom = W / vb.w;
+  const sedes = vista.sedes.filter((s) => s.lat != null && s.lon != null);
+
+  /** punto del mapa bajo el cursor */
+  const aMapa = (cx: number, cy: number) => {
+    const r = cajaRef.current?.getBoundingClientRect();
+    if (!r) return { x: vb.x + vb.w / 2, y: vb.y + vb.h / 2 };
+    return { x: vb.x + ((cx - r.left) / r.width) * vb.w, y: vb.y + ((cy - r.top) / r.height) * vb.h };
+  };
+  const acercar = (f: number, centro?: { x: number; y: number }) =>
+    setVb((c) => {
+      const cx = centro?.x ?? c.x + c.w / 2, cy = centro?.y ?? c.y + c.h / 2;
+      const w = c.w / f, h = c.h / f;
+      return ajustar({ w, h, x: cx - ((cx - c.x) / c.w) * w, y: cy - ((cy - c.y) / c.h) * h });
+    });
+
+  // rueda del mouse: acerca hacia el cursor (listener no pasivo para que la pagina no se desplace)
+  useEffect(() => {
+    const el = cajaRef.current;
+    if (!el) return;
+    const rueda = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      setVb((c) => {
+        const f = e.deltaY < 0 ? PASO : 1 / PASO;
+        const cx = c.x + ((e.clientX - r.left) / r.width) * c.w, cy = c.y + ((e.clientY - r.top) / r.height) * c.h;
+        const w = c.w / f, h = c.h / f;
+        return ajustar({ w, h, x: cx - ((cx - c.x) / c.w) * w, y: cy - ((cy - c.y) / c.h) * h });
+      });
+    };
+    el.addEventListener("wheel", rueda, { passive: false });
+    return () => el.removeEventListener("wheel", rueda);
+  }, [ampliado]);
+
+  // Esc cierra la vista ampliada
+  useEffect(() => {
+    if (!ampliado) return;
+    const k = (e: KeyboardEvent) => e.key === "Escape" && setAmpliado(false);
+    document.addEventListener("keydown", k);
+    document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", k); document.body.style.overflow = ""; };
+  }, [ampliado]);
+
+  const onDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    arrastre.current = { x: e.clientX, y: e.clientY, vb, movio: false };
+  };
+  const onMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const a = arrastre.current, el = cajaRef.current;
+    if (!a || !el) return;
+    const dx = e.clientX - a.x, dy = e.clientY - a.y;
+    if (!a.movio && Math.hypot(dx, dy) < 4) return;
+    if (!a.movio) { a.movio = true; el.setPointerCapture(e.pointerId); }
+    const r = el.getBoundingClientRect();
+    setVb(ajustar({ ...a.vb, x: a.vb.x - (dx / r.width) * a.vb.w, y: a.vb.y - (dy / r.height) * a.vb.h }));
+  };
+  const onUp = () => { arrastre.current = null; };
+
+  const P = (x: number, y: number) => ({ left: `${((x - vb.x) / vb.w) * 100}%`, top: `${((y - vb.y) / vb.h) * 100}%` });
+  const lineas = (n: (s: CentroSede) => boolean) =>
+    sedes.filter(n).map((s) => {
+      const x = px(s.lon!), y = py(s.lat!);
+      return `M${x.toFixed(1)} ${y.toFixed(1)} Q${((x + CENTRAL.x) / 2).toFixed(1)} ${(Math.min(y, CENTRAL.y) - 30).toFixed(1)} ${(CENTRAL.x - 14).toFixed(1)} ${(CENTRAL.y + 4).toFixed(1)}`;
+    }).join(" ");
+  const f = sedes.find((s) => s.id === sobre);
+  const btn = "grid h-8 min-w-8 place-items-center rounded-md border border-slate-700 bg-slate-900 px-2 text-sm font-bold text-slate-200 hover:border-sky-600 disabled:opacity-40";
+
+  const mapa = (
+    <section aria-label="Sedes en el mapa" className={`panel flex flex-col gap-2 p-3 ${ampliado ? "fixed inset-3 z-50 shadow-2xl sm:inset-6" : ""}`} {...(ampliado ? { role: "dialog", "aria-modal": true } : {})}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="eyebrow">Sedes en el mapa</span>
+        <div className="flex items-center gap-1.5">
+          <button type="button" className={btn} onClick={() => acercar(PASO)} disabled={zoom >= ZOOM_MAX - 0.01} aria-label="Acercar" title="Acercar">+</button>
+          <button type="button" className={btn} onClick={() => acercar(1 / PASO)} disabled={zoom <= 1.01} aria-label="Alejar" title="Alejar">−</button>
+          <button type="button" className={btn} onClick={() => setVb(COMPLETA)} disabled={zoom <= 1.01} aria-label="Ver el mapa completo" title="Ver el mapa completo">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
+          </button>
+          <button type="button" className={`${btn} gap-1.5 ${ampliado ? "border-sky-600 bg-sky-950" : ""}`} onClick={() => setAmpliado((a) => !a)} aria-label={ampliado ? "Cerrar el mapa ampliado" : "Ampliar el mapa"} style={{ display: "flex" }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">{ampliado ? <path d="M6 6l12 12M18 6L6 18" /> : <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />}</svg>
+            {ampliado ? "Cerrar" : "Ampliar"}
+          </button>
+        </div>
+      </div>
+      <div
+        ref={cajaRef}
+        className="mapa"
+        style={ampliado ? { width: "min(100%, calc((100vh - 9.5rem) * 1.5238))", margin: "0 auto" } : undefined}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onUp}
+        onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest("button")) acercar(PASO * PASO, aMapa(e.clientX, e.clientY)); }}
+      >
+        <svg width="100%" height="100%" viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`} preserveAspectRatio="none" aria-hidden="true" style={{ position: "absolute", inset: 0, cursor: arrastre.current?.movio ? "grabbing" : "grab" }}>
+          <defs>
+            <linearGradient id="cmMar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#0B2540" /><stop offset="1" stopColor="#06182B" /></linearGradient>
+            <radialGradient id="cmTierra" cx="70%" cy="10%" r="90%"><stop offset="0" stopColor="#15213A" /><stop offset="1" stopColor="#0E1627" /></radialGradient>
+            <pattern id="cmRej" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#1A2742" strokeWidth="1" /></pattern>
+          </defs>
+          <rect width={W} height={H} fill="url(#cmMar)" />
+          <path d={tierraD} fill="url(#cmTierra)" />
+          <path d={tierraD} fill="url(#cmRej)" opacity=".55" />
+          <path d={costaD} fill="none" stroke="#2f6fb5" strokeWidth="2.2" vectorEffect="non-scaling-stroke" />
+          <path d={costaD} fill="none" stroke="#2f6fb5" strokeWidth="1" strokeDasharray="3 5" opacity=".6" transform="translate(0 7)" vectorEffect="non-scaling-stroke" />
+          <text x={px(-91.5)} y={H - 16} fill="#2f6fb5" fontSize="11" letterSpacing="5" fontFamily="monospace">OCÉANO PACÍFICO</text>
+          {[["Volcán de Fuego", -90.88, 14.47], ["Volcán de Agua", -90.74, 14.47]].map(([n, lo, la]) => (
+            <path key={n as string} d={`M${px(lo as number) - 7} ${py(la as number) + 5} L${px(lo as number)} ${py(la as number) - 6} L${px(lo as number) + 7} ${py(la as number) + 5} Z`} fill="#22324f" stroke="#3a4d70"><title>{n as string}</title></path>
+          ))}
+          <path className="flujo" d={lineas((s) => s.nivel === "ok")} fill="none" stroke="#22c55e" strokeWidth="1.4" opacity=".75" vectorEffect="non-scaling-stroke" />
+          <path className="flujo" d={lineas((s) => s.nivel === "advertencia")} fill="none" stroke="#f59e0b" strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+          <path className="flujo" d={lineas((s) => s.nivel === "critico")} fill="none" stroke="#ef4444" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
+          <path d={lineas((s) => s.nivel === "sin_respuesta")} fill="none" stroke="#ef4444" strokeWidth="1.4" strokeDasharray="2 6" opacity=".6" vectorEffect="non-scaling-stroke" />
+        </svg>
+        <div className="pointer-events-none absolute flex items-center gap-2" style={{ ...P(CENTRAL.x - 18, CENTRAL.y), transform: "translate(-100%, -50%)" }}>
+          <span className="flex flex-col items-end"><strong className="text-[13px] text-slate-100">Monitoreo central</strong><span className="mono text-[10px] text-slate-400">Ciudad de Guatemala</span></span>
+          <span className="grid h-[26px] w-[26px] place-items-center rounded-md bg-blue-500 shadow-[0_0_14px_rgba(59,130,246,.6)]"><span className="h-2.5 w-2.5 rounded-sm border-2 border-white" /></span>
+        </div>
+        {sedes.map((s) => {
+          const x = px(s.lon!), y = py(s.lat!);
+          const [dx, dy] = ETQ[s.id] ?? [16, 0];
+          const lista = equipos.get(s.id) ?? [];
+          const malos = lista.filter((e) => !e.ok);
+          const alarma = s.nivel === "critico" || s.nivel === "sin_respuesta";
+          const nAl = s.abiertos.length;
+          const sub = s.sin_respuesta ? "sin respuesta" : malos.length === 1 ? `${malos[0].inventario ?? malos[0].nombre} ${malos[0].estadoTxt.toLowerCase()}` : malos.length ? `${malos.length} equipos con falla` : `${lista.length}/${lista.length} en línea${nAl ? ` · ${nAl} ${nAl === 1 ? "alerta" : "alertas"}` : ""}`;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              className="nodo"
+              style={P(x, y)}
+              onClick={() => { setAmpliado(false); onAbrir(s.id); }}
+              onMouseEnter={() => setSobre(s.id)}
+              onMouseLeave={() => setSobre(null)}
+              onFocus={() => setSobre(s.id)}
+              onBlur={() => setSobre(null)}
+              aria-label={`${s.nombre}: ${NIVEL_TXT[s.nivel]}, ${sub}. Abrir sus equipos`}
+            >
+              <span className="absolute -left-[26px] -top-[26px] h-[52px] w-[52px] rounded-full" style={{ background: `radial-gradient(circle, ${COLOR[s.nivel]}88, transparent 70%)` }} />
+              {alarma && <span className="onda" />}
+              <span className="punto absolute -left-[9px] -top-[9px] grid h-[18px] w-[18px] place-items-center rounded-full" style={{ background: COLOR[s.nivel], boxShadow: sobre === s.id ? "0 0 0 3px #fff" : undefined }}>
+                <span className="h-1.5 w-1.5 rounded-full bg-[#052e16]" />
+              </span>
+              <span className="placa" style={{ left: dx, top: dy - 17, transform: dx < 0 ? "translateX(-100%)" : dx === 0 ? "translateX(-50%)" : undefined, border: `1px solid ${alarma ? "#ef4444" : s.nivel === "advertencia" ? "#f59e0b" : "#1f6b3d"}` }}>
+                <strong className="text-[13px] text-slate-100">{s.nombre}</strong>
+                <span className={`mono hidden text-[11px] sm:block ${alarma ? "text-rose-300" : s.nivel === "advertencia" ? "text-amber-200" : "text-emerald-200"}`}>{sub}{s.id === ESCUINTLA ? " · directo" : ""}</span>
+              </span>
+            </button>
+          );
+        })}
+        {f && (
+          <div role="tooltip" className="ficha entrar" style={{ ...P(px(f.lon!), py(f.lat!)), transform: (py(f.lat!) - vb.y) / vb.h < 0.45 ? "translate(-50%, 24px)" : "translate(-50%, calc(-100% - 24px))" }}>
+            <div className="flex items-center gap-2">
+              <strong className="flex-1 text-[15px] text-slate-50">{f.nombre}</strong>
+              <span className="rounded-full px-2 py-0.5 text-[11px] font-bold" style={{ background: `${COLOR[f.nivel]}22`, color: COLOR[f.nivel] }}>{NIVEL_TXT[f.nivel]}</span>
+            </div>
+            {f.sin_respuesta && <div className="rounded-lg border border-rose-900 bg-rose-950/60 p-2 text-xs"><b>La sede no responde</b><br />{f.error ?? "sin datos"}</div>}
+            {(() => {
+              const caidos = (equipos.get(f.id) ?? []).filter((e) => !e.ok);
+              const alertas = [...f.abiertos].sort((a, b) => (a.severidad === b.severidad ? b.desde.localeCompare(a.desde) : a.severidad === "critico" ? -1 : 1));
+              const total = caidos.length + alertas.length;
+              const max = 5;
+              const mostrarCaidos = caidos.slice(0, max);
+              const mostrarAlertas = alertas.slice(0, Math.max(0, max - mostrarCaidos.length));
+              return (
+                <>
+                  {total > 0 && <span className="eyebrow">{total === 1 ? "1 alerta activa" : `${total} alertas activas`}</span>}
+                  {mostrarCaidos.map((e) => (
+                    <div key={e.key} className="rounded-lg border border-rose-900 bg-rose-950/60 p-2 text-xs"><b>{e.inventario ?? e.nombre} · {e.estadoTxt}</b><br /><span className="text-rose-200/80">{e.nombre}{e.area ? ` · ${e.area}` : ""}</span></div>
+                  ))}
+                  {mostrarAlertas.map((a) => {
+                    const crit = a.severidad === "critico";
+                    const eq = (equipos.get(f.id) ?? []).find((e) => e.inventario && e.inventario === a.inventario);
+                    return (
+                      <div key={a.codigo} className={`rounded-lg border p-2 text-xs ${crit ? "border-rose-900 bg-rose-950/60" : "border-amber-900 bg-amber-950/50"}`}>
+                        <b>{a.inventario ?? a.dispositivo ?? f.nombre} · {EVENTO_TXT[a.evento] ?? a.titulo}</b>
+                        <br />
+                        <span className={crit ? "text-rose-200/80" : "text-amber-200/80"}>
+                          {eq ? `${eq.nombre}${eq.area ? ` · ${eq.area}` : ""} · ` : a.dispositivo ? `${a.dispositivo} · ` : ""}
+                          {crit ? "Crítica" : esInstrumentacion(a.evento, a.titulo) ? "Advertencia de instrumentación" : "Advertencia"} · {hace(a.desde)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {total > max && <span className="text-[11px] text-slate-400">y {total - max} más · clic para verlas todas</span>}
+                </>
+              );
+            })()}
+            <div className="flex justify-between text-xs"><span className="text-slate-400">Equipos en línea</span><b className="text-slate-100">{(equipos.get(f.id) ?? []).filter((e) => e.ok).length}/{(equipos.get(f.id) ?? []).length}</b></div>
+            <div className="flex justify-between text-xs"><span className="text-slate-400">Origen del dato</span><b className={f.id === ESCUINTLA ? "text-emerald-300" : "text-slate-200"}>{f.id === ESCUINTLA ? "Directo (Gravix) + EBO" : "EBO → api-SIASA"}</b></div>
+            <div className="flex justify-between text-xs"><span className="text-slate-400">Respuesta</span><b className="text-slate-100">{f.latencia_ms != null ? `${f.latencia_ms} ms` : "—"}</b></div>
+            <span className="text-[11px] text-sky-300">Clic en el punto para ver sus equipos</span>
+          </div>
+        )}
+        <span className="mono pointer-events-none absolute bottom-2 left-3 rounded bg-slate-950/70 px-1.5 py-0.5 text-[10px] text-slate-400">
+          {zoom > 1.01 ? `${zoom.toFixed(1)}× · arrastre para moverse` : "Rueda o +/− para acercar · arrastrar para mover · doble clic acerca"}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-4 text-[11px] text-slate-400">
+        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-green-500" />Operando</span>
+        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-500" />Advertencia (incluye vigilantes desconectados)</span>
+        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-500" />Alarma: medidor fuera de línea, voltaje en cero o sede sin respuesta</span>
+        <span>- - - Línea de datos con el monitoreo central</span>
+      </div>
+    </section>
+  );
+  return (
+    <>
+      {ampliado && <div className="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm" onClick={() => setAmpliado(false)} aria-hidden="true" />}
+      {ampliado && <div className="panel aspect-[640/420]" aria-hidden="true" />}
+      {mapa}
+    </>
+  );
+}
+
+function Disponibilidad({ vista, gravix }: { vista: CentroVista; gravix: number }) {
+  const t = vista.totales;
+  const pct = t.medidores ? Math.round((t.medidores_ok / t.medidores) * 100) : 0;
+  const c = 2 * Math.PI * 46;
+  const color = pct >= 98 ? "#22c55e" : pct >= 90 ? "#f59e0b" : "#ef4444";
+  return (
+    <section aria-label="Disponibilidad" className="panel flex flex-wrap items-center gap-4 p-4">
+      <svg width="104" height="104" viewBox="0 0 112 112" role="img" aria-label={`${pct} por ciento de medidores en línea`}>
+        <circle cx="56" cy="56" r="46" fill="none" stroke="#1C2740" strokeWidth="12" />
+        <circle cx="56" cy="56" r="46" fill="none" stroke={color} strokeWidth="12" strokeLinecap="round" strokeDasharray={`${(pct / 100) * c} ${c}`} transform="rotate(-90 56 56)" />
+        <text x="56" y="58" textAnchor="middle" fill="#e8eef8" fontSize="22" fontWeight="700" fontFamily="monospace">{pct}%</text>
+        <text x="56" y="75" textAnchor="middle" fill="#96a6c0" fontSize="10">{t.medidores_ok}/{t.medidores} en línea</text>
+      </svg>
+      <div className="grid flex-1 grid-cols-2 gap-3">
+        <div><b className="mono block text-lg text-slate-100">{t.sedes_responden}/{t.sedes}</b><small className="text-slate-400">sedes respondiendo</small></div>
+        <div><b className={`mono block text-lg ${t.medidores_fuera ? "text-rose-300" : "text-slate-100"}`}>{t.medidores_fuera}</b><small className="text-slate-400">fuera de línea</small></div>
+        <div><b className="mono block text-lg text-emerald-300">{gravix}</b><small className="text-slate-400">leídos directo (Gravix)</small></div>
+        <div><b className={`mono block text-lg ${t.reconexiones > 10 ? "text-amber-300" : "text-slate-100"}`}>{t.reconexiones}</b><small className="text-slate-400">reconexiones (1 h)</small></div>
+      </div>
+    </section>
+  );
+}
+
+function Actividad({ vista, onIr }: { vista: CentroVista; onIr: (sede: string) => void }) {
+  const col: Record<string, string> = { critico: "#ef4444", sin_respuesta: "#ef4444", advertencia: "#f59e0b", info: "#8ab8ff", ok: "#22c55e" };
+  return (
+    <section aria-label="Actividad en vivo" className="panel flex max-h-[420px] flex-col gap-1 overflow-y-auto p-4">
+      <span className="eyebrow">Actividad en vivo</span>
+      {vista.actividad.length === 0 && <p className="py-4 text-sm text-slate-500">Sin actividad en los últimos días</p>}
+      {vista.actividad.slice(0, 40).map((a) => (
+        <button key={a.id} type="button" onClick={() => onIr(a.sede_id)} className="flex items-start gap-2.5 border-t border-slate-800/80 py-2 text-left">
+          <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: col[a.tipo] }} />
+          <span className="flex flex-col gap-0.5">
+            <span className="text-[13px] text-slate-200"><b>{a.sede}</b> · {a.titulo}</span>
+            <span className="mono text-[11px] text-slate-500">{hace(a.t)}</span>
+          </span>
+        </button>
+      ))}
+    </section>
+  );
+}
+
+/* ---------------- sede: equipos fisicos ---------------- */
+function MiniEquipo({ device }: { device: PilotDevice }) {
+  const kind = kindOf(device);
+  const m = DIM[kind];
+  const esc = kind === "gen" ? 0.3 : 0.38;
+  return (
+    <span className="mini gx" style={{ width: m.w, height: m.h, transform: `translate(-50%, -50%) scale(${esc})`, background: "transparent" }}>
+      <DeviceBox device={device} kind={kind} screen={initialScreen()} onKey={() => {}} rot={{ x: -4, y: -16 }} />
+    </span>
+  );
+}
+
+function SedeVista({ sede, equipos, filtro, setFiltro, onAbrir }: { sede: CentroSede; equipos: Equipo[]; filtro: "todos" | DeviceKind; setFiltro: (f: "todos" | DeviceKind) => void; onAbrir: (e: Equipo) => void }) {
+  const lista = equipos.filter((e) => filtro === "todos" || e.kind === filtro);
+  const en = equipos.filter((e) => e.ok).length;
+  const kw = equipos.reduce((t, e) => t + (e.central?.lectura?.kw ?? 0), 0);
+  const gravix = sede.id === ESCUINTLA && equipos.some((e) => e.pilotDirect);
+  return (
+    <section aria-label={`Equipos de ${sede.nombre}`} className="panel entrar flex flex-col gap-4 p-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-1.5">
+          <span className="eyebrow">Sede · {sede.ip}</span>
+          <h2 className="text-2xl font-semibold text-slate-50">{sede.nombre}</h2>
+          <div className="flex flex-wrap gap-1.5">
+            <span className="rounded-full px-2.5 py-1 text-xs font-bold" style={{ background: `${COLOR[sede.nivel]}22`, color: COLOR[sede.nivel] }}>{NIVEL_TXT[sede.nivel]}</span>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${gravix ? "bg-emerald-950 text-emerald-300" : "bg-slate-800 text-slate-300"}`}>
+              {gravix ? `Piloto Gravix · ${equipos.filter((e) => e.pilotDirect).length} de ${equipos.length} leídos directo por su IP` : "Vía EBO AS-P → api-SIASA (Gravix todavía no)"}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-end gap-4">
+          <span><b className="mono block text-lg text-slate-100">{sede.sin_respuesta ? "—" : `${en}/${equipos.length}`}</b><small className="text-slate-400">en línea</small></span>
+          <span><b className="mono block text-lg text-slate-100">{fmt(kw, 1)}</b><small className="text-slate-400">kW ahora (EBO)</small></span>
+          <div role="group" aria-label="Filtrar equipos" className="flex gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
+            {([["todos", "Todos"], ["ion", "ION7400"], ["pm", "PM2130"], ["gen", "Generadores"]] as const).map(([k, t]) => (
+              <button key={k} type="button" aria-pressed={filtro === k} onClick={() => setFiltro(k)} className={`min-h-[34px] rounded-md px-3 text-[13px] font-semibold ${filtro === k ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>{t}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+      {sede.sin_respuesta && <div className="rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2 text-sm text-rose-200">La sede no responde ({sede.error ?? "sin datos"}). Se muestran los últimos datos recibidos.</div>}
+      {sede.abiertos.map((a) => (
+        <div key={a.codigo} className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 text-sm ${a.severidad === "critico" ? "border-rose-900 bg-rose-950/40" : "border-amber-900 bg-amber-950/30"}`}>
+          <span className="h-2 w-2 rounded-full" style={{ background: a.severidad === "critico" ? COLOR.critico : COLOR.advertencia }} />
+          <span><b className="text-slate-100">{a.inventario ?? a.dispositivo}</b> · {a.titulo} · {hace(a.desde)} <span className="mono text-xs text-slate-500">{a.codigo}</span></span>
+        </div>
+      ))}
+      <CalidadSede equipos={equipos} onAbrir={onAbrir} />
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(232px,1fr))]">
+        {lista.map((e) => {
+          const l = e.central?.lectura;
+          const directo = !!e.pilotDirect;
+          const r = e.art.readings as Record<string, number | undefined>;
+          const kwVal = e.kind === "gen" ? (r.gen_kw_total_metering ?? l?.kw) : e.kind === "pm" ? (r.demand_total ?? l?.kw) : (r.active_power_total ?? l?.kw);
+          // Voltaje y corriente: la lectura del equipo si Gravix lo lee (promedio de las fases con valor);
+          // si no, el promedio que entrega el monitoreo central.
+          const prom = (ks: string[]) => {
+            const xs = ks.map((k) => r[k]).filter((x): x is number => typeof x === "number" && x > 0);
+            return xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null;
+          };
+          const vVal = e.pilot ? prom(["voltage_a_n", "voltage_b_n", "voltage_c_n"]) : l?.v_prom ?? null;
+          const aVal = e.pilot ? prom(["current_a", "current_b", "current_c"]) : l?.a_prom ?? null;
+          return (
+            <button key={e.key} type="button" onClick={() => onAbrir(e)} aria-label={`Abrir ${e.nombre}`} className={`flex flex-col overflow-hidden rounded-xl border bg-slate-950/60 text-left transition-colors hover:border-sky-600 ${e.ok ? "border-slate-800" : "border-rose-900"}`}>
+              <span className="eq-art block w-full">
+                <MiniEquipo device={e.art} />
+                <span className={`absolute right-2 top-2 rounded px-1.5 py-0.5 text-[10px] font-bold ${directo ? "bg-emerald-950 text-emerald-300" : "bg-slate-800 text-slate-300"}`}>{directo ? "DIRECTO" : "EBO"}</span>
+                {!e.ok && <span className="absolute left-2 top-2 rounded bg-rose-950 px-1.5 py-0.5 text-[10px] font-bold text-rose-300">● ALARMA</span>}
+              </span>
+              <span className="flex flex-col gap-1 p-3">
+                <span className="flex justify-between gap-2"><strong className="truncate text-[13px] text-slate-100">{e.nombre}</strong><span className={`shrink-0 text-[11px] font-bold ${e.ok ? "text-emerald-300" : "text-rose-300"}`}>{e.estadoTxt}</span></span>
+                <span className="truncate text-[11px] text-slate-400">{[e.inventario, e.area].filter(Boolean).join(" · ") || "—"}</span>
+                <span className="mono flex flex-wrap items-baseline justify-between gap-x-3">
+                  <b className="text-base text-slate-100">{e.kind === "gen" && !kwVal ? "En espera" : `${fmt(kwVal, 1)} kW`}</b>
+                  {e.kind !== "gen" && (vVal != null || aVal != null) && <span className="text-[11px] text-slate-300">{fmt(vVal, 1)} V · {fmt(aVal, 1)} A</span>}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ---------------- panel de alarmas (fijo, estilo EBO) ---------------- */
+function PanelAlarmas({ vista, onIr }: { vista: CentroVista; onIr: (sede: string, ref: string | null) => void }) {
+  const activas = vista.sedes.flatMap((s) =>
+    s.abiertos.map((a) => ({ ...a, sedeId: s.id, sedeNombre: s.nombre })).concat(
+      s.sin_respuesta ? [{ codigo: `${s.id}-sr`, evento: "SEDE_SIN_RESPUESTA", titulo: "La sede no responde", severidad: "critico" as const, dispositivo: null, inventario: null, desde: s.ultima_consulta_ok ?? vista.generado, sedeId: s.id, sedeNombre: s.nombre }] : [],
+    ),
+  );
+  activas.sort((a, b) => (a.severidad === b.severidad ? b.desde.localeCompare(a.desde) : a.severidad === "critico" ? -1 : 1));
+  return (
+    <section aria-label="Alarmas activas" className="panel flex flex-col gap-2 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="eyebrow">Alarmas activas · todas las sedes</span>
+        <span className="text-[11px] text-slate-500">Los correos los envía cada sede (api-SIASA). El historial con sus correos está en cada equipo → "Alarmas y correos"</span>
+      </div>
+      {activas.length === 0 && <p className="py-2 text-sm text-emerald-300">Sin alarmas activas en sus sedes.</p>}
+      <div className="flex flex-col">
+        {activas.map((a) => (
+          <div key={a.codigo} className="grid grid-cols-[6px_minmax(0,1fr)_auto] items-center gap-3 border-t border-slate-800/80 py-2 md:grid-cols-[6px_150px_120px_minmax(0,1fr)_110px_auto]">
+            <span className="h-7 w-1.5 rounded" style={{ background: a.severidad === "critico" ? COLOR.critico : COLOR.advertencia }} />
+            <span className="mono hidden text-xs text-slate-300 md:block">{fechaHora(a.desde)}</span>
+            <b className="hidden text-sm text-slate-100 md:block">{a.sedeNombre}</b>
+            <span className="min-w-0 text-sm text-slate-200">
+              <span className="md:hidden"><b>{a.sedeNombre}</b> · </span>
+              {a.inventario ?? a.dispositivo ?? ""} {a.titulo}
+              <span className="block text-[11px] text-slate-500 md:hidden">{fechaHora(a.desde)}</span>
+            </span>
+            <span className={`hidden text-xs font-bold md:block ${a.severidad === "critico" ? "text-rose-300" : "text-amber-300"}`}>{a.severidad === "critico" ? "Crítica" : "Advertencia"} · {hace(a.desde).replace("hace ", "")}</span>
+            <button type="button" onClick={() => onIr(a.sedeId, a.inventario ?? a.dispositivo)} className="min-h-[34px] rounded-md border border-slate-700 bg-slate-900 px-3 text-xs font-semibold text-sky-300 hover:bg-slate-800">
+              Ver equipo
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ---------------- ventana del equipo ---------------- */
+type Pestana = "equipo" | "tendencias" | "calidad" | "comparativo" | "alarmas" | "bitacora" | "info";
+
+function VentanaEquipo({ equipo, equiposSede, access, onCerrar }: { equipo: Equipo; equiposSede: Equipo[]; access: Access; onCerrar: () => void }) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === "Escape" && onCerrar();
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  }, [onCerrar]);
+  const [tab, setTab] = useState<Pestana>("equipo");
+  const [screen, setScreen] = useState<ScreenState>(initialScreen());
+  const dev = equipo.art;
+  const kind = kindOf(dev);
+  const ref = equipo.inventario ?? equipo.central?.nombre ?? equipo.nombre;
+  const eventos = useCentroEventos(equipo.sedeId, ref, 30);
+  const gaps = usePilotGaps(equipo.pilot?.id ?? null, 30);
+  const activas = (eventos.data?.eventos ?? []).filter((e) => !e.fin).length;
+  const tabs: [Pestana, string, string?][] = [
+    ["equipo", "Equipo"],
+    ["tendencias", "Tendencias"],
+    ...(equipo.pilot && equipo.kind !== "gen" ? ([["calidad", "Calidad de energía", calidadAlertas(equipo) ? String(calidadAlertas(equipo)) : undefined]] as [Pestana, string, string?][]) : []),
+    ...(equipo.pilotDirect ? ([["comparativo", "Directo vs EBO"]] as [Pestana, string][]) : []),
+    ["alarmas", "Alarmas y correos", activas ? String(activas) : undefined],
+    ["bitacora", "Bitácora"],
+    ["info", "Información"],
+  ];
+  const rows = metricRows(dev, kind, screen);
+
+  return (
+    <div className="cm-modal" role="presentation" onClick={(e) => e.target === e.currentTarget && onCerrar()}>
+      <div className="caja cm" role="dialog" aria-label={`${equipo.nombre} · ${equipo.sedeNombre}`}>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800 px-4 py-3">
+          <div className="min-w-[220px] flex-1">
+            <strong className="block text-base text-slate-50">{equipo.nombre} · {kind === "ion" ? "ION7400" : kind === "pm" ? "PM2130" : "Generador"}</strong>
+            <span className="text-xs text-slate-400">{[equipo.sedeNombre, equipo.area, equipo.inventario].filter(Boolean).join(" · ")}</span>
+          </div>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${equipo.ok ? "bg-emerald-950 text-emerald-300" : "bg-rose-950 text-rose-300"}`}>{equipo.estadoTxt}</span>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${equipo.pilotDirect ? "bg-emerald-950 text-emerald-300" : "bg-slate-800 text-slate-300"}`}>{equipo.pilotDirect ? "Directo · Agente Go (Gravix)" : "EBO → api-SIASA"}</span>
+          <button type="button" onClick={onCerrar} aria-label="Cerrar" className="grid h-10 w-10 place-items-center rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">✕</button>
+        </div>
+        <div role="tablist" aria-label="Secciones del equipo" className="flex flex-wrap gap-1 border-b border-slate-800 px-4 py-2">
+          {tabs.map(([k, t, badge]) => (
+            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={`min-h-[38px] rounded-lg px-3.5 text-sm font-bold ${tab === k ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+              {t}
+              {badge && <span className="ml-1.5 text-[11px] text-rose-300">{badge}</span>}
+            </button>
+          ))}
+        </div>
+
+        {tab === "equipo" && (
+          <div className="flex flex-wrap">
+            <div className="gx min-w-0 flex-[999_1_600px]" style={{ background: "transparent" }}>
+              <Stage3D device={dev} screen={screen} onKey={(k) => setScreen((s) => pressKey(kind, s, k))} />
+            </div>
+            <aside className="flex min-w-0 flex-[1_1_280px] flex-col gap-2 border-l border-slate-800 p-4">
+              <span className="eyebrow">Pantalla: {screenTitle(kind, screen)}</span>
+              {rows.map((r) => (
+                <div key={r.label} className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <span className="text-sm text-slate-300">{r.label}</span>
+                  <b className={`mono text-sm ${r.tone === "bad" ? "text-rose-300" : r.tone === "warn" ? "text-amber-300" : "text-slate-100"}`}>{r.text}</b>
+                  <span className="col-span-2 h-1.5 overflow-hidden rounded bg-slate-800"><span className="block h-full bg-sky-500 transition-[width] duration-500" style={{ width: `${Math.round(r.frac * 100)}%` }} /></span>
+                </div>
+              ))}
+              {!equipo.pilot && <p className="text-xs text-slate-500">Esta sede se lee por el EBO: el monitoreo central solo entrega kW, voltaje y corriente promedio.</p>}
+              <button type="button" onClick={() => setTab("tendencias")} className="mt-1 min-h-[40px] rounded-lg border border-slate-700 bg-slate-900 text-sm font-bold text-sky-300 hover:bg-slate-800">Ver tendencias e historial →</button>
+            </aside>
+            {kind === "ion" && ION_HARM_SCREENS.includes(screen.ion.scr) && (equipo.pilotDirect ?? equipo.pilot) && (
+              <div className="w-full border-t border-slate-800 p-4">
+                <ArmonicosPanel device={(equipo.pilot ?? equipo.pilotDirect)!} direct={equipo.pilotDirect} />
+              </div>
+            )}
+            {kind === "ion" && ION_HARM_SCREENS.includes(screen.ion.scr) && !(equipo.pilotDirect ?? equipo.pilot) && (
+              <p className="w-full border-t border-slate-800 p-4 text-sm text-slate-400">Esta sede se lee por el EBO y el monitoreo central no entrega armónicos. La gráfica de armónicos está disponible en los equipos leídos directo (Escuintla).</p>
+            )}
+          </div>
+        )}
+        {tab === "tendencias" && <Tendencias equipo={equipo} equiposSede={equiposSede} puedeExcel={access.actions.includes("excel")} />}
+        {tab === "calidad" && <CalidadEnergia equipo={equipo} />}
+        {tab === "comparativo" && equipo.pilot && (
+          <div className="gx p-4" style={{ background: "transparent" }}>
+            <CompareTab device={equipo.pilot} />
+          </div>
+        )}
+        {tab === "alarmas" && <AlarmasCorreos eventos={eventos.data?.eventos} cargando={eventos.isLoading} error={eventos.isError ? extractErrorMessage(eventos.error) : null} />}
+        {tab === "bitacora" && <Bitacora equipo={equipo} eventos={eventos.data?.eventos ?? []} gaps={gaps.data ?? []} />}
+        {tab === "info" && <Informacion equipo={equipo} />}
+      </div>
+    </div>
+  );
+}
+
+/* ---- tendencias ---- */
+const RANGOS_PILOT: [number, string][] = [[60, "1 h"], [1440, "24 h"], [10080, "7 días"]];
+const RANGOS_CENTRO: [number, string][] = [[60, "1 h"], [1440, "24 h"], [10080, "7 días"], [43200, "30 días"]];
+
+/** Resumen arriba de la grafica: ultimo, promedio, maximo y minimo de la serie principal. */
+function Resumen({ s, unidad, dec }: { s: ChartSeries | undefined; unidad: string; dec: number }) {
+  const vals = (s?.points ?? []).map((p) => p.v).filter((x): x is number => x != null && Number.isFinite(x));
+  if (!vals.length) return null;
+  const prom = vals.reduce((a, x) => a + x, 0) / vals.length;
+  return (
+    <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(120px,1fr))]">
+      {([["Último", vals[vals.length - 1]], ["Promedio", prom], ["Máximo", Math.max(...vals)], ["Mínimo", Math.min(...vals)]] as [string, number][]).map(([l, x]) => (
+        <div key={l} className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2"><span className="block text-[11px] text-slate-400">{l}</span><b className="mono text-base text-slate-100">{fmt(x, dec)} {unidad}</b></div>
+      ))}
+    </div>
+  );
+}
+
+type Comparar = "ninguno" | "ebo" | "anterior" | `equipo:${string}`;
+const COLOR_COMP = "#f59e0b";
+
+function SelectComparar({ value, onChange, opciones }: { value: Comparar; onChange: (c: Comparar) => void; opciones: [Comparar, string][] }) {
+  return (
+    <label className="flex items-center gap-2 text-sm text-slate-300">
+      Comparar con
+      <select value={value} onChange={(e) => onChange(e.target.value as Comparar)} className="min-h-[38px] max-w-[260px] rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-100">
+        {opciones.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+      </select>
+    </label>
+  );
+}
+
+/** Corre una serie "periodo anterior" hacia adelante para encimarla con la actual. */
+function desplazar(points: { t: string; v: number | null }[], desdeMs: number, corrimiento: number) {
+  return points.filter((p) => new Date(p.t).getTime() < desdeMs).map((p) => ({ t: new Date(p.t).getTime() + corrimiento, v: p.v }));
+}
+
+function Tendencias({ equipo, equiposSede, puedeExcel }: { equipo: Equipo; equiposSede: Equipo[]; puedeExcel: boolean }) {
+  const pilotDev = equipo.pilotDirect ?? equipo.pilot;
+  return pilotDev ? <TendenciasPilot equipo={equipo} device={pilotDev} equiposSede={equiposSede} puedeExcel={puedeExcel} /> : <TendenciasCentro equipo={equipo} equiposSede={equiposSede} puedeExcel={puedeExcel} />;
+}
+
+function TendenciasPilot({ equipo, device, equiposSede, puedeExcel }: { equipo: Equipo; device: PilotDevice; equiposSede: Equipo[]; puedeExcel: boolean }) {
+  const kind = kindOf(device);
+  const metricas = useMemo(() => Object.keys(device.readings).filter((k) => typeof device.readings[k] === "number" && !k.startsWith("harm_")).sort((a, b) => (METRIC_LABEL[a] ? 0 : 1) - (METRIC_LABEL[b] ? 0 : 1) || a.localeCompare(b)), [device]);
+  const [metric, setMetric] = useState(POWER_METRIC[kind]);
+  const [min, setMin] = useState(1440);
+  const [comp, setComp] = useState<Comparar>("ninguno");
+  const m = metricas.includes(metric) ? metric : metricas[0] ?? POWER_METRIC[kind];
+  const [label, unidad] = METRIC_LABEL[m] ?? [m, ""];
+  const dec = unidad === "Hz" || unidad === "" ? 3 : 2;
+
+  const otros = equiposSede.filter((e) => e.key !== equipo.key && e.kind === equipo.kind && (e.pilotDirect ?? e.pilot));
+  const compDev = comp === "ebo" && equipo.pilotDirect ? equipo.pilot : comp.startsWith("equipo:") ? (() => { const o = otros.find((e) => e.key === comp.slice(7)); return o ? o.pilotDirect ?? o.pilot : null; })() : null;
+  const anteriorOk = min * 2 <= 10080;
+  const serie = usePilotSeries(device.id, m, comp === "anterior" && anteriorOk ? min * 2 : min);
+  const serieComp = usePilotSeries(compDev?.id ?? null, m, min);
+
+  const ahora = Date.now();
+  const pts = serie.data?.points ?? [];
+  const principal: ChartSeries = { name: `${equipo.nombre}${equipo.pilotDirect ? " (directo)" : ""}`, color: "#4c8dff", points: pts.filter((p) => new Date(p.t).getTime() >= ahora - min * 60_000).map((p) => ({ t: new Date(p.t).getTime(), v: p.v })) };
+  const series: ChartSeries[] = [principal];
+  if (comp === "anterior" && anteriorOk) series.push({ name: "Periodo anterior", color: COLOR_COMP, dashed: true, points: desplazar(pts, ahora - min * 60_000, min * 60_000) });
+  if (compDev) series.push({ name: comp === "ebo" ? `${equipo.nombre} (por el EBO)` : compDev.name, color: comp === "ebo" ? "#94a3b8" : COLOR_COMP, dashed: comp === "ebo", points: (serieComp.data?.points ?? []).map((p) => ({ t: new Date(p.t).getTime(), v: p.v })) });
+  const bands = (serie.data?.gaps ?? []).map((g) => ({ from: new Date(g.startedAt).getTime(), to: g.endedAt ? new Date(g.endedAt).getTime() : ahora, label: "Hueco" }));
+
+  const opciones: [Comparar, string][] = [
+    ["ninguno", "Nada"],
+    ...(equipo.pilotDirect && equipo.pilot ? ([["ebo", "La lectura por el EBO"]] as [Comparar, string][]) : []),
+    ...(anteriorOk ? ([["anterior", min === 60 ? "La hora anterior" : "El día anterior"]] as [Comparar, string][]) : []),
+    ...otros.map((e) => [`equipo:${e.key}` as Comparar, e.nombre] as [Comparar, string]),
+  ];
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            Variable
+            <select value={m} onChange={(e) => setMetric(e.target.value)} className="min-h-[38px] max-w-[260px] rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-100">
+              {metricas.map((k) => <option key={k} value={k}>{METRIC_LABEL[k]?.[0] ?? k}</option>)}
+            </select>
+          </label>
+          <SelectComparar value={opciones.some((o) => o[0] === comp) ? comp : "ninguno"} onChange={setComp} opciones={opciones} />
+        </div>
+        <Rangos rangos={RANGOS_PILOT} min={min} setMin={setMin} />
+      </div>
+      <Resumen s={principal} unidad={unidad} dec={dec} />
+      {serie.isLoading ? <p className="py-10 text-center text-sm text-slate-500">Cargando…</p> : <InteractiveChart series={series} unit={unidad} dec={dec} bands={bands} />}
+      <p className="text-xs text-slate-500">{label} · lectura {equipo.pilotDirect ? "directa del equipo (Gravix)" : "por el EBO"} · TimescaleDB{bands.length ? ` · ${bands.length} hueco(s) en el periodo` : ""}</p>
+      {puedeExcel ? <ExcelPilot device={device} metricas={metricas} actual={m} /> : <p className="text-xs text-slate-500">Su perfil no tiene permiso para descargar el historial a Excel.</p>}
+    </div>
+  );
+}
+
+function TendenciasCentro({ equipo, equiposSede, puedeExcel }: { equipo: Equipo; equiposSede: Equipo[]; puedeExcel: boolean }) {
+  const [min, setMin] = useState(1440);
+  const [varK, setVarK] = useState<"kw" | "v" | "a">("kw");
+  const [comp, setComp] = useState<Comparar>("ninguno");
+  const otros = equiposSede.filter((e) => e.key !== equipo.key && e.central);
+  const compEq = comp.startsWith("equipo:") ? otros.find((e) => e.key === comp.slice(7)) ?? null : null;
+  const h = useCentroHistorial(equipo.sedeId, equipo.central?.id ?? null, comp === "anterior" ? min * 2 : min);
+  const hc = useCentroHistorial(compEq?.sedeId ?? null, compEq?.central?.id ?? null, min);
+  const VARS = { kw: ["Potencia", "kW"], v: ["Voltaje L-N promedio", "V"], a: ["Corriente promedio", "A"] } as const;
+  const ahora = Date.now();
+  const pts = (h.data?.points ?? []).map((p) => ({ t: p.t, v: p[varK] }));
+  const principal: ChartSeries = { name: equipo.nombre, color: "#4c8dff", points: pts.filter((p) => new Date(p.t).getTime() >= ahora - min * 60_000).map((p) => ({ t: new Date(p.t).getTime(), v: p.v })) };
+  const series: ChartSeries[] = [principal];
+  if (comp === "anterior") series.push({ name: "Periodo anterior", color: COLOR_COMP, dashed: true, points: desplazar(pts, ahora - min * 60_000, min * 60_000) });
+  if (compEq) series.push({ name: compEq.nombre, color: COLOR_COMP, points: (hc.data?.points ?? []).map((p) => ({ t: new Date(p.t).getTime(), v: p[varK] })) });
+  const bands = (h.data?.points ?? []).filter((p) => p.fuera).map((p) => ({ from: new Date(p.t).getTime(), to: new Date(p.t).getTime() + (h.data?.bucketSeconds ?? 60) * 1000, label: "Fuera de línea" }));
+  const opciones: [Comparar, string][] = [["ninguno", "Nada"], ["anterior", min === 60 ? "La hora anterior" : min === 1440 ? "El día anterior" : min === 10080 ? "La semana anterior" : "El mes anterior"], ...otros.map((e) => [`equipo:${e.key}` as Comparar, e.nombre] as [Comparar, string])];
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <div role="group" aria-label="Variable" className="flex flex-wrap gap-1.5">
+            {(Object.keys(VARS) as ("kw" | "v" | "a")[]).map((k) => (
+              <button key={k} type="button" aria-pressed={varK === k} onClick={() => setVarK(k)} className={`min-h-[36px] rounded-full border px-3 text-[13px] font-semibold ${varK === k ? "border-sky-500 bg-sky-950 text-white" : "border-slate-700 text-slate-300"}`}>{VARS[k][0]}</button>
+            ))}
+          </div>
+          <SelectComparar value={comp} onChange={setComp} opciones={opciones} />
+        </div>
+        <Rangos rangos={RANGOS_CENTRO} min={min} setMin={setMin} />
+      </div>
+      <Resumen s={principal} unidad={VARS[varK][1]} dec={1} />
+      {h.isLoading ? <p className="py-10 text-center text-sm text-slate-500">Cargando…</p> : <InteractiveChart series={series} unit={VARS[varK][1]} dec={1} bands={bands} emptyText="Todavía no hay historial guardado en este periodo: Nodivo guarda un dato por minuto desde el 10/11/2026." />}
+      <p className="text-xs text-slate-500">
+        Origen: monitoreo central → EBO de la sede. Nodivo guarda una foto por minuto{h.data?.desde ? ` desde ${fechaHora(h.data.desde)}` : ""}.
+      </p>
+      {puedeExcel ? <ExcelCentro equipo={equipo} /> : <p className="text-xs text-slate-500">Su perfil no tiene permiso para descargar el historial a Excel.</p>}
+    </div>
+  );
+}
+
+function Rangos({ rangos, min, setMin }: { rangos: [number, string][]; min: number; setMin: (n: number) => void }) {
+  return (
+    <div role="group" aria-label="Periodo" className="flex gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
+      {rangos.map(([m, t]) => (
+        <button key={m} type="button" aria-pressed={min === m} onClick={() => setMin(m)} className={`min-h-[34px] rounded-md px-3 text-[13px] font-bold ${min === m ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>{t}</button>
+      ))}
+    </div>
+  );
+}
+
+const PERIODOS: [number, string][] = [[60, "Última hora"], [1440, "Últimas 24 horas"], [10080, "Últimos 7 días"], [43200, "Últimos 30 días"], [129600, "Últimos 90 días"]];
+const PASOS: [number, string][] = [[60, "1 minuto"], [900, "15 minutos"], [3600, "1 hora"], [86400, "1 día (promedio)"]];
+
+function ExcelPanel({ children, onDescargar, ocupado, error }: { children: React.ReactNode; onDescargar: () => void; ocupado: boolean; error: string | null }) {
+  return (
+    <section aria-label="Descargar historial a Excel" className="flex flex-col gap-3 rounded-xl border border-emerald-900 bg-emerald-950/30 p-4">
+      <div className="flex items-center gap-3">
+        <span className="grid h-9 w-9 place-items-center rounded-lg bg-green-700 text-sm font-extrabold text-white" aria-hidden="true">X</span>
+        <div><b className="block text-slate-100">Descargar historial a Excel</b><small className="text-emerald-200/70">Archivo .xlsx con fecha y hora, una columna por variable, huecos e información del equipo</small></div>
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        {children}
+        <button type="button" onClick={onDescargar} disabled={ocupado} className="min-h-[42px] rounded-lg bg-green-700 px-5 text-sm font-extrabold text-white hover:bg-green-600 disabled:opacity-50">
+          {ocupado ? "Preparando…" : "⬇ Descargar Excel"}
+        </button>
+        {error && <span className="text-sm text-rose-300">{error}</span>}
+      </div>
+    </section>
+  );
+}
+
+function SelectExcel({ label, value, onChange, opts }: { label: string; value: number; onChange: (n: number) => void; opts: [number, string][] }) {
+  return (
+    <label className="flex flex-col gap-1 text-xs text-emerald-200/80">
+      {label}
+      <select value={value} onChange={(e) => onChange(Number(e.target.value))} className="min-h-[40px] rounded-lg border border-emerald-900 bg-slate-950 px-2 text-sm text-slate-100">
+        {opts.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function useDescarga() {
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async (fn: () => Promise<void>) => {
+    setOcupado(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(extractErrorMessage(e));
+    } finally {
+      setOcupado(false);
+    }
+  };
+  return { ocupado, error, run };
+}
+
+function ExcelPilot({ device, metricas, actual }: { device: PilotDevice; metricas: string[]; actual: string }) {
+  const [sel, setSel] = useState<string[]>([actual]);
+  const [per, setPer] = useState(10080);
+  const [paso, setPaso] = useState(900);
+  const { ocupado, error, run } = useDescarga();
+  const elegidas = sel.filter((m) => metricas.includes(m));
+  return (
+    <ExcelPanel ocupado={ocupado || !elegidas.length} error={error} onDescargar={() => void run(() => downloadFile(`/pilot/devices/${device.id}/excel`, { metrics: elegidas.join(","), labels: elegidas.map((m) => METRIC_LABEL[m]?.[0] ?? m).join("|"), minutes: per, step: paso }, `${device.name}_historial.xlsx`))}>
+      <fieldset className="flex max-h-40 min-w-[240px] flex-col overflow-y-auto rounded-lg border border-emerald-900 p-2">
+        <legend className="px-1 text-xs font-bold uppercase tracking-wider text-emerald-200/80">Variables</legend>
+        {metricas.map((m) => (
+          <label key={m} className="flex min-h-[30px] items-center gap-2 text-[13px] text-slate-200">
+            <input type="checkbox" className="h-4 w-4 accent-green-600" checked={sel.includes(m)} onChange={() => setSel((s) => (s.includes(m) ? s.filter((x) => x !== m) : [...s, m]))} />
+            {METRIC_LABEL[m]?.[0] ?? m}
+          </label>
+        ))}
+      </fieldset>
+      <SelectExcel label="Periodo" value={per} onChange={setPer} opts={PERIODOS} />
+      <SelectExcel label="Un dato cada" value={paso} onChange={setPaso} opts={PASOS} />
+    </ExcelPanel>
+  );
+}
+
+function ExcelCentro({ equipo }: { equipo: Equipo }) {
+  const [per, setPer] = useState(10080);
+  const [paso, setPaso] = useState(900);
+  const { ocupado, error, run } = useDescarga();
+  return (
+    <ExcelPanel ocupado={ocupado} error={error} onDescargar={() => void run(() => downloadFile(`/centro/sedes/${equipo.sedeId}/medidores/${encodeURIComponent(equipo.central?.id ?? "")}/excel`, { minutes: per, step: paso, nombre: equipo.nombre }, `${equipo.nombre}_historial.xlsx`))}>
+      <span className="text-[13px] text-slate-300">Potencia, voltaje y corriente promedio</span>
+      <SelectExcel label="Periodo" value={per} onChange={setPer} opts={PERIODOS} />
+      <SelectExcel label="Un dato cada" value={paso} onChange={setPaso} opts={PASOS} />
+    </ExcelPanel>
+  );
+}
+
+/* ---- alarmas y correos ---- */
+function AlarmasCorreos({ eventos, cargando, error }: { eventos: CentroEvento[] | undefined; cargando: boolean; error: string | null }) {
+  if (cargando) return <p className="p-6 text-sm text-slate-500">Consultando las alarmas en la sede…</p>;
+  if (error) return <p className="p-6 text-sm text-rose-300">{error}</p>;
+  const lista = eventos ?? [];
+  const correos = lista.flatMap((e) => [
+    ...(e.notificado_en ? [{ k: `${e.codigo}-a`, t: e.notificado_en, asunto: `${e.severidad === "critico" ? "CRÍTICO" : e.severidad === "advertencia" ? "ADVERTENCIA" : "AVISO"} · ${EVENTO_TXT[e.evento] ?? e.evento}`, tipo: "Apertura", color: e.severidad === "critico" ? COLOR.critico : COLOR.advertencia }] : []),
+    ...(e.cierre_notificado_en ? [{ k: `${e.codigo}-c`, t: e.cierre_notificado_en, asunto: `NORMAL · ${EVENTO_TXT[e.evento] ?? e.evento} (duró ${duracion(e.duracion_s)})`, tipo: "Cierre", color: COLOR.ok }] : []),
+  ]).sort((a, b) => b.t.localeCompare(a.t));
+  return (
+    <div className="flex flex-col gap-5 p-4">
+      <section className="flex flex-col gap-2">
+        <span className="eyebrow">Alarmas de este equipo · últimos 30 días</span>
+        {lista.length === 0 && <p className="text-sm text-emerald-300">Sin alarmas en los últimos 30 días.</p>}
+        {lista.map((e) => (
+          <div key={e.codigo} className="grid grid-cols-[6px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+            <span className="h-9 w-1.5 rounded" style={{ background: e.fin ? "#475569" : e.severidad === "critico" ? COLOR.critico : COLOR.advertencia }} />
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <b className="text-sm text-slate-100">{EVENTO_TXT[e.evento] ?? e.evento}</b>
+              <small className="text-xs text-slate-400">
+                {fechaHora(e.inicio)} · duró {duracion(e.duracion_s)} · {e.notificado_en ? `correo ${fechaHora(e.notificado_en)}` : "sin correo"}
+                {e.cierre_notificado_en ? ` · cierre ${fechaHora(e.cierre_notificado_en)}` : ""}
+              </small>
+            </span>
+            <span className={`text-xs font-bold ${e.fin ? "text-emerald-300" : e.severidad === "critico" ? "text-rose-300" : "text-amber-300"}`}>{e.fin ? "Normalizada" : "Activa"}</span>
+          </div>
+        ))}
+      </section>
+      <section className="flex flex-col gap-2">
+        <span className="eyebrow">Correos enviados por este equipo</span>
+        {correos.length === 0 && <p className="text-sm text-slate-500">Sin correos en los últimos 30 días.</p>}
+        <div className="flex flex-col overflow-hidden rounded-lg border border-slate-800">
+          {correos.map((c) => (
+            <div key={c.k} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-slate-800/80 px-3 py-2.5 first:border-t-0 md:grid-cols-[200px_minmax(0,1fr)_90px]">
+              <span className="mono hidden text-xs text-slate-300 md:block">{fechaHora(c.t)}</span>
+              <span className="flex items-center gap-2 text-sm text-slate-100"><span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: c.color }} />{c.asunto}<small className="text-slate-500 md:hidden">· {fechaHora(c.t)}</small></span>
+              <span className="text-xs font-bold" style={{ color: c.color }}>{c.tipo}</span>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-slate-500">Los envía la sede (api-SIASA) desde su buzón de alarmas a su lista configurada. Fuente: base de eventos de la sede.</p>
+      </section>
+    </div>
+  );
+}
+
+/* ---- bitacora ---- */
+function Bitacora({ equipo, eventos, gaps }: { equipo: Equipo; eventos: CentroEvento[]; gaps: { id: string; startedAt: string; endedAt: string | null; minutes: number; cause: string; status: string }[] }) {
+  const items = [
+    ...eventos.flatMap((e) => [
+      { t: e.inicio, tipo: "Alarma", txt: `Se abrió: ${EVENTO_TXT[e.evento] ?? e.evento}`, quien: "Reglas de la sede (api-SIASA)", color: e.severidad === "critico" ? COLOR.critico : COLOR.advertencia },
+      ...(e.notificado_en ? [{ t: e.notificado_en, tipo: "Correo", txt: "Correo de apertura enviado", quien: "Buzón de alarmas de la sede", color: "#a78bfa" }] : []),
+      ...(e.fin ? [{ t: e.fin, tipo: "Alarma", txt: `Se normalizó: ${EVENTO_TXT[e.evento] ?? e.evento} (duró ${duracion(e.duracion_s)})`, quien: "Reglas de la sede (api-SIASA)", color: COLOR.ok }] : []),
+      ...(e.cierre_notificado_en ? [{ t: e.cierre_notificado_en, tipo: "Correo", txt: "Correo de cierre enviado", quien: "Buzón de alarmas de la sede", color: "#a78bfa" }] : []),
+    ]),
+    ...gaps.flatMap((g) => [
+      { t: g.startedAt, tipo: "Hueco", txt: `Hueco de datos: ${g.cause}`, quien: "Piloto Gravix", color: COLOR.critico },
+      ...(g.endedAt ? [{ t: g.endedAt, tipo: g.status === "recovered" ? "Recuperación" : "Hueco", txt: `Fin del hueco (${g.minutes} min · ${g.status === "recovered" ? "recuperado" : g.status === "partial" ? "recuperado parcial" : "cerrado"})`, quien: "Piloto Gravix", color: g.status === "recovered" ? COLOR.ok : "#94a3b8" }] : []),
+    ]),
+    ...(equipo.pilot?.historySince ? [{ t: equipo.pilot.historySince, tipo: "Sistema", txt: "Inicio del historial en TimescaleDB", quien: "Piloto Gravix · Fase A", color: "#94a3b8" }] : []),
+  ].sort((a, b) => b.t.localeCompare(a.t));
+  return (
+    <div className="flex flex-col gap-2 p-4">
+      <span className="eyebrow">Bitácora del equipo · todo lo que pasó y cuándo</span>
+      {items.length === 0 && <p className="text-sm text-slate-500">Sin registros en los últimos 30 días.</p>}
+      <div className="ml-2 flex flex-col border-l-2 border-slate-800 pl-2">
+        {items.map((b, i) => (
+          <div key={i} className="relative flex flex-col gap-0.5 py-2 pl-4">
+            <span className="absolute -left-[15px] top-3.5 h-3 w-3 rounded-full border-2 border-slate-950" style={{ background: b.color }} />
+            <span className="flex flex-wrap items-baseline gap-2"><b className="text-sm text-slate-100">{b.txt}</b><span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-bold text-slate-300">{b.tipo}</span></span>
+            <small className="text-xs text-slate-500">{fechaHora(b.t)} · {b.quien}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---- informacion ---- */
+function Informacion({ equipo }: { equipo: Equipo }) {
+  const p = equipo.pilotDirect ?? equipo.pilot;
+  const dc = equipo.pilot?.directConnection;
+  const attrs = (equipo.pilotDirect?.attributes ?? {}) as Record<string, unknown>;
+  const datos: [string, string][] = [
+    ["Modelo", equipo.kind === "ion" ? "PowerLogic ION7400" : equipo.kind === "pm" ? "PM2130 (frente EM6400NG+)" : "Generador"],
+    ["Sede · área", [equipo.sedeNombre, equipo.area].filter(Boolean).join(" · ")],
+    ["Código", equipo.inventario ?? "—"],
+    ["Origen del dato", equipo.pilotDirect ? "Directo · Agente Go (Gravix) + EBO para comparar" : "EBO AS-P → api-SIASA de la sede"],
+    ["Conexión directa", dc ? `${dc.ip}:${dc.port} · ID ${dc.unitId ?? "por defecto"}` : attrs.via === "directo" ? "leído por el agente de prueba" : "—"],
+    ["Protocolo", "Modbus TCP · solo lectura (función 03)"],
+    ["Estado en la sede", equipo.central ? ESTADO_TXT[equipo.central.estado] ?? equipo.central.estado : "—"],
+    ["Último cambio en la sede", equipo.central?.ultimo_cambio ? fechaHora(equipo.central.ultimo_cambio) : "—"],
+    ["Última lectura (Nodivo)", p?.updatedAt ? hace(p.updatedAt) : "—"],
+    ["Historial desde", equipo.pilot?.historySince ? fechaHora(equipo.pilot.historySince) : "se guarda desde la instalación del centro de mando"],
+    ["Datos completos 7 días", equipo.pilot?.completeness != null ? `${equipo.pilot.completeness.toFixed(1)} %` : "—"],
+    ["Huecos 7 días", equipo.pilot ? `${equipo.pilot.gaps.total} (${equipo.pilot.gaps.pending} pendientes)` : "—"],
+  ];
+  return (
+    <div className="grid gap-2 p-4 [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
+      {datos.map(([l, v]) => (
+        <div key={l} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><span className="block text-[11px] text-slate-400">{l}</span><b className="mono text-sm text-slate-100">{v}</b></div>
+      ))}
+    </div>
+  );
+}
+
+/* ================= calidad de energia con semaforo (lectura directa Gravix) ================= */
+type Semaforo = "ok" | "warn" | "bad";
+interface Indicador { k: string; label: string; valor: string; nivel: Semaforo; detalle: string; consejo: string }
+const SEM_COLOR: Record<Semaforo, string> = { ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444" };
+const SEM_TXT: Record<Semaforo, string> = { ok: "Bien", warn: "Vigilar", bad: "Atender" };
+
+function indicadores(e: Equipo): Indicador[] {
+  const d = e.pilotDirect ?? e.pilot;
+  if (!d || e.kind === "gen") return [];
+  const r = d.readings as Record<string, unknown>;
+  const n = (k: string) => (typeof r[k] === "number" && Number.isFinite(r[k] as number) ? (r[k] as number) : null);
+  const fases = (ks: string[]) => ks.map(n).filter((x): x is number => x != null && x > 0);
+  const desbalance = (xs: number[]) => {
+    if (xs.length < 2) return null;
+    const p = xs.reduce((a, x) => a + x, 0) / xs.length;
+    return p > 0 ? (Math.max(...xs.map((x) => Math.abs(x - p))) / p) * 100 : null;
+  };
+  const sem = (v: number, ok: number, warn: number, mayorEsMejor = false): Semaforo =>
+    mayorEsMejor ? (v >= ok ? "ok" : v >= warn ? "warn" : "bad") : v < ok ? "ok" : v < warn ? "warn" : "bad";
+  const out: Indicador[] = [];
+  const vs = fases(["voltage_a_n", "voltage_b_n", "voltage_c_n"]);
+  const dv = desbalance(vs);
+  if (dv != null) out.push({ k: "dv", label: "Desbalance de voltaje", valor: `${dv.toFixed(2)} %`, nivel: sem(dv, 2, 3), detalle: `Fases: ${vs.map((x) => x.toFixed(1)).join(" / ")} V · límite recomendado 2 %`, consejo: "Revisar la distribución de cargas monofásicas entre fases y las conexiones del tablero." });
+  const as = fases(["current_a", "current_b", "current_c"]);
+  const di = desbalance(as);
+  const iProm = as.length ? as.reduce((a, x) => a + x, 0) / as.length : 0;
+  if (di != null && iProm > 5) out.push({ k: "di", label: "Desbalance de corriente", valor: `${di.toFixed(1)} %`, nivel: sem(di, 10, 20), detalle: `Fases: ${as.map((x) => x.toFixed(1)).join(" / ")} A`, consejo: "Redistribuir circuitos entre fases para bajar la corriente del neutro y el calentamiento." });
+  const pf = n("power_factor_total") ?? n("power_factor_a");
+  if (pf != null && pf !== 0) out.push({ k: "fp", label: "Factor de potencia", valor: Math.abs(pf).toFixed(3), nivel: sem(Math.abs(pf), 0.92, 0.85, true), detalle: "Recomendado 0.92 o más", consejo: "Revisar el banco de capacitores o las cargas inductivas (motores, aire acondicionado)." });
+  const thdV = fases(["thd_voltage_v1_high", "thd_voltage_v2_high", "thd_voltage_v3_high"]);
+  if (thdV.length) out.push({ k: "thdv", label: "THD de voltaje (máx.)", valor: `${Math.max(...thdV).toFixed(2)} %`, nivel: sem(Math.max(...thdV), 5, 8), detalle: "Límite usual 5 % (IEEE 519)", consejo: "Hay armónicos en la red: revisar variadores, UPS y fuentes electrónicas; considerar filtros." });
+  const thdI = fases(["thd_current_a_high", "thd_current_b_high", "thd_current_c_high"]);
+  if (thdI.length) out.push({ k: "thdi", label: "THD de corriente (máx.)", valor: `${Math.max(...thdI).toFixed(1)} %`, nivel: sem(Math.max(...thdI), 15, 25), detalle: "Depende del tipo de carga; arriba de 15 % conviene vigilar", consejo: "Cargas no lineales importantes: vigilar el calentamiento del neutro y del transformador." });
+  const pst = fases(["short_term_flicker_pst_a_n", "short_term_flicker_pst_b_n", "short_term_flicker_pst_c_n"]);
+  if (pst.length) out.push({ k: "pst", label: "Flicker Pst (máx.)", valor: Math.max(...pst).toFixed(2), nivel: sem(Math.max(...pst), 0.8, 1), detalle: "Límite 1.0 (EN 50160)", consejo: "Variaciones rápidas de voltaje: revisar arranques de motores o soldadoras cerca." });
+  const hz = n("frequency");
+  if (hz != null && hz > 0) out.push({ k: "hz", label: "Frecuencia", valor: `${hz.toFixed(3)} Hz`, nivel: Math.abs(hz - 60) <= 0.2 ? "ok" : Math.abs(hz - 60) <= 0.5 ? "warn" : "bad", detalle: "Normal 60 ± 0.2 Hz", consejo: "Frecuencia fuera de lo normal: confirmar si la sede está con el generador." });
+  const cap = Number((e.pilot?.attributes as Record<string, unknown> | undefined)?.capacityKva) || 0;
+  const kva = n("apparent_power_total");
+  if (cap > 0 && kva != null) {
+    const pct = (kva / cap) * 100;
+    out.push({ k: "carga", label: "Carga del transformador", valor: `${pct.toFixed(0)} %`, nivel: sem(pct, 80, 90), detalle: `${kva.toFixed(1)} de ${cap} kVA`, consejo: "Cerca de su capacidad: planificar reparto de cargas o ampliación." });
+  }
+  return out;
+}
+const calidadAlertas = (e: Equipo) => indicadores(e).filter((i) => i.nivel !== "ok").length;
+
+function CalidadEnergia({ equipo }: { equipo: Equipo }) {
+  const ind = indicadores(equipo);
+  const peor: Semaforo = ind.some((i) => i.nivel === "bad") ? "bad" : ind.some((i) => i.nivel === "warn") ? "warn" : "ok";
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3" style={{ borderColor: `${SEM_COLOR[peor]}55`, background: `${SEM_COLOR[peor]}12` }}>
+        <span className="h-4 w-4 rounded-full" style={{ background: SEM_COLOR[peor], boxShadow: `0 0 12px ${SEM_COLOR[peor]}` }} />
+        <b className="text-slate-50">{peor === "ok" ? "Calidad de energía bien" : peor === "warn" ? "Hay indicadores para vigilar" : "Hay indicadores que atender"}</b>
+        <span className="text-sm text-slate-400">Calculado con la lectura directa del equipo (en vivo). El EBO no entrega estos datos bien.</span>
+      </div>
+      {!ind.length && <p className="text-sm text-slate-500">Este equipo no entrega variables de calidad todavía.</p>}
+      <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(260px,1fr))]">
+        {ind.map((i) => (
+          <div key={i.k} className="flex flex-col gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-slate-300">{i.label}</span>
+              <span className="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-bold" style={{ color: SEM_COLOR[i.nivel], background: `${SEM_COLOR[i.nivel]}1f` }}>
+                <span className="h-2 w-2 rounded-full" style={{ background: SEM_COLOR[i.nivel] }} />{SEM_TXT[i.nivel]}
+              </span>
+            </div>
+            <b className="mono text-xl text-slate-50">{i.valor}</b>
+            <small className="text-xs text-slate-500">{i.detalle}</small>
+            {i.nivel !== "ok" && <small className="text-xs text-amber-200/90">→ {i.consejo}</small>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Semaforo compacto de todos los equipos de la sede (solo donde hay lectura directa). */
+function CalidadSede({ equipos, onAbrir }: { equipos: Equipo[]; onAbrir: (e: Equipo) => void }) {
+  const filas = equipos.filter((e) => e.pilot && e.kind !== "gen").map((e) => ({ e, ind: indicadores(e) })).filter((x) => x.ind.length);
+  if (!filas.length) return null;
+  const cols = ["dv", "di", "fp", "thdv", "thdi", "pst", "carga"];
+  const nombres: Record<string, string> = { dv: "Desb. V", di: "Desb. I", fp: "FP", thdv: "THD V", thdi: "THD I", pst: "Flicker", carga: "Carga" };
+  return (
+    <section aria-label="Calidad de energía" className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="eyebrow">Calidad de energía · semáforo en vivo (lectura directa)</span>
+        <span className="flex gap-3 text-[11px] text-slate-400">{(["ok", "warn", "bad"] as Semaforo[]).map((s) => <span key={s} className="flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ background: SEM_COLOR[s] }} />{SEM_TXT[s]}</span>)}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-sm">
+          <thead><tr className="text-left text-[11px] uppercase tracking-wider text-slate-500"><th className="py-1.5 font-semibold">Equipo</th>{cols.map((c) => <th key={c} className="py-1.5 text-center font-semibold">{nombres[c]}</th>)}</tr></thead>
+          <tbody>
+            {filas.map(({ e, ind }) => (
+              <tr key={e.key} className="cursor-pointer border-t border-slate-800/80 hover:bg-slate-800/40" onClick={() => onAbrir(e)}>
+                <td className="py-1.5 font-semibold text-slate-200">{e.nombre}</td>
+                {cols.map((c) => {
+                  const i = ind.find((x) => x.k === c);
+                  return <td key={c} className="py-1.5 text-center" title={i ? `${i.label}: ${i.valor}` : "sin dato"}>{i ? <span className="mono inline-flex items-center gap-1 text-xs" style={{ color: SEM_COLOR[i.nivel] }}><span className="h-2.5 w-2.5 rounded-full" style={{ background: SEM_COLOR[i.nivel] }} />{i.valor}</span> : <span className="text-slate-700">—</span>}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/* ================= linea de tiempo de incidentes ================= */
+interface Incidente { id: string; inicio: number; fin: number; items: CentroVista["actividad"]; sedes: string[]; nivel: "critico" | "advertencia" | "info"; resuelto: boolean }
+
+function agruparIncidentes(actividad: CentroVista["actividad"]): Incidente[] {
+  const items = [...actividad].sort((a, b) => a.t.localeCompare(b.t));
+  const out: Incidente[] = [];
+  for (const a of items) {
+    const t = new Date(a.t).getTime();
+    const cur = out[out.length - 1];
+    if (!cur || t - cur.fin > 20 * 60_000) out.push({ id: a.id, inicio: t, fin: t, items: [a], sedes: [], nivel: "info", resuelto: true });
+    else { cur.items.push(a); cur.fin = t; }
+  }
+  for (const i of out) {
+    i.sedes = [...new Set(i.items.map((x) => x.sede))];
+    i.nivel = i.items.some((x) => x.tipo === "critico" || x.tipo === "sin_respuesta") ? "critico" : i.items.some((x) => x.tipo === "advertencia") ? "advertencia" : "info";
+    const ultimo = new Map<string, string>();
+    i.items.forEach((x) => ultimo.set(x.sede_id, x.tipo));
+    i.resuelto = [...ultimo.values()].every((t) => t === "ok" || t === "info");
+  }
+  // Un incidente que quedo abierto se cierra con la normalizacion posterior de esa sede (aunque
+  // llegue horas despues): asi se ve la duracion real y la normalizacion no queda como incidente aparte.
+  const absorbidos = new Set<string>();
+  for (const i of out) {
+    if (i.resuelto) continue;
+    const pendientes = new Set(i.items.filter((x) => x.tipo !== "ok" && x.tipo !== "info").map((x) => x.sede_id));
+    for (const sedeId of pendientes) {
+      const ok = items.find((x) => x.sede_id === sedeId && x.tipo === "ok" && new Date(x.t).getTime() > i.fin);
+      if (!ok) continue;
+      absorbidos.add(ok.id);
+      i.items.push(ok);
+      i.fin = Math.max(i.fin, new Date(ok.t).getTime());
+      pendientes.delete(sedeId);
+    }
+    i.resuelto = pendientes.size === 0;
+  }
+  return out.filter((i) => !(i.items.every((x) => absorbidos.has(x.id)))).reverse();
+}
+
+function Incidentes({ vista, onIr }: { vista: CentroVista; onIr: (sede: string) => void }) {
+  const inc = useMemo(() => agruparIncidentes(vista.actividad), [vista.actividad]);
+  const [abierto, setAbierto] = useState<string | null>(null);
+  const [tip, setTip] = useState<{ x: number; y: number; txt: string } | null>(null);
+  const fin = Date.now(), ini = fin - 7 * 86_400_000;
+  const sedes = vista.sedes;
+  const W2 = 1000, filaH = 26, top = 24, alto = top + sedes.length * filaH + 8;
+  const X = (t: number) => 120 + ((t - ini) / (fin - ini)) * (W2 - 130);
+  const col = (tipo: string) => (tipo === "ok" ? "#22c55e" : tipo === "advertencia" ? "#f59e0b" : tipo === "info" ? "#8ab8ff" : "#ef4444");
+  const dias = Array.from({ length: 8 }, (_, i) => ini + i * 86_400_000);
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="panel flex flex-col gap-2 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="eyebrow">Últimos 7 días · cada punto es un evento, cada franja un incidente</span>
+          <span className="text-[11px] text-slate-500">Pase el mouse sobre un punto · clic en el nombre abre la sede</span>
+        </div>
+        <div className="relative overflow-x-auto">
+          <svg viewBox={`0 0 ${W2} ${alto}`} className="min-w-[760px]" width="100%" role="img" aria-label="Eventos de las sedes en los últimos 7 días">
+            {dias.map((d, i) => (
+              <g key={i}>
+                <line x1={X(d)} x2={X(d)} y1={top - 6} y2={alto - 6} stroke="#16223a" />
+                <text x={X(d)} y={14} textAnchor="middle" fontSize="11" fill="#7b8aa3">{new Date(d).toLocaleDateString("es-GT", { weekday: "short", day: "2-digit" })}</text>
+              </g>
+            ))}
+            {inc.map((i) => (
+              <rect key={i.id} x={X(i.inicio) - 3} y={top - 4} width={Math.max(6, X(i.fin) - X(i.inicio) + 6)} height={sedes.length * filaH} rx="3" fill={i.nivel === "critico" ? "#ef4444" : i.nivel === "advertencia" ? "#f59e0b" : "#8ab8ff"} opacity={abierto === i.id ? 0.22 : 0.07} />
+            ))}
+            {sedes.map((s, r) => {
+              const y = top + r * filaH + filaH / 2;
+              return (
+                <g key={s.id}>
+                  <text x={8} y={y + 4} fontSize="12" fill="#cbd5e1" style={{ cursor: "pointer" }} onClick={() => onIr(s.id)}>{s.nombre}</text>
+                  <line x1={120} x2={W2 - 10} y1={y} y2={y} stroke="#111c30" />
+                  {vista.actividad.filter((a) => a.sede_id === s.id).map((a) => {
+                    const t = new Date(a.t).getTime();
+                    if (t < ini) return null;
+                    return (
+                      <circle key={a.id} cx={X(t)} cy={y} r="5" fill={col(a.tipo)} stroke="#0b1220" strokeWidth="1.5" style={{ cursor: "pointer" }}
+                        onMouseEnter={(e) => { const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect(); setTip({ x: e.clientX - box.left, y: e.clientY - box.top, txt: `${s.nombre} · ${a.titulo} · ${fechaHora(a.t)}` }); }}
+                        onMouseLeave={() => setTip(null)} />
+                    );
+                  })}
+                </g>
+              );
+            })}
+          </svg>
+          {tip && <div className="pointer-events-none absolute z-10 max-w-[320px] rounded-lg border border-slate-700 bg-slate-900/95 px-2.5 py-1.5 text-xs text-slate-100 shadow-xl" style={{ left: tip.x + 12, top: tip.y + 8 }}>{tip.txt}</div>}
+        </div>
+      </section>
+      <section className="panel flex flex-col gap-2 p-4">
+        <span className="eyebrow">Incidentes · eventos agrupados (lo que pasó junto)</span>
+        {!inc.length && <p className="text-sm text-emerald-300">Sin incidentes en los últimos 7 días.</p>}
+        {inc.map((i) => {
+          const c = i.nivel === "critico" ? "#ef4444" : i.nivel === "advertencia" ? "#f59e0b" : "#8ab8ff";
+          const dur = Math.round((i.fin - i.inicio) / 60_000);
+          return (
+            <div key={i.id} className="rounded-xl border border-slate-800 bg-slate-950/50" onMouseEnter={() => setAbierto(i.id)} onMouseLeave={() => setAbierto((a) => (a === i.id ? null : a))}>
+              <button type="button" onClick={() => setAbierto((a) => (a === `x${i.id}` ? null : `x${i.id}`))} aria-expanded={abierto === `x${i.id}`} className="grid w-full grid-cols-[6px_minmax(0,1fr)_auto] items-center gap-3 p-3 text-left">
+                <span className="h-10 w-1.5 rounded" style={{ background: c }} />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <b className="text-sm text-slate-100">{i.sedes.length > 1 ? `${i.sedes.length} sedes afectadas a la vez` : i.sedes[0]} · {i.items.length} evento{i.items.length > 1 ? "s" : ""}</b>
+                  <small className="text-xs text-slate-400">{fechaHora(new Date(i.inicio).toISOString())} · {dur ? `duró ${dur < 60 ? `${dur} min` : `${Math.floor(dur / 60)} h ${dur % 60} min`}` : "evento puntual"} · {i.sedes.join(", ")}</small>
+                </span>
+                <span className={`text-xs font-bold ${i.resuelto ? "text-emerald-300" : "text-rose-300"}`}>{i.resuelto ? "Resuelto" : "Abierto"}</span>
+              </button>
+              {abierto === `x${i.id}` && (
+                <div className="ml-6 flex flex-col border-l-2 border-slate-800 pb-3 pl-3">
+                  {i.items.map((a) => (
+                    <button key={a.id} type="button" onClick={() => onIr(a.sede_id)} className="flex items-center gap-2 py-1 text-left text-xs text-slate-300 hover:text-white">
+                      <span className="h-2 w-2 rounded-full" style={{ background: col(a.tipo) }} />
+                      <span className="mono text-slate-500">{new Date(a.t).toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" })}</span>
+                      <b>{a.sede}</b> · {a.titulo}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </section>
+    </div>
+  );
+}
+
+/* ================= ranking de sedes ================= */
+function Ranking({ vista, equipos, onIr }: { vista: CentroVista; equipos: Map<string, Equipo[]>; onIr: (sede: string) => void }) {
+  type K = "disp" | "eventos" | "criticos" | "linea" | "ms";
+  const [orden, setOrden] = useState<{ k: K; asc: boolean }>({ k: "disp", asc: true });
+  const filas = vista.sedes.map((s) => {
+    const h = s.historial.filter((x) => x.nivel != null);
+    const disp = h.length ? (h.filter((x) => x.nivel === "ok").length / h.length) * 100 : null;
+    const dias = Object.values(s.por_dia);
+    const lista = equipos.get(s.id) ?? [];
+    return { s, disp, eventos: dias.reduce((a, d) => a + d.total, 0), criticos: dias.reduce((a, d) => a + d.criticos, 0), linea: lista.length ? (lista.filter((e) => e.ok).length / lista.length) * 100 : 0, enTxt: `${lista.filter((e) => e.ok).length}/${lista.length}`, ms: s.latencia_ms };
+  });
+  const val = (f: (typeof filas)[number]) => (f[orden.k] ?? (orden.asc ? Infinity : -Infinity)) as number;
+  filas.sort((a, b) => (orden.asc ? val(a) - val(b) : val(b) - val(a)));
+  const maxEv = Math.max(1, ...filas.map((f) => f.eventos));
+  const th = (k: K, t: string) => (
+    <th className="py-2 text-left font-semibold">
+      <button type="button" onClick={() => setOrden((o) => ({ k, asc: o.k === k ? !o.asc : k === "disp" || k === "linea" }))} className="flex items-center gap-1 uppercase hover:text-slate-200" aria-sort={orden.k === k ? (orden.asc ? "ascending" : "descending") : "none"}>
+        {t}{orden.k === k ? (orden.asc ? " ↑" : " ↓") : ""}
+      </button>
+    </th>
+  );
+  return (
+    <section className="panel flex flex-col gap-2 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="eyebrow">Ranking de sedes · clic en una columna para ordenar</span>
+        <span className="text-[11px] text-slate-500">Disponibilidad = horas "operando" de las últimas 24 h · eventos de los últimos 7 días</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[820px] text-sm">
+          <thead className="text-[11px] tracking-wider text-slate-500">
+            <tr><th className="py-2 text-left font-semibold">#</th><th className="py-2 text-left font-semibold">SEDE</th>{th("disp", "Disponibilidad 24 h")}<th className="py-2 text-left font-semibold">ÚLTIMAS 24 H</th>{th("eventos", "Eventos 7 d")}{th("criticos", "Críticos")}{th("linea", "En línea")}{th("ms", "Respuesta")}</tr>
+          </thead>
+          <tbody>
+            {filas.map((f, i) => (
+              <tr key={f.s.id} className="cursor-pointer border-t border-slate-800/80 hover:bg-slate-800/40" onClick={() => onIr(f.s.id)}>
+                <td className="py-2 text-slate-500">{i + 1}</td>
+                <td className="py-2"><span className="flex items-center gap-2 font-semibold text-slate-100"><span className="h-2.5 w-2.5 rounded-full" style={{ background: COLOR[f.s.nivel] }} />{f.s.nombre}</span></td>
+                <td className="py-2"><span className="flex items-center gap-2"><span className="h-1.5 w-24 overflow-hidden rounded bg-slate-800"><span className="block h-full" style={{ width: `${f.disp ?? 0}%`, background: (f.disp ?? 0) >= 98 ? "#22c55e" : (f.disp ?? 0) >= 90 ? "#f59e0b" : "#ef4444" }} /></span><b className="mono text-slate-100">{f.disp == null ? "—" : `${f.disp.toFixed(0)} %`}</b></span></td>
+                <td className="py-2"><span className="flex h-4 gap-px">{f.s.historial.slice(-24).map((h) => <i key={h.hora} title={`${new Date(h.hora).toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" })}: ${h.nivel ? NIVEL_TXT[h.nivel] : "sin datos"}`} className="block w-1.5 rounded-sm" style={{ background: h.nivel ? COLOR[h.nivel] : "#1e293b" }} />)}</span></td>
+                <td className="py-2"><span className="flex items-center gap-2"><span className="h-1.5 w-16 overflow-hidden rounded bg-slate-800"><span className="block h-full bg-sky-500" style={{ width: `${(f.eventos / maxEv) * 100}%` }} /></span><b className="mono text-slate-200">{f.eventos}</b></span></td>
+                <td className={`mono py-2 font-bold ${f.criticos ? "text-rose-300" : "text-slate-400"}`}>{f.criticos}</td>
+                <td className="mono py-2 text-slate-200">{f.enTxt}</td>
+                <td className="mono py-2 text-slate-300">{f.ms != null ? `${f.ms} ms` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/* ================= modo sala de control ================= */
+function SalaControl({ vista, equipos, onSalir }: { vista: CentroVista; equipos: Map<string, Equipo[]>; onSalir: () => void }) {
+  const conProblema = vista.sedes.filter((s) => s.nivel !== "ok");
+  const ronda = conProblema.length ? conProblema : vista.sedes;
+  const [i, setI] = useState(0);
+  const [pausa, setPausa] = useState(false);
+  const [tick, setTick] = useState(0);
+  const SEG = 12;
+  useEffect(() => {
+    const el = document.documentElement;
+    if (el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {});
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onSalir();
+      if (e.key === "ArrowRight") { setI((x) => x + 1); setTick(0); }
+      if (e.key === "ArrowLeft") { setI((x) => x - 1 + ronda.length); setTick(0); }
+      if (e.key === " ") setPausa((p) => !p);
+    };
+    document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("keydown", k); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (pausa) return;
+    const t = setInterval(() => setTick((x) => { if (x + 1 >= SEG) { setI((y) => y + 1); return 0; } return x + 1; }), 1000);
+    return () => clearInterval(t);
+  }, [pausa]);
+  const sede = ronda[((i % ronda.length) + ronda.length) % ronda.length];
+  const [ahora, setAhora] = useState(new Date());
+  useEffect(() => { const t = setInterval(() => setAhora(new Date()), 1000); return () => clearInterval(t); }, []);
+  return (
+    <div className="cm fixed inset-0 z-[80] flex flex-col gap-4 overflow-y-auto bg-[#070c16] p-5">
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-col">
+          <span className="eyebrow">Sala de control · Energía IGSS</span>
+          <strong className="text-2xl text-slate-50">{sede?.nombre}</strong>
+        </div>
+        <span className="text-sm text-slate-400">{conProblema.length ? `Recorriendo ${conProblema.length} sede(s) con problema` : "Todo en orden: recorriendo las 10 sedes"} · cambia cada {SEG} s</span>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="mono text-xl text-slate-100">{ahora.toLocaleTimeString("es-GT")}</span>
+          <button type="button" onClick={() => { setI((x) => x - 1 + ronda.length); setTick(0); }} className="h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 text-slate-200" aria-label="Sede anterior">◀</button>
+          <button type="button" onClick={() => setPausa((p) => !p)} className="h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm font-bold text-slate-200">{pausa ? "Reanudar" : "Pausar"}</button>
+          <button type="button" onClick={() => { setI((x) => x + 1); setTick(0); }} className="h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 text-slate-200" aria-label="Sede siguiente">▶</button>
+          <button type="button" onClick={onSalir} className="h-10 rounded-lg bg-sky-600 px-4 text-sm font-bold text-white">Salir (Esc)</button>
+        </div>
+      </div>
+      <div className="h-1 overflow-hidden rounded bg-slate-800"><div className="h-full bg-sky-500 transition-[width] duration-1000 ease-linear" style={{ width: `${(tick / SEG) * 100}%` }} /></div>
+      <div className="flex flex-wrap gap-2">
+        {vista.sedes.map((s) => (
+          <button key={s.id} type="button" onClick={() => { setI(Math.max(0, ronda.indexOf(s))); setTick(0); }} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${s.id === sede?.id ? "border-sky-500 bg-sky-950 text-white" : "border-slate-800 bg-slate-900 text-slate-300"}`}>
+            <span className={`h-2.5 w-2.5 rounded-full ${s.nivel !== "ok" ? "latido" : ""}`} style={{ background: COLOR[s.nivel] }} />{s.nombre}
+          </button>
+        ))}
+      </div>
+      {sede && <SedeVista sede={sede} equipos={equipos.get(sede.id) ?? []} filtro="todos" setFiltro={() => {}} onAbrir={() => {}} />}
+    </div>
+  );
+}

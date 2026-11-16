@@ -36,6 +36,9 @@ export class AuthService {
     if (!passwordOk) {
       throw new UnauthorizedException("Credenciales invalidas");
     }
+    if (!user.active) {
+      throw new UnauthorizedException("Usuario inactivo: pida al administrador que lo active");
+    }
 
     return { id: user.id, username: user.username, role: user.role, authType: "user" };
   }
@@ -72,6 +75,7 @@ export class AuthService {
   async login(username: string, password: string): Promise<TokenPair> {
     const user = await this.validateCredentials(username, password);
     const tokens = await this.issueTokenPair(user);
+    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     await this.eventLog.log({
       type: "auth.login",
       message: `Usuario ${user.username} inicio sesion`,
@@ -100,6 +104,9 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) {
       throw new UnauthorizedException("Usuario no encontrado");
+    }
+    if (!user.active) {
+      throw new UnauthorizedException("Usuario inactivo");
     }
 
     const authenticatedUser: AuthenticatedUser = {

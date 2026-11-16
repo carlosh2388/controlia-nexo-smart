@@ -52,16 +52,36 @@ func TestDecodePm2130ABCDAndFallbackCDAB(t *testing.T) {
 	}
 }
 
-func TestDecodeGeneratorInt32CDABScaled(t *testing.T) {
+// Registros crudos reales del EBO de Escuintla (5705-5742) con el generador en espera: el AS-P
+// mostraba bateria 26.50 V, refrigerante 15.80 °C y PF 16.26; su servidor Modbus los publica como
+// enteros sin escala, con la palabra baja primero (CDAB).
+func TestDecodeGeneratorIntegersFromEbo(t *testing.T) {
+	p := profiles["generator"]
+	regs := make([]uint16, p.Length)
+	regs[16] = 16 // 5721 power_factor_metering
+	regs[30] = 14 // 5735 coolant_temp_metering
+	regs[34] = 26 // 5739 battery_voltage_metering
+	got := decode(p, regs)
+	for k, w := range map[string]float64{"battery_voltage_metering": 26, "coolant_temp_metering": 14, "power_factor_metering": 16, "fuel_level_metering": 0} {
+		if got[k] != w {
+			t.Errorf("%s = %v, se esperaba %v", k, got[k], w)
+		}
+	}
+	if !p.Validate(got) {
+		t.Errorf("un generador en espera con bateria deberia validar")
+	}
+}
+
+func TestDecodeGeneratorInt32CDAB(t *testing.T) {
 	p := profiles["generator"]
 	regs := make([]uint16, p.Length)
 	set32 := func(index int, v int32) { regs[index*2], regs[index*2+1] = i32Regs(v, true) }
-	set32(17, 2720)  // battery_voltage_metering = 27.20 V
-	set32(18, 8600)  // fuel_level_metering = 86.00 %
-	set32(15, -150)  // coolant_temp_metering = -1.5 °C (int32 negativo)
-	regs[10*2] = 6000 // gen_frequency_metering uint16 = 60.00 Hz
+	set32(17, 27)   // battery_voltage_metering = 27 V
+	set32(18, 86)   // fuel_level_metering = 86 %
+	set32(15, -2)   // coolant_temp_metering = -2 °C (int32 negativo)
+	regs[10*2] = 60 // gen_frequency_metering uint16 = 60 Hz
 	got := decode(p, regs)
-	for k, w := range map[string]float64{"battery_voltage_metering": 27.2, "fuel_level_metering": 86, "coolant_temp_metering": -1.5, "gen_frequency_metering": 60} {
+	for k, w := range map[string]float64{"battery_voltage_metering": 27, "fuel_level_metering": 86, "coolant_temp_metering": -2, "gen_frequency_metering": 60} {
 		if math.Abs(got[k]-w) > 0.005 {
 			t.Errorf("%s = %v, se esperaba %v", k, got[k], w)
 		}

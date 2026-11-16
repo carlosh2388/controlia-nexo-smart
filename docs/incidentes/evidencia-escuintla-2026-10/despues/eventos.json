@@ -1,0 +1,1 @@
+{"origen":"base de datos","total":1,"eventos":[{"codigo":"ESC-20261015-145514-2bf9","sede":"Escuintla","evento":"API_REINICIADA","severidad":"info","dispositivo":null,"inventario":null,"inicio":"2026-10-15T14:55:14.447Z","fin":"2026-10-15T14:55:14.447Z","duracion_s":0,"detalle":{"mensaje":"La API arrancó."},"notificado_en":null,"cierre_notificado_en":null}]}

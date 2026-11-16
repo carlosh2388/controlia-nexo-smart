@@ -1,0 +1,6 @@
+mié 14 oct 2026 18:53:01 UTC
+CONTAINER ID   IMAGE                      COMMAND                  CREATED        STATUS                    PORTS                                                                                                                                                                                                NAMES
+5a515db65db2   node-postgres-docker_api   "docker-entrypoint.s…"   5 months ago   Up 37 hours               0.0.0.0:502->502/tcp, [::]:502->502/tcp, 0.0.0.0:502->502/udp, [::]:502->502/udp, 0.0.0.0:3000-3001->3000-3001/tcp, 0.0.0.0:47808->47808/udp, [::]:3000-3001->3000-3001/tcp, [::]:47808->47808/udp   node-api
+022f1af53b8f   postgres:16                "docker-entrypoint.s…"   5 months ago   Exited (0) 5 months ago                                                                                                                                                                                                        postgres-db
+Filesystem                         Size  Used Avail Use% Mounted on
+/dev/mapper/ubuntu--vg-ubuntu--lv   73G   58G   12G  84% /

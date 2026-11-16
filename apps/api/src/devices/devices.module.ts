@@ -13,6 +13,8 @@ import { AdaptersModule } from "../adapters/adapters.module";
 import { AuthModule } from "../auth/auth.module";
 import { EventsModule } from "../events/events.module";
 import { SiteEventsModule } from "../site-events/site-events.module";
+import { AgentsModule } from "../agents/agents.module";
+import { TimeseriesModule } from "../timeseries/timeseries.module";
 
 @Module({
   imports: [
@@ -21,6 +23,8 @@ import { SiteEventsModule } from "../site-events/site-events.module";
     AuthModule,
     EventsModule,
     SiteEventsModule,
+    AgentsModule,
+    TimeseriesModule,
   ],
   controllers: [DevicesController],
   providers: [

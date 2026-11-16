@@ -1,7 +1,21 @@
 # Base de Datos
 
-Motor: PostgreSQL 16  
+Motor: PostgreSQL 16 + TimescaleDB 2.31 (imagen propia `docker/postgres/Dockerfile`)  
 ORM: Prisma
+
+## TimescaleDB (piloto Gravix, Fase A)
+
+- La imagen parte de la misma `postgres:16` Debian de antes, para reutilizar el volumen
+  `postgres_data` sin restaurar. TimescaleDB se instala del repositorio de Timescale: el paquete del
+  repositorio de PostgreSQL es solo la parte "apache" y no permite compresion ni politicas.
+- `shared_preload_libraries=timescaledb` se pasa en `command` de `docker-compose.yml`.
+- `readings`: hypertable (particiones de 1 dia) con una fila por equipo, variable y hora; llave
+  `(deviceId, metric, time)`; columna `quality` (real / recuperada / estimada). Se comprime sola a
+  los 7 dias. La llena `TimeseriesService` con cada sync de los equipos Modbus de los Agente_Go.
+- `reading_gaps`: huecos (equipo sin lecturas nuevas por mas de 45 s) que abre y cierra
+  `GapDetectorService`, con su causa.
+- Consultas: `GET /pilot/:buildingKey/devices`, `/pilot/devices/:id/series`, `/pilot/devices/:id/gaps`
+  (pestaña Piloto Gravix).
 
 ## Modelo Principal
 

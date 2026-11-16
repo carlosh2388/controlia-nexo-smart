@@ -11,7 +11,10 @@ import (
 //   - ION7400 y PM2130: float32, orden ABCD con respaldo CDAB si el valor sale 0/invalido;
 //   - THD y flicker del ION7400: el EBO los entrega con escala variable, se elige la escala que
 //     cae en un rango razonable (pickIon7400ByUnit en el original);
-//   - generador: int32/uint32 en orden CDAB (respaldo ABCD) y uint16, con escala 0.01.
+//   - generador: int32/uint32 en orden CDAB (respaldo ABCD) y uint16. El EBO republica cada punto
+//     del controlador (registros 4770-4806 de su cliente Modbus) como entero ya en unidades reales,
+//     sin decimales: verificado contra la vista del AS-P (bateria 26.50 V -> crudo 26, PF 16.26 ->
+//     16), por eso la escala es 1 y no el 0.01 que suponia api-SIASA.
 // Las claves de las metricas son las mismas que usa api-SIASA, para no romper nada que ya las lea.
 
 type fieldType int
@@ -201,25 +204,25 @@ var profiles = map[string]profile{
 		Name: "generator", Model: "generator", Category: "generator",
 		Length: 38,
 		Fields: []field{
-			genField("gen_kva_a_metering", "kVA", typeInt32, 0.01, 0),
-			genField("gen_kva_b_metering", "kVA", typeInt32, 0.01, 1),
-			genField("gen_kva_c_metering", "kVA", typeInt32, 0.01, 2),
-			genField("gen_kva_total_metering", "kVA", typeInt32, 0.01, 3),
-			genField("gen_kw_a_metering", "kW", typeInt32, 0.01, 4),
-			genField("gen_kw_b_metering", "kW", typeInt32, 0.01, 5),
-			genField("gen_kw_c_metering", "kW", typeInt32, 0.01, 6),
-			genField("gen_kw_total_metering", "kW", typeInt32, 0.01, 7),
-			genField("power_factor_metering", "pf", typeUint16, 0.01, 8),
+			genField("gen_kva_a_metering", "kVA", typeInt32, 1, 0),
+			genField("gen_kva_b_metering", "kVA", typeInt32, 1, 1),
+			genField("gen_kva_c_metering", "kVA", typeInt32, 1, 2),
+			genField("gen_kva_total_metering", "kVA", typeInt32, 1, 3),
+			genField("gen_kw_a_metering", "kW", typeInt32, 1, 4),
+			genField("gen_kw_b_metering", "kW", typeInt32, 1, 5),
+			genField("gen_kw_c_metering", "kW", typeInt32, 1, 6),
+			genField("gen_kw_total_metering", "kW", typeInt32, 1, 7),
+			genField("power_factor_metering", "pf", typeUint16, 1, 8),
 			genField("gen_pf_lagging", "state", typeInt32, 1, 9),
-			genField("gen_frequency_metering", "Hz", typeUint16, 0.01, 10),
-			genField("bus_frequency_metering", "Hz", typeUint16, 0.01, 11),
+			genField("gen_frequency_metering", "Hz", typeUint16, 1, 10),
+			genField("bus_frequency_metering", "Hz", typeUint16, 1, 11),
 			genField("active_speed_source", "state", typeUint32, 1, 12),
 			genField("engine_speed_metering", "RPM", typeUint32, 1, 13),
-			genField("engine_load_metering", "%", typeInt32, 0.01, 14),
-			genField("coolant_temp_metering", "°C", typeInt32, 0.01, 15),
-			genField("oil_pressure_metering", "psi", typeInt32, 0.01, 16),
-			genField("battery_voltage_metering", "V", typeInt32, 0.01, 17),
-			genField("fuel_level_metering", "%", typeInt32, 0.01, 18),
+			genField("engine_load_metering", "%", typeInt32, 1, 14),
+			genField("coolant_temp_metering", "°C", typeInt32, 1, 15),
+			genField("oil_pressure_metering", "psi", typeInt32, 1, 16),
+			genField("battery_voltage_metering", "V", typeInt32, 1, 17),
+			genField("fuel_level_metering", "%", typeInt32, 1, 18),
 		},
 		Validate: validGenerator,
 	},

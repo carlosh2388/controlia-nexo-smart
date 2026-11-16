@@ -50,7 +50,7 @@ export function useDeviceSocket() {
           scheduleRefresh();
         }
       } catch {
-        // mensaje no reconocido, se ignora
+      // mensaje no reconocido, se ignora
       }
     };
 

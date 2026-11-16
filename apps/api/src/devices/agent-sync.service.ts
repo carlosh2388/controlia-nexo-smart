@@ -4,6 +4,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { EventLogService } from "../events/event-log.service";
 import { AgentSyncDto } from "./dto/agent-sync.dto";
 import { SiteEventsService } from "../site-events/site-events.service";
+import { AgentsService } from "../agents/agents.service";
+import { TimeseriesService } from "../timeseries/timeseries.service";
 
 export interface AgentMetadata {
   buildingKey: string;
@@ -34,6 +36,8 @@ export class AgentSyncService {
     private readonly prisma: PrismaService,
     private readonly eventLog: EventLogService,
     private readonly siteEvents: SiteEventsService,
+    private readonly agents: AgentsService,
+    private readonly timeseries: TimeseriesService,
   ) {}
 
   async sync(dto: AgentSyncDto) {
@@ -45,6 +49,8 @@ export class AgentSyncService {
     // que es distinto de "cuantos dispositivos nuevos crea" (un edificio ya totalmente importado
     // puede autodescubrir 30 dispositivos reales y crear 0 filas nuevas - eso no es una falla).
     const byProtocol: Record<string, number> = {};
+    const receivedAt = new Date();
+    this.timeseries.agentSeen(dto.buildingKey, receivedAt);
 
     for (const item of dto.devices) {
       byProtocol[item.protocol] = (byProtocol[item.protocol] ?? 0) + 1;
@@ -72,6 +78,7 @@ export class AgentSyncService {
 
       if (existing) {
         await this.applyState(existing.id, item);
+        await this.timeseries.recordSnapshot(dto.buildingKey, existing.id, item, receivedAt);
 
         // Si el dispositivo se creo antes de que el source supiera reportar topics (o con otra
         // version del agente), completarlos ahora: pasa de "solo lectura" a controlable sin
@@ -130,12 +137,15 @@ export class AgentSyncService {
           },
         });
         await this.applyState(device.id, item);
+        await this.timeseries.recordSnapshot(dto.buildingKey, device.id, item, receivedAt);
         created += 1;
       }
     }
 
     // Despues de los dispositivos, para que los eventos de un equipo recien creado ya encuentren su deviceId.
     const eventsRecorded = await this.siteEvents.record(dto.buildingKey, dto.events ?? []);
+    // Tambien despues: la lectura en vivo de este mismo lote ya cerro el hueco que estas rellenan.
+    const backlogRecorded = await this.recordBacklog(dto, receivedAt);
 
     await this.eventLog.log({
       type: "agent.sync",
@@ -163,7 +173,31 @@ export class AgentSyncService {
       byProtocol,
       eventsReceived: dto.events?.length ?? 0,
       eventsRecorded,
+      backlogReceived: dto.backlog?.length ?? 0,
+      backlogRecorded,
     };
+  }
+
+  /** Lecturas atrasadas (backlog del agente 0.5+) agrupadas por equipo de este agente. */
+  private async recordBacklog(dto: AgentSyncDto, receivedAt: Date) {
+    if (!dto.backlog?.length) return 0;
+    const devices = await this.prisma.device.findMany({
+      where: { protocol: "modbus", metadata: { path: ["agent", "buildingKey"], equals: dto.buildingKey } },
+      select: { id: true, metadata: true },
+    });
+    const byExternal = new Map(
+      devices.map((d) => [(d.metadata as { agent?: { externalId?: string } } | null)?.agent?.externalId ?? "", d.id]),
+    );
+    const groups = new Map<string, typeof dto.backlog>();
+    for (const b of dto.backlog) {
+      const id = byExternal.get(b.externalId);
+      if (!id) continue;
+      groups.set(id, [...(groups.get(id) ?? []), b]);
+    }
+    let rows = 0;
+    for (const [deviceId, entries] of groups) rows += await this.timeseries.recordBacklog(deviceId, entries, receivedAt);
+    this.logger.log(`agent-sync buildingKey=${dto.buildingKey} backlog=${dto.backlog.length} lecturas atrasadas, ${rows} valores guardados`);
+    return rows;
   }
 
   /**
@@ -171,24 +205,8 @@ export class AgentSyncService {
    * "agent.sync" de cada uno. Es lo que alimenta el panel "Actividad del agente" en el frontend:
    * responde "esta funcionando de verdad" aunque no haya creado ningun dispositivo nuevo.
    */
-  async getStatus() {
-    const recent = await this.prisma.eventLog.findMany({
-      where: { type: "agent.sync" },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    });
-
-    const latestByBuilding = new Map<string, (typeof recent)[number]>();
-    for (const entry of recent) {
-      const buildingKey = (entry.payload as Record<string, unknown> | null)?.buildingKey as string | undefined;
-      if (!buildingKey || latestByBuilding.has(buildingKey)) continue;
-      latestByBuilding.set(buildingKey, entry);
-    }
-
-    return [...latestByBuilding.entries()].map(([buildingKey, entry]) => ({
-      buildingKey,
-      ...(entry.payload as Record<string, unknown>),
-    }));
+  getStatus() {
+    return this.agents.latestSyncs();
   }
 
   /**

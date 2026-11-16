@@ -1,0 +1,1 @@
+-rw-r----- 1 root root 36717837514 oct 14 18:59 /var/lib/docker/containers/5a515db65db201762585b5aa0061ee870fb5e94a9ee93d4f4176b736d4a0dc17/5a515db65db201762585b5aa0061ee870fb5e94a9ee93d4f4176b736d4a0dc17-json.log

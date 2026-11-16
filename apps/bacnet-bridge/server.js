@@ -49,6 +49,33 @@ function whoIs(host, useBroadcast = false) {
   });
 }
 
+// Descubrimiento para el Agente_Go (Agente Go > Configuracion > Buscar dispositivos): manda un
+// Who-Is unicast a cada IP y junta los I-Am que lleguen en timeoutMs. Solo lectura: Who-Is no
+// cambia nada en el equipo. Con broadcast: true manda ademas uno a BACNET_BROADCAST_ADDRESS y
+// acepta respuestas de cualquier IP.
+function whoIsMany(hosts, { timeoutMs = 4000, broadcast = false } = {}) {
+  return new Promise((resolve) => {
+    const wanted = new Set(hosts);
+    const found = new Map();
+    const onIAm = (device) => {
+      if (!broadcast && !wanted.has(device.address)) return;
+      found.set(`${device.address}:${device.deviceId}`, {
+        address: device.address,
+        deviceId: device.deviceId,
+        vendorId: device.vendorId ?? null,
+        maxApdu: device.maxApdu ?? null,
+      });
+    };
+    client.on("iAm", onIAm);
+    for (const host of hosts) client.whoIs({ address: host });
+    if (broadcast) client.whoIs();
+    setTimeout(() => {
+      client.removeListener("iAm", onIAm);
+      resolve([...found.values()]);
+    }, timeoutMs);
+  });
+}
+
 function readProp(host, obj, propId) {
   return new Promise((resolve, reject) => {
     client.readProperty(host, obj, propId, (err, value) => {
@@ -276,6 +303,13 @@ const server = http.createServer(async (req, res) => {
     if (req.url === "/discover" && req.method === "POST") {
       const result = await discover(body.host);
       return send(200, result);
+    }
+
+    if (req.url === "/who-is" && req.method === "POST") {
+      const hosts = Array.isArray(body.hosts) ? body.hosts.slice(0, 1024) : [];
+      const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || 4000, 1000), 15000);
+      const devices = await serialize(() => whoIsMany(hosts, { timeoutMs, broadcast: !!body.broadcast }));
+      return send(200, { devices });
     }
 
     if (req.url === "/read" && req.method === "POST") {

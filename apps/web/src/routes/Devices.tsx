@@ -18,7 +18,8 @@ import ImportHomeAssistant from "./ImportHomeAssistant";
 import ImportMqtt from "./ImportMqtt";
 import ImportBacnet from "./ImportBacnet";
 import BuildingView from "./BuildingView";
-import AgentDevices from "./AgentDevices";
+import Equipos from "./Equipos";
+import Gravix from "./Gravix";
 import Sedes from "./Sedes";
 import ClimateControlPanel from "../components/ClimateControlPanel";
 import Automations from "./Automations";
@@ -43,6 +44,26 @@ import {
 } from "../components/icons";
 import { ToastContainer, useToasts } from "../components/Toast";
 import GlobalActivityIndicator from "../components/GlobalActivityIndicator";
+import { ROLE_LABEL, TAB_DEFS, useAccess } from "../api/access";
+import CentroMando from "./CentroMando";
+import Usuarios from "./Usuarios";
+
+type View = "centro" | "classic" | "building" | "automations" | "equipos" | "sedes" | "gravix" | "usuarios";
+/**
+ * Clave de pestaña (permisos en la API) -> vista de esta pantalla. "Agente Go" y "Configuración"
+ * ahora son una sola pestaña "Equipos": se ve si el perfil tiene cualquiera de las dos.
+ */
+const TAB_TO_VIEW: Record<string, View> = {
+  centro: "centro",
+  operativa: "classic",
+  edificio: "building",
+  gestion: "automations",
+  sedes: "sedes",
+  agente: "equipos",
+  config: "equipos",
+  gravix: "gravix",
+  usuarios: "usuarios",
+};
 
 function ActionButton({
   onClick,
@@ -312,8 +333,13 @@ export default function Devices() {
   const [search, setSearch] = useState("");
   const [showHiddenPanel, setShowHiddenPanel] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<DeviceKindId>>(new Set());
-  const [view, setView] = useState<"classic" | "building" | "automations" | "agent" | "sedes">("classic");
+  const [viewSel, setView] = useState<View | null>(null);
   const { toasts, push } = useToasts();
+  // Menu por perfil: pestañas que el perfil puede ver y la pantalla con la que abre (Centro de mando).
+  const access = useAccess();
+  const allowed = useMemo(() => new Set((access.data?.tabs ?? []).map((t) => TAB_TO_VIEW[t]).filter(Boolean)), [access.data]);
+  const homeView: View = TAB_TO_VIEW[access.data?.homeTab ?? "centro"] ?? "centro";
+  const view: View = viewSel && allowed.has(viewSel) ? viewSel : homeView;
 
   useDeviceSocket();
 
@@ -480,7 +506,7 @@ export default function Devices() {
               <LiveClock />
             </div>
             <span className="hidden text-sm text-slate-400 lg:inline">
-              {user?.username} &middot; <span className="text-slate-500">{user?.role}</span>
+              {user?.username} &middot; <span className="text-slate-500">{ROLE_LABEL[access.data?.role ?? user?.role ?? ""] ?? user?.role}</span>
             </span>
             <button
               onClick={handleLogout}
@@ -496,78 +522,79 @@ export default function Devices() {
 
       <main
         className={`mx-auto p-6 transition-[max-width] duration-300 ${
-          view === "building" ? "max-w-[1920px]" : view === "sedes" ? "max-w-[1360px]" : "max-w-6xl"
+          view === "building" || view === "gravix" || view === "centro" ? "max-w-[1920px]" : view === "sedes" || view === "usuarios" || view === "equipos" ? "max-w-[1360px]" : "max-w-6xl"
         }`}
       >
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-sky-400">
               <BuildingIcon className="h-3.5 w-3.5" />
-              {view === "sedes"
+              {view === "centro"
+                ? "Red IGSS · Centro de mando"
+                : view === "usuarios"
+                  ? "Administración"
+                  : view === "sedes"
                 ? "IGSS · Sedes"
-                : `Edificio ${BUILDING_CONTEXT.building}${view === "building" ? " · Vista de edificio" : ` · ${BUILDING_CONTEXT.level}`}`}
+                : view === "equipos"
+                  ? "Agentes Go · Equipos"
+                  : view === "gravix"
+                    ? "IGSS Escuintla · Piloto Gravix"
+                    : `Edificio ${BUILDING_CONTEXT.building}${view === "building" ? " · Vista de edificio" : ` · ${BUILDING_CONTEXT.level}`}`}
             </p>
-            <h1 className="text-xl font-semibold text-slate-50">{view === "sedes" ? "Monitoreo de sedes" : "Panel de dispositivos"}</h1>
+            <h1 className="text-xl font-semibold text-slate-50">
+              {view === "centro"
+                ? "Energía IGSS"
+                : view === "usuarios"
+                  ? "Usuarios y permisos"
+                  : view === "sedes"
+                ? "Monitoreo de sedes"
+                : view === "equipos"
+                  ? "Gestión de equipos"
+                  : view === "gravix"
+                    ? "Calidad de energía"
+                    : "Panel de dispositivos"}
+            </h1>
             {view === "classic" && (
               <p className="text-sm text-slate-500">
                 {totalVisible} visible(s){hidden.length > 0 ? ` · ${hidden.length} oculto(s)` : ""}
               </p>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex gap-1 rounded-lg border border-slate-800 bg-slate-900 p-1">
-              <button
-                onClick={() => setView("classic")}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  view === "classic" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                Vista Operativa
-              </button>
-              <button
-                onClick={() => setView("building")}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  view === "building" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                Vista de Edificio
-              </button>
-              <button
-                onClick={() => setView("automations")}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  view === "automations" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                Gestión Inteligente
-              </button>
-              <button
-                onClick={() => setView("sedes")}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  view === "sedes" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                Sedes
-              </button>
-              <button
-                onClick={() => setView("agent")}
-                className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  view === "agent" ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                Agente Go
-                {agentPendingCount > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-slate-950">
-                    {agentPendingCount}
-                  </span>
-                )}
-              </button>
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
+            {/* En celular las pestañas pasan a dos lineas en vez de desbordar la pagina. */}
+            <div className="flex max-w-full flex-wrap gap-1 rounded-lg border border-slate-800 bg-slate-900 p-1">
+              {TAB_DEFS.filter((t, i) => allowed.has(TAB_TO_VIEW[t.key]) && TAB_DEFS.findIndex((o) => TAB_TO_VIEW[o.key] === TAB_TO_VIEW[t.key]) === i).map((t) => {
+                const v = TAB_TO_VIEW[t.key];
+                return (
+                  <button
+                    key={t.key}
+                    onClick={() => setView(v)}
+                    aria-current={view === v ? "page" : undefined}
+                    className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                      view === v ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {v === "equipos" ? "Equipos" : t.label}
+                    {v === "equipos" && agentPendingCount > 0 && (
+                      <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-slate-950">
+                        {agentPendingCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
+        {access.isLoading && <p className="py-10 text-center text-sm text-slate-500">Cargando permisos…</p>}
+        {access.isError && <p className="py-10 text-center text-sm text-rose-300">No se pudieron cargar los permisos del usuario. Vuelva a iniciar sesión.</p>}
+        {view === "centro" && access.data && <CentroMando access={access.data} />}
+        {view === "usuarios" && <Usuarios />}
         {view === "automations" && <Automations />}
-        {view === "agent" && <AgentDevices />}
+        {view === "equipos" && <Equipos />}
         {view === "sedes" && <Sedes />}
+        {view === "gravix" && <Gravix onOpenConfig={() => setView("equipos")} />}
 
         {view === "classic" && (
         <>

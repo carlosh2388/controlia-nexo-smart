@@ -20,7 +20,7 @@ import {
 import SedeTrendModal from "../components/sedes/SedeTrendModal";
 import SiteEventsPanel from "../components/sedes/SiteEventsPanel";
 import { useSiteEvents } from "../api/siteEvents";
-import { demoDevices, demoEvents, fmt, isDoorOpen, num, str, type SedeDevice, type SedeKind, toSedeDevices } from "../utils/sedes";
+import { coldChainChannels, demoDevices, demoEvents, doorCode, doorsByCode, fmt, isDoorOpen, num, str, type SedeDevice, type SedeKind, toSedeDevices, wiseGroup } from "../utils/sedes";
 
 /**
  * Pestaña Sedes (diseño final aprobado): energia de la sede por Modbus (generadores, ION7400,
@@ -32,7 +32,7 @@ import { demoDevices, demoEvents, fmt, isDoorOpen, num, str, type SedeDevice, ty
 
 type View = "energia" | "lora" | "eventos";
 type EnergyFilter = "all" | "gen" | "ion" | "pm";
-type LoraFilter = "all" | "door" | "env" | "wise" | "air" | "lora";
+type LoraFilter = "all" | "door" | "env" | "wise" | "pump" | "heat" | "air" | "lora";
 
 const TICK_MS = 2500;
 
@@ -145,6 +145,14 @@ export default function Sedes() {
   const radios = byKind("radio");
   const energy = [...gens, ...ions, ...pms];
   const lora = [...doors, ...envs, ...wises, ...airs, ...others, ...radios];
+  // El mismo WISE se usa para cadena de frio, bombeo de agua o calderas/calentadores (segun sus canales).
+  const pumps = wises.filter((d) => wiseGroup(d) === "pump");
+  const heaters = wises.filter((d) => wiseGroup(d) === "heating");
+  const coldWises = wises.filter((d) => !pumps.includes(d) && !heaters.includes(d));
+  // Puertas de refrigeradores/congeladores: van dentro de su equipo (mismo codigo, ej. HES010).
+  const doorMap = useMemo(() => doorsByCode(doors), [doors]);
+  const coldCodes = new Set(coldWises.flatMap((d) => coldChainChannels(d).map((c) => c.code.toUpperCase()).filter(Boolean)));
+  const looseDoors = doors.filter((d) => !coldCodes.has(doorCode(d)));
 
   const status = agentStatus?.find((s) => s.buildingKey === site.buildingKey);
   const sources = ions.map(ionSource).filter(Boolean);
@@ -419,9 +427,11 @@ export default function Sedes() {
                     {(
                       [
                         ["all", "Todos", lora.length],
-                        ["door", "Puertas · LEO S595", doors.length],
+                        ["door", "Puertas · LEO S595", looseDoors.length],
                         ["env", "Temp/Hum · EVA", envs.length],
-                        ["wise", "Cadena de frío · WISE", wises.length],
+                        ["wise", "Cadena de frío", coldWises.length],
+                        ["pump", "Bombeo de agua", pumps.length],
+                        ["heat", "Calderas y calentadores", heaters.length],
                         ["air", "Calidad de aire · LEO S592", airs.length],
                         ...(others.length + radios.length ? [["lora", "Otros / por radio", others.length + radios.length] as const] : []),
                       ] as const
@@ -451,11 +461,11 @@ export default function Sedes() {
                       <RadioTable devices={radios} onTrend={(x) => setTrendId(x.id)} />
                     </section>
                   )}
-                  {(loraFilter === "all" || loraFilter === "door") && doors.length > 0 && (
+                  {(loraFilter === "all" || loraFilter === "door") && looseDoors.length > 0 && (
                     <section aria-label="Puertas" className="flex flex-col gap-3">
-                      <SectionTitle title="Puertas · LEO S595" hint="Sensor magnético: abierta / cerrada, batería y sabotaje" />
+                      <SectionTitle title="Puertas · LEO S595" hint="Puertas sin equipo de cadena de frío asociado. Las de refrigeradores y congeladores se ven dentro de su equipo" />
                       <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2.5">
-                        {doors.map((d) => (
+                        {looseDoors.map((d) => (
                           <DoorTile key={d.id} d={d} onTrend={(x) => setTrendId(x.id)} />
                         ))}
                       </div>
@@ -471,11 +481,34 @@ export default function Sedes() {
                       </div>
                     </section>
                   )}
-                  {(loraFilter === "all" || loraFilter === "wise") && wises.length > 0 && (
-                    <section aria-label="Entradas analógicas WISE" className="flex flex-col gap-3">
-                      <SectionTitle title="Cadena de frío · WISE S617 / S614T" hint="Refrigeradores y congeladores: °C convertidos por el Agente Go desde 4–20 mA, con su rango permitido" />
-                      <div className={`grid gap-3 ${loraGrid}`}>
-                        {wises.map((d) => (
+                  {(loraFilter === "all" || loraFilter === "wise") && coldWises.length > 0 && (
+                    <section aria-label="Cadena de frío" className="flex flex-col gap-3">
+                      <SectionTitle
+                        title="Cadena de frío · WISE + puertas LEO S595"
+                        hint="Cada refrigerador y congelador con su temperatura, su rango permitido y sus puertas (mismo código de equipo): la puerta se abre en el dibujo cuando el sensor la reporta abierta"
+                      />
+                      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(340px,100%),1fr))] items-start gap-3">
+                        {coldWises.map((d) => (
+                          <WiseCard key={d.id} d={d} doors={doorMap} onTrend={(x) => setTrendId(x.id)} />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                  {(loraFilter === "all" || loraFilter === "pump") && pumps.length > 0 && (
+                    <section aria-label="Bombeo de agua" className="flex flex-col gap-3">
+                      <SectionTitle title="Bombeo de agua · WISE" hint="Presión de línea en PSI (4–20 mA convertido por el Agente Go); la franja verde es el rango permitido" />
+                      <div className={`grid items-start gap-3 ${loraGrid}`}>
+                        {pumps.map((d) => (
+                          <WiseCard key={d.id} d={d} onTrend={(x) => setTrendId(x.id)} />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                  {(loraFilter === "all" || loraFilter === "heat") && heaters.length > 0 && (
+                    <section aria-label="Calderas y calentadores" className="flex flex-col gap-3">
+                      <SectionTitle title="Calderas y calentadores · WISE" hint="Temperatura del agua en °C (4–20 mA convertido por el Agente Go); la franja verde es el rango permitido" />
+                      <div className={`grid items-start gap-3 ${loraGrid}`}>
+                        {heaters.map((d) => (
                           <WiseCard key={d.id} d={d} onTrend={(x) => setTrendId(x.id)} />
                         ))}
                       </div>

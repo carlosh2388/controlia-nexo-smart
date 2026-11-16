@@ -17,6 +17,11 @@ api:
 # Cada cuantos segundos se reenvia el snapshot completo conocido a la API (heartbeat + resync).
 syncIntervalSeconds: 30
 
+# Desde la version 0.5.0 los protocolos de abajo se editan en la web (pestaña Configuracion) y el
+# agente los aplica sin reiniciar. Este archivo solo los aporta la primera vez (se suben como v1)
+# o si la API no responde y no hay copia en dataDir. false = usar solo este archivo.
+# remoteConfig: true
+
 mqtt:
   enabled: true
   # URL del broker MQTT de ESTE edificio (Zigbee2MQTT u otro puente compatible).

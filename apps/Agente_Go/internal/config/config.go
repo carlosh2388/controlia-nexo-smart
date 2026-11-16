@@ -1,10 +1,15 @@
 // Package config carga config.yaml: un archivo por edificio, con las credenciales de la API
 // central y que fuentes de protocolo estan habilitadas en esa red.
+//
+// Las secciones de protocolo (Protocols) tambien pueden venir de la API: se editan en la web
+// (Agente Go > Configuracion) y el agente las aplica sin reiniciar. Ver internal/agent/remote.go.
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -19,13 +24,12 @@ type Config struct {
 
 	API APIConfig `yaml:"api"`
 
-	// Cada driver de protocolo es opcional; el agente arranca solo los que tengan enabled: true.
-	MQTT    *MQTTConfig    `yaml:"mqtt"`
-	LoRaWAN *LoRaWANConfig `yaml:"lorawan"`
-	BACnet  *BACnetConfig  `yaml:"bacnet"`
-	Modbus  *ModbusConfig  `yaml:"modbus"`
-	// Receptor directo de gateways LoRa (protocolo Semtech UDP, puerto 1700): sin ChirpStack.
-	LoRaGateway *LoRaGatewayConfig `yaml:"loraGateway"`
+	// Default true: los protocolos se toman de la configuracion remota (la API), y las secciones
+	// de este archivo solo se usan la primera vez (se suben como version 1) o si la API no responde
+	// y no hay copia guardada en dataDir. false = solo este archivo, como antes.
+	RemoteConfig *bool `yaml:"remoteConfig"`
+
+	Protocols `yaml:",inline"`
 
 	// Carpeta donde el agente guarda eventos pendientes de enviar y el estado de las alarmas
 	// (sobrevive reinicios y caidas de la API). Default "./data".
@@ -37,6 +41,25 @@ type Config struct {
 	// "cada cuanto se detectan cambios": eso es inmediato via MQTT/BACnet; esto es el
 	// intervalo del resync completo, que sirve tambien como heartbeat).
 	SyncIntervalSeconds int `yaml:"syncIntervalSeconds"`
+}
+
+func (c *Config) RemoteEnabled() bool { return c.RemoteConfig == nil || *c.RemoteConfig }
+
+// Protocols son las fuentes que escucha el agente. Cada una es opcional; se arrancan solo las que
+// tengan enabled: true.
+type Protocols struct {
+	MQTT    *MQTTConfig    `yaml:"mqtt,omitempty"`
+	LoRaWAN *LoRaWANConfig `yaml:"lorawan,omitempty"`
+	BACnet  *BACnetConfig  `yaml:"bacnet,omitempty"`
+	// Un solo servidor Modbus: el formato original de config.yaml. Normalize lo mueve a ModbusServers.
+	Modbus *ModbusConfig `yaml:"modbus,omitempty"`
+	// Uno o mas servidores Modbus TCP (ej. el EBO de la sede y un controlador de generador aparte).
+	ModbusServers []ModbusConfig `yaml:"modbusServers,omitempty"`
+	// Receptor directo de gateways LoRa (protocolo Semtech UDP, puerto 1700): sin ChirpStack.
+	LoRaGateway *LoRaGatewayConfig `yaml:"loraGateway,omitempty"`
+	// Rangos de IP donde la web busca equipos (Buscar dispositivos en la red). El agente no lo usa
+	// para leer; se guarda aca solo para que viaje junto con el resto de la config.
+	Discovery map[string]interface{} `yaml:"discovery,omitempty"`
 }
 
 type APIConfig struct {
@@ -166,7 +189,8 @@ type ModbusConfig struct {
 type ModbusDevice struct {
 	// Nombre estable, ej. "ANALIZADOR-1". Es parte del externalId: no lo cambies despues.
 	Name string `yaml:"name"`
-	// "ion7400" | "ion7400-b" | "pm2130" | "generator" (ver modbussource/profiles.go).
+	// Via AS-P: "ion7400" | "ion7400-b" | "pm2130" | "generator" (modbussource/profiles.go).
+	// Directo al medidor: "ion7400-directo" | "pm2130-directo" (modbussource/direct.go); "start" no se usa.
 	Profile string `yaml:"profile"`
 	// Registro inicial en numeracion del EBO (1-based: el registro 101 es la direccion Modbus 100).
 	Start int `yaml:"start"`
@@ -213,13 +237,39 @@ func Load(path string) (*Config, error) {
 	if cfg.Events.MaxPending <= 0 {
 		cfg.Events.MaxPending = 20000
 	}
-	if cfg.MQTT != nil && cfg.MQTT.BaseTopic == "" {
-		cfg.MQTT.BaseTopic = "zigbee2mqtt"
+	if err := cfg.Protocols.Normalize(); err != nil {
+		return nil, err
 	}
-	if cfg.BACnet != nil && cfg.BACnet.PollIntervalSeconds <= 0 {
-		cfg.BACnet.PollIntervalSeconds = 15
+
+	return &cfg, nil
+}
+
+// Normalize completa defaults y valida. Se usa igual para config.yaml y para la config remota.
+func (p *Protocols) Normalize() error {
+	if p.Modbus != nil {
+		p.ModbusServers = append([]ModbusConfig{*p.Modbus}, p.ModbusServers...)
+		p.Modbus = nil
 	}
-	if g := cfg.LoRaGateway; g != nil {
+	if p.MQTT != nil {
+		if p.MQTT.BaseTopic == "" {
+			p.MQTT.BaseTopic = "zigbee2mqtt"
+		}
+		if p.MQTT.Enabled && p.MQTT.BrokerURL == "" {
+			return fmt.Errorf("mqtt.brokerUrl es obligatorio")
+		}
+	}
+	if p.LoRaWAN != nil && p.LoRaWAN.Enabled && p.LoRaWAN.BrokerURL == "" {
+		return fmt.Errorf("lorawan.brokerUrl es obligatorio")
+	}
+	if b := p.BACnet; b != nil {
+		if b.PollIntervalSeconds <= 0 {
+			b.PollIntervalSeconds = 15
+		}
+		if b.Enabled && b.BridgeURL == "" {
+			return fmt.Errorf("bacnet.bridgeUrl es obligatorio")
+		}
+	}
+	if g := p.LoRaGateway; g != nil {
 		if g.Listen == "" {
 			g.Listen = ":1700"
 		}
@@ -230,7 +280,8 @@ func Load(path string) (*Config, error) {
 			g.MaxRadioDevices = 300
 		}
 	}
-	if m := cfg.Modbus; m != nil {
+	for i := range p.ModbusServers {
+		m := &p.ModbusServers[i]
 		if m.Port <= 0 {
 			m.Port = 502
 		}
@@ -252,9 +303,48 @@ func Load(path string) (*Config, error) {
 			m.Name = m.Host
 		}
 		if m.Enabled && m.Host == "" {
-			return nil, fmt.Errorf("modbus.host es obligatorio")
+			return fmt.Errorf("modbusServers[%d].host es obligatorio", i)
 		}
 	}
+	return nil
+}
 
-	return &cfg, nil
+// ProtocolsFromJSON lee la config remota (JSON con las mismas claves que config.yaml). Pasa por
+// YAML a proposito: asi los nombres de campo son exactamente los tags yaml de este archivo, sin
+// mantener un segundo juego de tags json.
+func ProtocolsFromJSON(data []byte) (Protocols, error) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return Protocols{}, fmt.Errorf("config remota invalida: %w", err)
+	}
+	y, err := yaml.Marshal(raw)
+	if err != nil {
+		return Protocols{}, err
+	}
+	var p Protocols
+	dec := yaml.NewDecoder(strings.NewReader(string(y)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&p); err != nil {
+		return Protocols{}, fmt.Errorf("config remota invalida: %w", err)
+	}
+	if err := p.Normalize(); err != nil {
+		return Protocols{}, err
+	}
+	return p, nil
+}
+
+// ToJSON es la inversa de ProtocolsFromJSON (para subir config.yaml como version 1).
+func (p Protocols) ToJSON() ([]byte, error) {
+	y, err := yaml.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(y, &raw); err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		raw = map[string]interface{}{}
+	}
+	return json.Marshal(raw)
 }

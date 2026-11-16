@@ -1,0 +1,39 @@
+2026-09-30T00:41:10.031934024Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-09-30T01:20:30.031746888Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-09-30T05:22:50.027021613Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-09-30T07:57:00.082715877Z Error consultando WISE DI: socket hang up
+2026-09-30T09:26:40.031446861Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-09-30T11:49:50.032742254Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-09-30T18:33:03.946650225Z Error actualizando snapshot modbus-auto-v2: Port Not Open
+2026-09-30T18:33:03.946671972Z Error actualizando snapshot modbus-auto-v2: Port Not Open
+2026-09-30T18:33:03.946674673Z Error actualizando snapshot modbus-auto-v2: Port Not Open
+2026-09-30T21:06:50.027222748Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-09-30T21:38:28.761928873Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-09-30T21:48:20.052960542Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T01:10:40.030329001Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T03:10:00.032787721Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T06:35:58.942127852Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T06:50:20.060438294Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T07:52:20.080610725Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T07:53:58.970069682Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T08:38:10.029629782Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T10:31:40.024446516Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T12:49:10.028284783Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T17:37:50.029499594Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T18:03:00.026069173Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-01T18:36:00.084830081Z Error consultando WISE DI: socket hang up
+2026-10-01T23:53:10.029548757Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T00:01:00.112889896Z Error consultando WISE DI: socket hang up
+2026-10-02T01:45:10.029201932Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T02:07:10.031092914Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T03:07:50.022861887Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T08:17:50.028276836Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T08:57:20.041915035Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T09:35:00.029622856Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T09:35:22.319771032Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T15:26:40.028242680Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T15:45:50.028760004Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T15:46:40.031679554Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T21:29:00.031811402Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T22:37:20.044852103Z Error consultando WISE DI: timeout of 20000ms exceeded
+2026-10-02T23:09:40.032042043Z Error consultando WISE DI: timeout of 20000ms exceeded

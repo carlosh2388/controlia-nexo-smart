@@ -11,6 +11,8 @@ ControlIA Nexo Smart es una plataforma IoT para controlar, visualizar y automati
 - [Frontend](./frontend.md)
 - [Automatizaciones](./automations.md)
 - [Operaciones](./operations.md)
+- [Piloto Gravix: arquitectura y bitácora](./piloto-gravix.md)
+- Procedimientos paso a paso: [Agente Go](./procedimientos/agente-go.md), [Integrar sede IGSS](./procedimientos/sede-igss.md), [Eventos de sede](./procedimientos/eventos-sede.md)
 
 ## Resumen Tecnico
 
@@ -20,7 +22,7 @@ ControlIA Nexo Smart es una plataforma IoT para controlar, visualizar y automati
 | API | NestJS 10, Fastify, Prisma, JWT | Autenticacion, dispositivos, areas, reglas, comandos |
 | Tiempo real | WebSocket `ws` | Notifica cambios de estado al frontend |
 | Cola | BullMQ + Redis | Despacho asincrono de comandos |
-| Datos | PostgreSQL 16 | Usuarios, dispositivos, estados, reglas, areas |
+| Datos | PostgreSQL 16 + TimescaleDB 2.31 | Usuarios, dispositivos, estados, reglas, areas; historial de energia (`readings`) y huecos |
 | Broker | Mosquitto MQTT | Mensajeria de dispositivos MQTT/Zigbee2MQTT |
 | Runtime | Docker Compose | Ejecucion local/servidor |
 

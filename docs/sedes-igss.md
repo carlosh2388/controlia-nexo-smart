@@ -5,7 +5,7 @@ vigilante del ATS) por **Modbus TCP** y sensores **LoRaWAN** (puertas, calidad d
 frio) por **MQTT** desde ChirpStack. Todo lo recolecta un **Agente Go** por sede, que ademas detecta
 **eventos** en tiempo real; la API los guarda como historial y la web los muestra en la pestaña **Sedes**.
 
-Skills para trabajar con esto (Claude Code): `agente-go`, `sede-igss`, `eventos-sede` (en `.claude/skills/`).
+Procedimientos paso a paso: `docs/procedimientos/` (`agente-go.md`, `sede-igss.md`, `eventos-sede.md`).
 
 ## 1. Flujo de datos
 
@@ -70,17 +70,34 @@ Config: `apps/Agente_Go/config.igss-escuintla.example.yaml`. Perfiles: `apps/Age
 | Generadores | 5705-5742, 5743-5780 | `generator` | engine_speed, engine_load, fuel_level, coolant_temp, oil_pressure, battery_voltage, gen_kw/kva, frecuencias |
 
 Reglas de decodificacion: registro N = direccion Modbus N-1; float32 ABCD con respaldo CDAB si da
-0/invalido; THD y flicker con escala autodetectada; generador int32 CDAB ×0.01. Un bloque que no
+0/invalido; THD y flicker con escala autodetectada; generador int32 CDAB **×1** (enteros ya en
+unidades reales, ver "Generadores" abajo). Un bloque que no
 pasa la validacion de su perfil (ej. todo en cero) no se reporta: eso es el "autodescubrimiento"
 posible en Modbus (el protocolo no permite preguntar "que equipos hay").
 
-### Generadores (estado al 2026-10-08)
+### Generadores (actualizado 2026-10-12)
 
-Escaneo de solo lectura de todo el EBO de Escuintla (registros 1-12000): el espacio valido termina
-en 5787 y **los bloques de generador estan practicamente vacios**: "Generador Módulos" todo en 0;
-"Generador Planta Hospital" solo 3 registros con valor (bateria = 27 crudo → 0.27 V con la escala
-×0.01 del sistema anterior). Ademas, el `.env` de produccion de `api-SIASA` en Escuintla leia solo
-hasta el registro 697, asi que el sistema anterior **nunca leyo los generadores**.
+El AS-P lee el controlador del generador como **cliente Modbus** (vista "Variables Generador 1",
+registros 4770-4806 del controlador) y republica esos 19 puntos en su propio **servidor Modbus**,
+uno a uno y en el mismo orden: 4770 → 5705, 4772 → 5707, ... 4806 → 5741. Los publica como
+**enteros ya en unidades reales, sin decimales**. Comparado contra la vista del AS-P el mismo dia:
+
+| Punto del AS-P | Valor en el AS-P | Registro servidor | Crudo |
+|---|---|---|---|
+| Battery Voltage Metering | 26.50 V | 5739 | 26 |
+| Coolant Temp. Metering | 15.80 °C | 5735 | 14 |
+| Power Factor Metering | 16.26 | 5721 | 16 |
+| Las otras 16 | 0.00 (generador en espera) | — | 0 |
+
+Por eso el perfil `generator` usa escala ×1. La escala ×0.01 que traia `api-SIASA` era una
+suposicion: el `.env` de produccion de `api-SIASA` en Escuintla leia solo hasta el registro 697,
+asi que el sistema anterior **nunca leyo los generadores**. Consecuencias:
+
+- Se pierden los decimales (26.50 V llega como 26). Para recuperarlos: configurar los puntos del
+  servidor Modbus del EBO como float32 o con escala ×100, o leer el controlador directo por su IP.
+- `Fuel Level Metering` vale 0.00 tambien en el AS-P, asi que el agente emite `generator.fuel_low`
+  (critico). Hay que confirmar en sitio si el sensor de nivel esta conectado.
+- "Generador Módulos" (5743-5780) sigue todo en 0: el EBO no publica datos de ese controlador.
 
 Lo que si es real en el EBO: el **vigilante del ATS** (estado comercial/generador y contadores: al
 2026-10-08 ANALIZADOR-1 registra 28 transferencias a generador). Con eso el agente ya genera los

@@ -6,12 +6,14 @@ package reporter
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"agente-go/internal/backlog"
 	"agente-go/internal/discovery"
 	"agente-go/internal/events"
 )
@@ -32,6 +34,8 @@ type SyncResult struct {
 	EventsReceived  int `json:"eventsReceived"`
 	// Nuevos guardados; los reenviados que la API ya tenia no cuentan (idempotente por id).
 	EventsRecorded int `json:"eventsRecorded"`
+	// Valores de lecturas atrasadas guardados (los que la API ya tenia no cuentan).
+	BacklogRecorded int `json:"backlogRecorded"`
 }
 
 type syncRequest struct {
@@ -39,6 +43,22 @@ type syncRequest struct {
 	AgentVersion string             `json:"agentVersion,omitempty"`
 	Devices      []discovery.Device `json:"devices"`
 	Events       []events.Event     `json:"events,omitempty"`
+	Backlog      []backlog.Entry    `json:"backlog,omitempty"`
+}
+
+// HTTPError es una respuesta de la API con codigo de error. Un 4xx significa que la API rechazo el
+// contenido (reintentarlo igual no sirve); un error de red o un 5xx si vale la pena reintentar.
+type HTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("la API respondio %d: %s", e.Status, e.Body) }
+
+// Rejected indica si la API rechazo el lote por su contenido (4xx).
+func Rejected(err error) bool {
+	var h *HTTPError
+	return errors.As(err, &h) && h.Status >= 400 && h.Status < 500
 }
 
 func New(baseURL, apiKey string) *Client {
@@ -50,7 +70,16 @@ func New(baseURL, apiKey string) *Client {
 }
 
 func (c *Client) Sync(buildingKey, agentVersion string, devices []discovery.Device, evs []events.Event) (*SyncResult, error) {
-	body, err := json.Marshal(syncRequest{BuildingKey: buildingKey, AgentVersion: agentVersion, Devices: devices, Events: evs})
+	return c.send(syncRequest{BuildingKey: buildingKey, AgentVersion: agentVersion, Devices: devices, Events: evs})
+}
+
+// SendBacklog reenvia lecturas atrasadas (guardadas en disco mientras la API no respondia).
+func (c *Client) SendBacklog(buildingKey, agentVersion string, entries []backlog.Entry) (*SyncResult, error) {
+	return c.send(syncRequest{BuildingKey: buildingKey, AgentVersion: agentVersion, Devices: []discovery.Device{}, Backlog: entries})
+}
+
+func (c *Client) send(payload syncRequest) (*SyncResult, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo serializar el lote: %w", err)
 	}
@@ -71,7 +100,7 @@ func (c *Client) Sync(buildingKey, agentVersion string, devices []discovery.Devi
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("la API respondio %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil, &HTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(respBody))}
 	}
 
 	var result SyncResult

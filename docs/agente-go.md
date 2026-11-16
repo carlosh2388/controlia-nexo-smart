@@ -1,5 +1,9 @@
 # Agente_Go
 
+> **Manual de operacion completo y actualizado** (que corre hoy, donde, como configurarlo,
+> eventos, operacion en el servidor y problemas conocidos): [`agentes-go-manual.md`](./agentes-go-manual.md).
+> Este documento queda como historial de diseño y decisiones.
+
 Agente en Go, uno por edificio, que corre en el servidor local de ese edificio y escucha los
 protocolos IoT presentes en su red - **MQTT/Zigbee2MQTT, LoRaWAN (ChirpStack) y BACnet/IP ya
 funcionan y estan probados contra infraestructura real**; HTTP por fabricante (Shelly, Tasmota...)
@@ -266,7 +270,8 @@ siendo Fase 3.
   por modelo (`ion7400`, `ion7400-b`, `pm2130`, `generator` en `modbussource/profiles.go`) copiado
   del lector que ya funciona en produccion (`api-SIASA/modbus_cliente/lectura_Ebo_v2.js`): registro
   N = direccion N-1, float32 ABCD con respaldo CDAB, THD/flicker con escala autodetectada, generador
-  int32 CDAB ×0.01. Cliente Modbus propio (funciones 03/04 solamente): **el agente no puede escribir**.
+  int32 CDAB ×1 (corregido 2026-10-12, ver `docs/sedes-igss.md`). Cliente Modbus propio (funciones
+  03/04 solamente): **el agente no puede escribir**.
 - **Autodescubrimiento**: Modbus no permite preguntar "que equipos hay". Cada ciclo el agente lee
   todos los bloques configurados y solo reporta los que traen datos validos para su perfil; un
   equipo ya visto que deja de responder pasa a `offline`.
@@ -281,9 +286,8 @@ siendo Fase 3.
 - **Verificado en vivo (2026-10-08)**, desde una PC en la red, contra el EBO y ChirpStack reales:
   14/15 equipos Modbus con datos coherentes (≈125 V, 59.96 Hz, cargas reales por fase, S1 comercial = 1)
   y 88 sensores LoRaWAN en los primeros minutos. **Pendiente de revisar en sitio**: el bloque del
-  "Generador Módulos" (5743-5779) esta todo en 0 en el EBO, y el de "Generador Planta Hospital" solo
-  tiene 3 registros distintos de 0 (bateria = 27 crudo, que con la escala ×0.01 de api-SIASA da
-  0.27 V) - el controlador del generador probablemente no esta publicando sus datos al EBO.
+  "Generador Módulos" (5743-5779) esta todo en 0 en el EBO. El de "Generador Planta Hospital" si
+  trae datos: son enteros sin escala (bateria 26 = 26.50 V en el AS-P), corregido el 2026-10-12.
 
 ### Por que BACnet no habla el protocolo directo en Go
 

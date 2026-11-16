@@ -278,6 +278,346 @@ export function WiseArt({ active }: { active: boolean[] }) {
   );
 }
 
+const FRIDGE_TONE = { ok: "#7CF0B4", warn: "#FF8A5C", fault: "#FFC979" } as const;
+
+/**
+ * Refrigerador / congelador de cadena de frio. Las puertas (1 o 2, una por sensor LEO S595 con el
+ * mismo codigo de equipo) se abren en el dibujo cuando su sensor reporta "abierta": se ve el
+ * interior iluminado con sus repisas. El display de la puerta muestra la temperatura del WISE.
+ */
+export function FridgeArt({
+  variant,
+  open,
+  lcd,
+  tone,
+  label,
+  lifted = false,
+}: {
+  /** Resaltado en 3D: se dibujan el costado y el techo del gabinete (volumen). */
+  lifted?: boolean;
+  variant: "fridge" | "freezer";
+  /** Un elemento por puerta; si no hay sensor de puerta, [false]. */
+  open: boolean[];
+  lcd: string;
+  tone: keyof typeof FRIDGE_TONE;
+  label: string;
+}) {
+  const two = open.length >= 2;
+  const anyOpen = open.some(Boolean);
+  const body = variant === "freezer" ? ["#E3EEF7", "#A9BED2"] : ["#F1F4F7", "#C3CBD4"];
+  const gid = `fr-${variant}`;
+  const door = (x: number, w: number, isOpen: boolean, right: boolean, k: number) => (
+    <g key={k} className={isOpen ? "sd-open" : undefined}>
+      <g className={right ? "sd-fdoor-r" : "sd-fdoor-l"}>
+        <rect x={x} y="13" width={w} height="60" rx="1.5" fill={`url(#${gid}-door)`} stroke="#9AA6B3" strokeWidth="0.6" />
+        <rect x={right ? x + 2.2 : x + w - 4.2} y="30" width="2" height="16" rx="1" fill="#7D8896" />
+      </g>
+    </g>
+  );
+  return (
+    <svg width="58" height="78" viewBox="0 0 64 84" role="img" aria-label={label} className="shrink-0">
+      <defs>
+        <linearGradient id={`${gid}-body`} x1="0" x2="1">
+          <stop offset="0" stopColor={body[0]} />
+          <stop offset="1" stopColor={body[1]} />
+        </linearGradient>
+        <linearGradient id={`${gid}-door`} x1="0" x2="1">
+          <stop offset="0" stopColor={body[0]} />
+          <stop offset="0.85" stopColor={body[1]} />
+          <stop offset="1" stopColor="#9DA8B4" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="32" cy="80" rx="24" ry="2.6" fill="#05090D" opacity={lifted ? 0 : 0.6} className="sd-fade" />
+      {/* volumen 3D: costado derecho y techo, solo cuando el equipo esta resaltado */}
+      <g className="sd-fade" style={{ opacity: lifted ? 1 : 0 }}>
+        <path d="M56 4 L62.5 1 L62.5 73.5 L56 77 Z" fill={variant === "freezer" ? "#7F98AF" : "#9AA5B1"} stroke="#6B7684" strokeWidth="0.6" />
+        <path d="M8 4 L14.5 1 L62.5 1 L56 4 Z" fill={variant === "freezer" ? "#F4FAFF" : "#FFFFFF"} stroke="#8C96A3" strokeWidth="0.6" />
+        <path d="M58 20 L61.5 18.3 M58 40 L61.5 38.3 M58 60 L61.5 58.3" stroke="#6B7684" strokeWidth="0.6" />
+      </g>
+      <rect x="6" y="3" width="52" height="74" rx="4" fill={`url(#${gid}-body)`} stroke="#7F8B98" />
+      {/* interior: oscuro cerrado, iluminado al abrir */}
+      <rect x="9" y="13" width="46" height="60" rx="1.5" fill="#0C1620" />
+      <rect x="9" y="13" width="46" height="60" rx="1.5" fill="#DCF2FF" className="sd-fade" style={{ opacity: anyOpen ? 1 : 0 }} />
+      {[28, 43, 58].map((y) => (
+        <line key={y} x1="10" x2="54" y1={y} y2={y} stroke={anyOpen ? "#8FB3CC" : "#1E2A36"} strokeWidth="1.2" />
+      ))}
+      {/* insumos en las repisas (se ven solo con la puerta abierta) */}
+      <g className="sd-fade" style={{ opacity: anyOpen ? 0.9 : 0 }}>
+        {(
+          [
+            [12, 21, 7, "#E05D5D"],
+            [19, 23, 5, "#5B9BFF"],
+            [25, 22, 6, "#E05D5D"],
+            [35, 37, 6, "#F2A33A"],
+            [42, 38, 5, "#4CC38A"],
+            [48, 36, 7, "#5B9BFF"],
+            [14, 52, 6, "#A99BFF"],
+            [21, 53, 5, "#F2A33A"],
+            [40, 51, 7, "#E05D5D"],
+          ] as const
+        ).map(([x, y, h, c], i) => (
+          <rect key={i} x={x} y={y} width="4.5" height={h} rx="1" fill={c} />
+        ))}
+      </g>
+      {two ? [door(9, 23, open[0], false, 0), door(32, 23, open[1], true, 1)] : door(9, 46, open[0], false, 0)}
+      {/* panel superior con display */}
+      <rect x="9" y="5.5" width="46" height="6" rx="1.2" fill="#141C25" />
+      <text x="29" y="10.4" textAnchor="middle" fontSize="5.2" className="sd-lcd" fill={FRIDGE_TONE[tone]}>
+        {lcd}
+      </text>
+      <circle className={tone === "ok" && !anyOpen ? "sd-blink" : undefined} cx="51.5" cy="8.5" r="1.3" fill={anyOpen || tone !== "ok" ? "#FFB547" : "#4CC38A"} />
+      {variant === "freezer" && (
+        <path d="M14 18v6M11.4 19.5l5.2 3M16.6 19.5l-5.2 3" stroke="#5B9BFF" strokeWidth="0.9" strokeLinecap="round" opacity={anyOpen ? 0 : 0.9} />
+      )}
+      <rect x="10" y="77" width="5" height="3" rx="1" fill="#4A5563" />
+      <rect x="49" y="77" width="5" height="3" rx="1" fill="#4A5563" />
+    </svg>
+  );
+}
+
+/**
+ * Dial de aguja (manometro / termometro de proceso) para canales 4-20 mA que no son cadena de frio.
+ * Escala = rango del transmisor segun su formula (valor a 4 y a 20 mA); franja verde = rango permitido.
+ */
+export function DialGauge({
+  value,
+  scaleMin,
+  scaleMax,
+  lo,
+  hi,
+  unit,
+  fault,
+  accent,
+  label,
+}: {
+  value: number | null;
+  scaleMin: number;
+  scaleMax: number;
+  lo: number | null;
+  hi: number | null;
+  unit: string;
+  fault: boolean;
+  accent: string;
+  label: string;
+}) {
+  const cx = 70;
+  const cy = 60;
+  const r = 47;
+  const A0 = 150;
+  const SPAN = 240;
+  const span = scaleMax - scaleMin || 1;
+  const ang = (v: number) => A0 + (Math.max(0, Math.min(1, (v - scaleMin) / span)) * SPAN);
+  const pt = (a: number, rr = r) => [cx + rr * Math.cos((a * Math.PI) / 180), cy + rr * Math.sin((a * Math.PI) / 180)] as const;
+  const arc = (a1: number, a2: number, rr = r) => {
+    const [x1, y1] = pt(a1, rr);
+    const [x2, y2] = pt(a2, rr);
+    return `M${x1.toFixed(2)} ${y1.toFixed(2)} A${rr} ${rr} 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+  };
+  const out = !fault && value != null && ((lo != null && value < lo) || (hi != null && value > hi));
+  const needleAngle = fault || value == null ? A0 : ang(value);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => scaleMin + f * span);
+  const color = fault ? "#FFC979" : out ? "#FF8A5C" : "#E6EDF3";
+  return (
+    <svg width="150" height="128" viewBox="0 0 140 120" role="img" aria-label={label} className="shrink-0">
+      <circle cx={cx} cy={cy} r={r + 9} fill="#0B1117" stroke="#2A3746" strokeWidth="1.5" />
+      <circle cx={cx} cy={cy} r={r + 5} fill="none" stroke="#18222D" strokeWidth="1" />
+      <path d={arc(A0, A0 + SPAN)} fill="none" stroke="#1E2A36" strokeWidth="7" strokeLinecap="round" />
+      {lo != null && hi != null && hi > lo && (
+        <path d={arc(ang(lo), ang(hi))} fill="none" stroke="#2E9E62" strokeWidth="7" opacity="0.85" />
+      )}
+      {ticks.map((t, i) => {
+        const a = ang(t);
+        const [x1, y1] = pt(a, r - 6);
+        const [x2, y2] = pt(a, r - 12);
+        const [tx, ty] = pt(a, r - 21);
+        return (
+          <g key={i}>
+            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#5A6B7C" strokeWidth="1.4" />
+            <text x={tx} y={ty + 2.5} textAnchor="middle" fontSize="7" fill="#7D8FA1" className="sd-num">
+              {Math.round(t)}
+            </text>
+          </g>
+        );
+      })}
+      <g style={{ transform: `rotate(${needleAngle}deg)`, transformOrigin: `${cx}px ${cy}px` }} className="sd-needle">
+        <path d={`M${cx - 6} ${cy - 2} L${cx + r - 8} ${cy} L${cx - 6} ${cy + 2} Z`} fill={fault ? "#5A6B7C" : accent} />
+      </g>
+      <circle cx={cx} cy={cy} r="5" fill="#1B2633" stroke={fault ? "#5A6B7C" : accent} strokeWidth="1.5" />
+      <rect x={cx - 26} y={cy + 23} width="52" height="25" rx="5" fill="#141C25" stroke="#22303E" />
+      <text x={cx} y={cy + 37.5} textAnchor="middle" fontSize={fault ? 9 : 13} fontWeight="600" className="sd-num" fill={color}>
+        {fault ? "Sin señal" : value == null ? "—" : value.toFixed(1)}
+      </text>
+      {!fault && (
+        <text x={cx} y={cy + 45.5} textAnchor="middle" fontSize="6.5" fill="#93A4B5">
+          {unit}
+        </text>
+      )}
+    </svg>
+  );
+}
+
+/**
+ * Milesight LEO S592 (calidad de aire) dibujado como el equipo real: carcasa blanca cuadrada y
+ * pantalla de tinta electronica con fecha/hora, CO2 con su grafica 200-1500 ppm, carita de confort,
+ * PM2.5/PM10, temperatura y humedad; abajo el sensor de luz, el boton y el LED. Cuando cambia el
+ * CO2 la pantalla hace el "refresco" tipico del e-ink. Con lifted se dibujan costado y techo (3D).
+ */
+export function Leo592Art({
+  co2,
+  temperature,
+  humidity,
+  pm25,
+  pm10,
+  bars,
+  alert,
+  lifted = false,
+  label,
+}: {
+  co2: number | null;
+  temperature: number | null;
+  humidity: number | null;
+  pm25: number | null;
+  pm10: number | null;
+  /** Historial de CO2 (ppm), el mas reciente al final. */
+  bars: number[];
+  alert: boolean;
+  lifted?: boolean;
+  label: string;
+}) {
+  const ink = "#1E2226";
+  const now = new Date();
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  const date = `${p2(now.getMonth() + 1)}/${p2(now.getDate())}/${now.getFullYear()}`;
+  const face = co2 == null ? "neutral" : alert ? "sad" : co2 > 1000 ? "neutral" : "happy";
+  const SLOTS = 34;
+  const shown = bars.slice(-SLOTS);
+  const yOf = (v: number) => 104 - (Math.max(0, Math.min(1, (v - 200) / 1300)) * 32);
+  const f = (v: number | null, dec: number) => (v == null || !Number.isFinite(v) ? "--" : v.toFixed(dec));
+  return (
+    <svg width="176" height="176" viewBox="0 0 200 200" role="img" aria-label={label} className="shrink-0">
+      <defs>
+        <linearGradient id="leo-body" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#FFFFFF" />
+          <stop offset="1" stopColor="#DDE2E7" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="100" cy="194" rx="80" ry="4" fill="#05090D" opacity={lifted ? 0 : 0.55} className="sd-fade" />
+      <g className="sd-fade" style={{ opacity: lifted ? 1 : 0 }}>
+        <path d="M186 15 L196 8 L196 181 L186 189 Z" fill="#BCC4CC" stroke="#A3ACB6" strokeWidth="0.8" />
+        <path d="M18 15 L28 8 L196 8 L186 15 Z" fill="#FFFFFF" stroke="#C5CCD3" strokeWidth="0.8" />
+      </g>
+      <rect x="12" y="14" width="176" height="176" rx="18" fill="url(#leo-body)" stroke="#C3CAD2" />
+      <circle cx="166" cy="20.5" r="3" fill="#F2F4F6" stroke="#CDD3D9" strokeWidth="0.8" />
+      {/* marco y pantalla e-ink */}
+      <rect x="23" y="26" width="154" height="122" rx="7" fill="#F4F6F7" stroke="#D3D8DD" />
+      <rect x="28" y="30" width="144" height="113" rx="2" fill="#D9DDD7" />
+      <g key={co2 ?? "x"} className="sd-eink" fill={ink}>
+        {/* barra superior: fecha y hora */}
+        <text x="31.5" y="38" fontSize="6.4" className="sd-lcd">
+          {date}
+        </text>
+        <text x="78" y="38" fontSize="6.4" className="sd-lcd">
+          {p2(now.getHours())}
+          <tspan className="sd-blink">:</tspan>
+          {p2(now.getMinutes())}
+        </text>
+        <rect x="161" y="32.5" width="5" height="4" fill="none" stroke={ink} strokeWidth="0.7" />
+        <rect x="163" y="34.5" width="5" height="4" fill="#D9DDD7" stroke={ink} strokeWidth="0.7" />
+        <line x1="28" x2="172" y1="41" y2="41" stroke={ink} strokeWidth="0.8" />
+        <line x1="112" x2="112" y1="41" y2="143" stroke={ink} strokeWidth="0.8" />
+        {/* CO2 */}
+        <text x="31.5" y="50" fontSize="6" className="sd-lcd">
+          CO<tspan fontSize="4" dy="1">2</tspan>
+        </text>
+        {alert && (
+          <g>
+            <rect x="45" y="44" width="8" height="7" rx="1" fill={ink} />
+            <text x="49" y="50" fontSize="6" textAnchor="middle" fill="#D9DDD7" fontWeight="700">
+              !
+            </text>
+          </g>
+        )}
+        <text x="72" y="64" fontSize="15" textAnchor="middle" className="sd-lcd">
+          {f(co2, 0)}
+        </text>
+        <text x="91" y="64" fontSize="5">
+          ppm
+        </text>
+        <text x="30.5" y="74" fontSize="4.2" className="sd-lcd">
+          1500
+        </text>
+        <text x="32" y="105" fontSize="4.2" className="sd-lcd">
+          200
+        </text>
+        <polyline points="43,70 43,105 108,105 108,70" fill="none" stroke={ink} strokeWidth="0.7" />
+        {shown.map((v, i) => {
+          const x = 106.5 - (shown.length - 1 - i) * 1.88;
+          const y = yOf(v);
+          return <rect key={i} className="sd-bar" x={x} y={y} width="1.05" height={105 - y} fill={ink} />;
+        })}
+        {/* temperatura y humedad */}
+        <path d="M33 111 v7 a2 2 0 1 0 2 0 v-7 a1 1 0 0 0 -2 0 Z" fill="none" stroke={ink} strokeWidth="0.8" />
+        <text x="38" y="129" fontSize="11" className="sd-lcd">
+          {f(temperature, 1)}
+        </text>
+        <text x="62" y="120" fontSize="4">
+          °C
+        </text>
+        <path d="M76 110 c-2 3 -3 4.5 -3 6 a3 3 0 0 0 6 0 c0 -1.5 -1 -3 -3 -6 Z" fill={ink} />
+        <text x="76" y="129" fontSize="11" className="sd-lcd">
+          {f(humidity, 1)}
+        </text>
+        <text x="101" y="129" fontSize="4.5">
+          %
+        </text>
+        {/* carita de confort */}
+        <circle cx="142" cy="70" r="15" fill="none" stroke={ink} strokeWidth="1.3" />
+        {face === "happy" ? (
+          <>
+            <path d="M134.5 66 q2.5 -3 5 0 M144.5 66 q2.5 -3 5 0" fill="none" stroke={ink} strokeWidth="1.3" strokeLinecap="round" />
+            <path d="M134 73 q8 9 16 0 Z" fill={ink} />
+          </>
+        ) : face === "neutral" ? (
+          <>
+            <circle cx="137" cy="66" r="1.6" fill={ink} />
+            <circle cx="147" cy="66" r="1.6" fill={ink} />
+            <line x1="135" x2="149" y1="76" y2="76" stroke={ink} strokeWidth="1.4" strokeLinecap="round" />
+          </>
+        ) : (
+          <>
+            <circle cx="137" cy="66" r="1.6" fill={ink} />
+            <circle cx="147" cy="66" r="1.6" fill={ink} />
+            <path d="M135 79 q7 -7 14 0" fill="none" stroke={ink} strokeWidth="1.4" strokeLinecap="round" />
+          </>
+        )}
+        <line x1="112" x2="172" y1="100" y2="100" stroke={ink} strokeWidth="0.8" />
+        {/* PM2.5 / PM10 */}
+        <text x="116" y="109" fontSize="5.4" className="sd-lcd">
+          PM2.5
+        </text>
+        <text x="145" y="109" fontSize="5.4" className="sd-lcd">
+          PM10
+        </text>
+        <text x="126" y="128" fontSize="12" textAnchor="middle" className="sd-lcd">
+          {f(pm25, 0)}
+        </text>
+        <text x="153" y="128" fontSize="12" textAnchor="middle" className="sd-lcd">
+          {f(pm10, 0)}
+        </text>
+        <text x="158" y="139" fontSize="4">
+          µg/m³
+        </text>
+      </g>
+      {/* parte inferior: sensor de luz, boton y LED */}
+      <circle cx="100" cy="160" r="2.8" fill="#8E99A5" />
+      <rect x="94.5" y="169" width="11" height="10" rx="2.2" fill="#ECEFF2" stroke="#C3CAD2" />
+      <rect x="97.5" y="172" width="5" height="1.2" rx="0.6" fill="#B5BEC8" />
+      <rect x="97.5" y="174.8" width="5" height="1.2" rx="0.6" fill="#B5BEC8" />
+      <rect className="sd-glow" x="173" y="156" width="3" height="13" rx="1.5" fill={alert ? "#FFB547" : "#4CC38A"} />
+    </svg>
+  );
+}
+
 export function AirArt() {
   return (
     <svg width="60" height="60" viewBox="0 0 60 60" aria-hidden="true" className="shrink-0">

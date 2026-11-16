@@ -1,0 +1,229 @@
+[MODBUS-EVENTO] {"t":"2026-10-14T20:03:58.744Z","sede":"Escuintla","evento":"API_REINICIADA","accion":"abierto","severidad":"info","codigo":"ESC-20261014-200358-55c7","dispositivo":null,"inventario":null,"inicio":"2026-10-14T20:03:58.737Z","mensaje":"La API arrancó."}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:03:58.759Z","sede":"Escuintla","evento":"MONITOREO_INICIADO","base_de_eventos":"desactivada","correo":"activo","umbrales_min":{"congelado":0.05,"sin_cambio":0.05,"fuera_de_linea":0.05,"atascada_s":2,"reinicio_vigilante":10}}
+
+========== 1. Lecturas normales
+estado=ok motivo=null abiertos=[] correo=activo
+
+========== 2. Sin lecturas por 4 s (como el 30/09) -> DATOS_CONGELADOS
+[MODBUS-EVENTO] {"t":"2026-10-14T20:03:59.682Z","sede":"Escuintla","evento":"LECTURA_FALLIDA","error":"Port Not Open","fallas_consecutivas":1}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:03.873Z","sede":"Escuintla","evento":"DATOS_CONGELADOS","accion":"abierto","severidad":"critico","codigo":"ESC-20261014-200359-4561","dispositivo":null,"inventario":null,"inicio":"2026-10-14T20:03:59.372Z","mensaje":"La API no obtiene lecturas nuevas del EBO desde 14/10/2026, 14:03:59.","causa":"Sin conexión con el EBO: red caída, EBO apagado o puerto 502 bloqueado.","ultimo_error":"Port Not Open"}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[CRÍTICO] SIASA Escuintla - Datos congelados: la API no obtiene lecturas nuevas del EBO"
+Sede:            Escuintla
+Evento:          DATOS_CONGELADOS - Datos congelados: la API no obtiene lecturas nuevas del EBO
+Severidad:       CRÍTICO
+Desde:           14/10/2026, 14:03:59 (America/Guatemala)
+Lleva:           5 s
+Detalle:         La API no obtiene lecturas nuevas del EBO desde 14/10/2026, 14:03:59.
+
+Causa probable:  Sin conexión con el EBO: red caída, EBO apagado o puerto 502 bloqueado.
+
+Qué hacer:
+  1. Abrir el estado en vivo (enlace abajo) y revisar 'ultimo_error'.
+  2. Si el error es de conexión (ECONNREFUSED, EHOSTUNREACH, Port Not Open): revisar la red hacia el EBO y que el EBO esté encendido. Reiniciar la API no ayuda.
+  3. Si el error es 'Timed out' o no hay error: reiniciar node-api (docker restart node-api). Si persiste, revisar el servidor Modbus TCP de la AS-P.
+  4. Mientras dure, los valores del dashboard NO son actuales.
+
+Estado de la lectura del EBO: congelado (última lectura buena: 14/10/2026, 14:03:59)
+Id. de evento:   ESC-20261014-200359-4561
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:03.874Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"apertura","asunto":"[CRÍTICO] SIASA Escuintla - Datos congelados: la API no obtiene lecturas nuevas del EBO"}
+estado=congelado motivo=sin lectura buena desde hace 5 s abiertos=[DATOS_CONGELADOS] correo=activo
+
+========== 3. Vuelve la lectura -> se cierra DATOS_CONGELADOS
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:03.875Z","sede":"Escuintla","evento":"DATOS_CONGELADOS","accion":"cerrado","codigo":"ESC-20261014-200359-4561","dispositivo":null,"duracion_s":5,"recuperado_en":"2026-10-14T20:04:03.875Z"}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[RESUELTO] SIASA Escuintla - Datos congelados: la API no obtiene lecturas nuevas del EBO"
+Sede:            Escuintla
+Evento:          DATOS_CONGELADOS - Datos congelados: la API no obtiene lecturas nuevas del EBO
+Severidad:       CRÍTICO
+Desde:           14/10/2026, 14:03:59 (America/Guatemala)
+Hasta:           14/10/2026, 14:04:03
+Duración:        5 s
+Detalle:         La API no obtiene lecturas nuevas del EBO desde 14/10/2026, 14:03:59.
+
+El evento se cerró: los datos volvieron a la normalidad.
+
+Estado de la lectura del EBO: ok (última lectura buena: 14/10/2026, 14:04:03)
+Id. de evento:   ESC-20261014-200359-4561
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:03.876Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"cierre","asunto":"[RESUELTO] SIASA Escuintla - Datos congelados: la API no obtiene lecturas nuevas del EBO"}
+estado=ok motivo=null abiertos=[] correo=activo
+
+========== 4. Medidor repite el mismo valor 4 s -> 4 medidores sin cambio a la vez -> UN correo agrupado
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:07.523Z","sede":"Escuintla","evento":"MEDIDOR_SIN_CAMBIO","accion":"abierto","severidad":"critico","codigo":"ESC-20261014-200403-6776","dispositivo":"ION7400-1","inventario":"HES107","inicio":"2026-10-14T20:04:03.876Z","area":"Cuarto eléctrico","mensaje":"Todas las métricas idénticas desde hace 4 s."}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:07.524Z","sede":"Escuintla","evento":"MEDIDOR_SIN_CAMBIO","accion":"abierto","severidad":"critico","codigo":"ESC-20261014-200403-8fa6","dispositivo":"PM2130-1","inventario":"HES112","inicio":"2026-10-14T20:04:03.876Z","area":null,"mensaje":"Todas las métricas idénticas desde hace 4 s."}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:07.524Z","sede":"Escuintla","evento":"MEDIDOR_SIN_CAMBIO","accion":"abierto","severidad":"critico","codigo":"ESC-20261014-200403-9e02","dispositivo":"PM2130-2","inventario":"HES113","inicio":"2026-10-14T20:04:03.876Z","area":null,"mensaje":"Todas las métricas idénticas desde hace 4 s."}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:07.525Z","sede":"Escuintla","evento":"MEDIDOR_SIN_CAMBIO","accion":"abierto","severidad":"critico","codigo":"ESC-20261014-200403-1619","dispositivo":"PM2130-3","inventario":"HES114","inicio":"2026-10-14T20:04:03.876Z","area":null,"mensaje":"Todas las métricas idénticas desde hace 4 s."}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[CRÍTICO] SIASA Escuintla - 4 medidores con eventos (posible falla común del EBO)"
+4 medidores presentan eventos al mismo tiempo en Escuintla. Cuando fallan varios a la vez, lo más probable es una falla común: el EBO perdió comunicación con el bus de medidores, o la AS-P tiene un problema.
+
+  - HES107 ION7400-1: MEDIDOR_SIN_CAMBIO desde 14/10/2026, 14:04:03 (ESC-20261014-200403-6776)
+  - HES112 PM2130-1: MEDIDOR_SIN_CAMBIO desde 14/10/2026, 14:04:03 (ESC-20261014-200403-8fa6)
+  - HES113 PM2130-2: MEDIDOR_SIN_CAMBIO desde 14/10/2026, 14:04:03 (ESC-20261014-200403-9e02)
+  - HES114 PM2130-3: MEDIDOR_SIN_CAMBIO desde 14/10/2026, 14:04:03 (ESC-20261014-200403-1619)
+
+Qué hacer:
+  1. Revisar en WorkStation el estado de comunicación de los medidores y del bus RS-485 de la AS-P.
+  2. Revisar en WorkStation el estado de comunicación del medidor.
+  3. Si el EBO lo muestra sin comunicación: revisar el bus RS-485 y la alimentación del medidor (técnico de campo).
+  4. Si en el EBO los valores sí cambian: escalar a soporte SIASA (falla de api-SIASA).
+
+Estado de la lectura del EBO: sin_cambio (última lectura buena: 14/10/2026, 14:04:07)
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:08.443Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"grupo-apertura","asunto":"[CRÍTICO] SIASA Escuintla - 4 medidores con eventos (posible falla común del EBO)"}
+estado=sin_cambio motivo=uno o más medidores con valores idénticos abiertos=[MEDIDOR_SIN_CAMBIO:ION7400-1, MEDIDOR_SIN_CAMBIO:PM2130-1, MEDIDOR_SIN_CAMBIO:PM2130-2, MEDIDOR_SIN_CAMBIO:PM2130-3] correo=activo
+
+========== 5. Valores cambian otra vez -> se cierran
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:08.443Z","sede":"Escuintla","evento":"MEDIDOR_SIN_CAMBIO","accion":"cerrado","codigo":"ESC-20261014-200403-6776","dispositivo":"ION7400-1","duracion_s":5}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:08.444Z","sede":"Escuintla","evento":"MEDIDOR_SIN_CAMBIO","accion":"cerrado","codigo":"ESC-20261014-200403-8fa6","dispositivo":"PM2130-1","duracion_s":5}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:08.444Z","sede":"Escuintla","evento":"MEDIDOR_SIN_CAMBIO","accion":"cerrado","codigo":"ESC-20261014-200403-9e02","dispositivo":"PM2130-2","duracion_s":5}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:08.444Z","sede":"Escuintla","evento":"MEDIDOR_SIN_CAMBIO","accion":"cerrado","codigo":"ESC-20261014-200403-1619","dispositivo":"PM2130-3","duracion_s":5}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[RESUELTO] SIASA Escuintla - 4 medidores normalizados"
+4 medidores volvieron a la normalidad en Escuintla.
+
+  - HES107 ION7400-1: MEDIDOR_SIN_CAMBIO desde 14/10/2026, 14:04:03, duró 5 s (ESC-20261014-200403-6776)
+  - HES112 PM2130-1: MEDIDOR_SIN_CAMBIO desde 14/10/2026, 14:04:03, duró 5 s (ESC-20261014-200403-8fa6)
+  - HES113 PM2130-2: MEDIDOR_SIN_CAMBIO desde 14/10/2026, 14:04:03, duró 5 s (ESC-20261014-200403-9e02)
+  - HES114 PM2130-3: MEDIDOR_SIN_CAMBIO desde 14/10/2026, 14:04:03, duró 5 s (ESC-20261014-200403-1619)
+
+Estado de la lectura del EBO: ok (última lectura buena: 14/10/2026, 14:04:08)
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:08.445Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"grupo-cierre","asunto":"[RESUELTO] SIASA Escuintla - 4 medidores normalizados"}
+estado=ok motivo=null abiertos=[] correo=activo
+
+========== 6. ION7400-1 fuera de linea 4 s -> MEDIDOR_FUERA_DE_LINEA
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:12.089Z","sede":"Escuintla","evento":"MEDIDOR_FUERA_DE_LINEA","accion":"abierto","severidad":"critico","codigo":"ESC-20261014-200408-98c8","dispositivo":"ION7400-1","inventario":"HES107","inicio":"2026-10-14T20:04:08.445Z","area":"Cuarto eléctrico","mensaje":"El EBO reporta el medidor fuera de línea desde hace 4 s."}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[CRÍTICO] SIASA Escuintla - HES107 ION7400-1 - Medidor fuera de línea"
+Sede:            Escuintla
+Dispositivo:     ION7400-1 (inventario HES107)
+Ubicación:       Cuarto eléctrico
+Evento:          MEDIDOR_FUERA_DE_LINEA - Medidor fuera de línea
+Severidad:       CRÍTICO
+Desde:           14/10/2026, 14:04:08 (America/Guatemala)
+Lleva:           4 s
+Detalle:         El EBO reporta el medidor fuera de línea desde hace 4 s.
+
+Causa probable:  Medidor apagado, bus RS-485 o dirección Modbus.
+
+Qué hacer:
+  1. Verificar que la pantalla del medidor esté encendida.
+  2. Revisar alimentación y cableado (técnico de campo).
+
+Estado de la lectura del EBO: ok (última lectura buena: 14/10/2026, 14:04:12)
+Id. de evento:   ESC-20261014-200408-98c8
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:12.992Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"apertura","asunto":"[CRÍTICO] SIASA Escuintla - HES107 ION7400-1 - Medidor fuera de línea"}
+estado=ok motivo=null abiertos=[MEDIDOR_FUERA_DE_LINEA:ION7400-1] correo=activo
+
+========== 7. Vuelve en linea
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:12.993Z","sede":"Escuintla","evento":"MEDIDOR_FUERA_DE_LINEA","accion":"cerrado","codigo":"ESC-20261014-200408-98c8","dispositivo":"ION7400-1","duracion_s":5}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[RESUELTO] SIASA Escuintla - HES107 ION7400-1 - Medidor fuera de línea"
+Sede:            Escuintla
+Dispositivo:     ION7400-1 (inventario HES107)
+Ubicación:       Cuarto eléctrico
+Evento:          MEDIDOR_FUERA_DE_LINEA - Medidor fuera de línea
+Severidad:       CRÍTICO
+Desde:           14/10/2026, 14:04:08 (America/Guatemala)
+Hasta:           14/10/2026, 14:04:12
+Duración:        5 s
+Detalle:         El EBO reporta el medidor fuera de línea desde hace 4 s.
+
+El evento se cerró: los datos volvieron a la normalidad.
+
+Estado de la lectura del EBO: ok (última lectura buena: 14/10/2026, 14:04:12)
+Id. de evento:   ESC-20261014-200408-98c8
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:12.994Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"cierre","asunto":"[RESUELTO] SIASA Escuintla - HES107 ION7400-1 - Medidor fuera de línea"}
+estado=ok motivo=null abiertos=[] correo=activo
+
+========== 8. Lectura atascada 3 s -> LECTURA_ATASCADA y vigilante reconecta
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:15.999Z","sede":"Escuintla","evento":"DATOS_CONGELADOS","accion":"abierto","severidad":"critico","codigo":"ESC-20261014-200412-ce38","dispositivo":null,"inventario":null,"inicio":"2026-10-14T20:04:12.993Z","mensaje":"La API no obtiene lecturas nuevas del EBO desde 14/10/2026, 14:04:12.","causa":"La lectura está atascada: el EBO no responde y la conexión no se libera.","ultimo_error":null}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:16.000Z","sede":"Escuintla","evento":"LECTURA_ATASCADA","accion":"abierto","severidad":"advertencia","codigo":"ESC-20261014-200412-9a61","dispositivo":null,"inventario":null,"inicio":"2026-10-14T20:04:12.994Z","mensaje":"Lectura en curso desde hace 3 s."}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:16.001Z","sede":"Escuintla","evento":"VIGILANTE_RECONEXION","en_curso_s":3}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[CRÍTICO] SIASA Escuintla - Datos congelados: la API no obtiene lecturas nuevas del EBO"
+Sede:            Escuintla
+Evento:          DATOS_CONGELADOS - Datos congelados: la API no obtiene lecturas nuevas del EBO
+Severidad:       CRÍTICO
+Desde:           14/10/2026, 14:04:12 (America/Guatemala)
+Lleva:           3 s
+Detalle:         La API no obtiene lecturas nuevas del EBO desde 14/10/2026, 14:04:12.
+
+Causa probable:  La lectura está atascada: el EBO no responde y la conexión no se libera.
+
+Qué hacer:
+  1. Abrir el estado en vivo (enlace abajo) y revisar 'ultimo_error'.
+  2. Si el error es de conexión (ECONNREFUSED, EHOSTUNREACH, Port Not Open): revisar la red hacia el EBO y que el EBO esté encendido. Reiniciar la API no ayuda.
+  3. Si el error es 'Timed out' o no hay error: reiniciar node-api (docker restart node-api). Si persiste, revisar el servidor Modbus TCP de la AS-P.
+  4. Mientras dure, los valores del dashboard NO son actuales.
+
+Estado de la lectura del EBO: congelado (última lectura buena: 14/10/2026, 14:04:12)
+Id. de evento:   ESC-20261014-200412-ce38
+<<<
+(vigilante llamó reconectar: vigilante: lectura atascada)
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:16.002Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"apertura","asunto":"[CRÍTICO] SIASA Escuintla - Datos congelados: la API no obtiene lecturas nuevas del EBO"}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[ADVERTENCIA] SIASA Escuintla - 1 advertencia(s)"
+Sede:            Escuintla
+Evento:          LECTURA_ATASCADA - Lectura del EBO atascada
+Severidad:       ADVERTENCIA
+Desde:           14/10/2026, 14:04:12 (America/Guatemala)
+Lleva:           3 s
+Detalle:         Lectura en curso desde hace 3 s.
+
+Causa probable:  El EBO responde muy lento o la conexión quedó colgada. El vigilante cerró la conexión y reconectó.
+
+Qué hacer:
+  1. No requiere acción inmediata: el vigilante reconecta solo.
+  2. Si se repite varias veces en el día, revisar la carga del servidor Modbus de la AS-P y los clientes conectados.
+
+Estado de la lectura del EBO: congelado (última lectura buena: 14/10/2026, 14:04:12)
+Id. de evento:   ESC-20261014-200412-9a61
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:16.002Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"grupo","asunto":"[ADVERTENCIA] SIASA Escuintla - 1 advertencia(s)"}
+estado=congelado motivo=sin lectura buena desde hace 3 s abiertos=[DATOS_CONGELADOS, LECTURA_ATASCADA] correo=activo
+
+========== 9. Termina la lectura atascada
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:16.002Z","sede":"Escuintla","evento":"DATOS_CONGELADOS","accion":"cerrado","codigo":"ESC-20261014-200412-ce38","dispositivo":null,"duracion_s":3,"recuperado_en":"2026-10-14T20:04:16.002Z"}
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:16.003Z","sede":"Escuintla","evento":"LECTURA_ATASCADA","accion":"cerrado","codigo":"ESC-20261014-200412-9a61","dispositivo":null,"duracion_s":3}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[RESUELTO] SIASA Escuintla - Datos congelados: la API no obtiene lecturas nuevas del EBO"
+Sede:            Escuintla
+Evento:          DATOS_CONGELADOS - Datos congelados: la API no obtiene lecturas nuevas del EBO
+Severidad:       CRÍTICO
+Desde:           14/10/2026, 14:04:12 (America/Guatemala)
+Hasta:           14/10/2026, 14:04:16
+Duración:        3 s
+Detalle:         La API no obtiene lecturas nuevas del EBO desde 14/10/2026, 14:04:12.
+
+El evento se cerró: los datos volvieron a la normalidad.
+
+Estado de la lectura del EBO: ok (última lectura buena: 14/10/2026, 14:04:16)
+Id. de evento:   ESC-20261014-200412-ce38
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:16.003Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"cierre","asunto":"[RESUELTO] SIASA Escuintla - Datos congelados: la API no obtiene lecturas nuevas del EBO"}
+
+>>> CORREO a=centro.monitoreo@prueba.local asunto="[RESUELTO] SIASA Escuintla - Lectura del EBO atascada"
+Sede:            Escuintla
+Evento:          LECTURA_ATASCADA - Lectura del EBO atascada
+Severidad:       ADVERTENCIA
+Desde:           14/10/2026, 14:04:12 (America/Guatemala)
+Hasta:           14/10/2026, 14:04:16
+Duración:        3 s
+Detalle:         Lectura en curso desde hace 3 s.
+
+El evento se cerró: los datos volvieron a la normalidad.
+
+Estado de la lectura del EBO: ok (última lectura buena: 14/10/2026, 14:04:16)
+Id. de evento:   ESC-20261014-200412-9a61
+<<<
+[MODBUS-EVENTO] {"t":"2026-10-14T20:04:16.004Z","sede":"Escuintla","evento":"CORREO_ENVIADO","tipo":"cierre","asunto":"[RESUELTO] SIASA Escuintla - Lectura del EBO atascada"}
+estado=ok motivo=null abiertos=[] correo=activo
+
+reconexiones pedidas por el vigilante: 1
+lectura (va en la respuesta del endpoint): {"scanned_at":"2026-10-14T20:04:16.002Z","antiguedad_s":0,"estado":"ok","stale":false}

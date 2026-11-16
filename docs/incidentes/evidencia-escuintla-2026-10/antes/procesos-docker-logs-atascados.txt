@@ -1,0 +1,4 @@
+    PID     ELAPSED USER     COMMAND
+ 649424  1-13:43:23 root     sudo docker logs node-api --since 2026-10-01T00:00:00-06:00 --until 2026-10-13T00:00:00-06:00 --timestamps
+ 649426  1-13:43:23 root     sudo docker logs node-api --since 2026-10-01T00:00:00-06:00 --until 2026-10-13T00:00:00-06:00 --timestamps
+ 649427  1-13:43:23 root     docker logs node-api --since 2026-10-01T00:00:00-06:00 --until 2026-10-13T00:00:00-06:00 --timestamps

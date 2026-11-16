@@ -1,0 +1,7 @@
+Modbus conectado a EBO-ASP 127.0.0.1 ID 1
+[MODBUS-EVENTO] {"t":"2026-10-14T19:02:13.049Z","evento":"RECONEXION","motivo":"unidad 1 dir 0: Timed out","reconexiones":1}
+Modbus conectado a EBO-ASP 127.0.0.1 ID 1
+lectura 1: OK [0,0] (5.049s)
+lectura 2: OK [0,0] (5.05s)
+lectura 3: OK [0,0] (5.051s)
+RESULTADO: RECUPERADO (conexiones=2, 5.051s)

@@ -31,6 +31,8 @@ type Source struct {
 
 	// Equipos que ya trajeron datos validos al menos una vez (por ExternalID).
 	seen map[string]discovery.Device
+	// Ultimo espectro de armonicos de cada equipo directo que los tiene (ver harmonics.go).
+	harm map[string]*harmonicCache
 }
 
 func New(cfg config.ModbusConfig) *Source {
@@ -39,6 +41,7 @@ func New(cfg config.ModbusConfig) *Source {
 		client: newTCPClient(cfg.Host, cfg.Port, cfg.UnitID, time.Duration(cfg.TimeoutMs)*time.Millisecond),
 		stop:   make(chan struct{}),
 		seen:   map[string]discovery.Device{},
+		harm:   map[string]*harmonicCache{},
 	}
 }
 
@@ -46,7 +49,7 @@ func (s *Source) Name() string { return fmt.Sprintf("modbus:%s:%d", s.cfg.Host, 
 
 func (s *Source) Start(onUpdate func([]discovery.Device)) error {
 	for _, dev := range s.cfg.Devices {
-		if _, ok := profiles[dev.Profile]; !ok {
+		if !isKnownProfile(dev.Profile) {
 			return fmt.Errorf("modbus: perfil desconocido %q en %q", dev.Profile, dev.Name)
 		}
 	}
@@ -115,11 +118,27 @@ func (s *Source) pollOnce() []discovery.Device {
 		p := profiles[dev.Profile]
 		externalID := fmt.Sprintf("modbus:%s:%s", s.cfg.Host, dev.Name)
 
-		readings, start, err := s.readDevice(dev, p)
+		var readings map[string]float64
+		var start int
+		var err error
+		registers := ""
+		if dp, direct := directProfiles[dev.Profile]; direct {
+			// Lectura directa del medidor (piloto Gravix, Fase B): ver direct.go.
+			p = profile{Name: dp.Name, Model: dp.Model, Category: dp.Category}
+			readings, err = s.readDirect(dp)
+			registers = "directo"
+			if err == nil && readings != nil && dp.Harmonics != nil {
+				s.withHarmonics(externalID, dev.Name, dp.Harmonics, readings)
+			}
+		} else {
+			readings, start, err = s.readDevice(dev, p)
+			registers = fmt.Sprintf("%d-%d", start, start+p.Length-1)
+		}
 		if err != nil || readings == nil {
 			if prev, ok := s.seen[externalID]; ok {
 				prev.State = "offline"
 				prev.Readings = nil
+				prev.ReadAt = nil
 				s.seen[externalID] = prev
 			}
 			if err != nil {
@@ -137,18 +156,20 @@ func (s *Source) pollOnce() []discovery.Device {
 		}
 
 		attrs := map[string]interface{}{
-			"category": p.Category,
-			"profile":  p.Name,
-			"source":   s.cfg.Name,
-			"host":     s.cfg.Host,
-			"unitId":   s.cfg.UnitID,
-			"registers": fmt.Sprintf("%d-%d", start, start+p.Length-1),
+			"category":  p.Category,
+			"profile":   p.Name,
+			"source":    s.cfg.Name,
+			"host":      s.cfg.Host,
+			"unitId":    s.cfg.UnitID,
+			"registers": registers,
 		}
 		for k, v := range dev.Attributes {
 			attrs[k] = v
 		}
 
+		readAt := time.Now().UTC()
 		s.seen[externalID] = discovery.Device{
+			ReadAt:     &readAt,
 			ExternalID: externalID,
 			Name:       dev.Name,
 			Protocol:   protocolName,

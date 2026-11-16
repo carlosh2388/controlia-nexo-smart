@@ -230,6 +230,52 @@ func TestColdChainWithGraceAndUnconfiguredChannels(t *testing.T) {
 	}
 }
 
+// Bombeo de agua de Escuintla (tags reales): ai0_type water_pressure, 10-20 PSI, tolerancia 10 min.
+// Calentador (ai0_type water_heater_temperature) no debe tratarse como cadena de frio.
+func TestScaledChannelsPressureAndHeater(t *testing.T) {
+	e := NewEngine(Thresholds{}, NewState())
+	now := time.Now()
+	pump := func(psi float64) discovery.Device {
+		return discovery.Device{
+			ExternalID: "lorawan:bom", Name: "HES-BOM-ffbf5064-BA-2", Protocol: "lorawan", State: "online", Model: "WISE-4610-S617",
+			Attributes: map[string]interface{}{
+				"tag_area": "Bombeo de Agua", "tag_ai0_type": "water_pressure", "tag_ai0_unit": "PSI",
+				"tag_ai0_threshold_min": "10", "tag_ai0_threshold_max": "20", "tag_ai0_tolerance": "10",
+			},
+			Readings: map[string]interface{}{"ai0_value": 6.0, "ai0_scaled": psi, "ai0_open_circuit": 0.0},
+		}
+	}
+	if evs := e.Observe([]discovery.Device{pump(17.1)}, now); len(evs) != 0 {
+		t.Fatalf("presion en rango: sin eventos, llegaron %v", types(evs))
+	}
+	if evs := e.Observe([]discovery.Device{pump(8)}, now.Add(time.Minute)); len(evs) != 0 {
+		t.Fatalf("dentro de la tolerancia no debe alarmar: %v", types(evs))
+	}
+	if evs := e.Observe([]discovery.Device{pump(7.5)}, now.Add(12*time.Minute)); !has(evs, "water.pressure_low") {
+		t.Fatalf("presion baja mas de 10 min debe alarmar: %v", types(evs))
+	}
+	if evs := e.Observe([]discovery.Device{pump(15)}, now.Add(13*time.Minute)); !has(evs, "water.pressure_normal") {
+		t.Fatalf("al volver a rango debe normalizar: %v", types(evs))
+	}
+
+	heater := discovery.Device{
+		ExternalID: "lorawan:cl", Name: "HES-CL-FFBF507D-AC-1", Protocol: "lorawan", State: "online", Model: "WISE-4610-S617",
+		Attributes: map[string]interface{}{
+			"tag_area": "Calderas y Calentadores", "tag_ai0_type": "water_heater_temperature", "tag_ai0_unit": "°C",
+			"tag_ai0_threshold_min": "25", "tag_ai0_threshold_max": "60", "tag_ai0_category": "Calentador",
+		},
+		Readings: map[string]interface{}{"ai0_value": 8.0, "ai0_scaled": 55.0, "ai0_open_circuit": 0.0},
+	}
+	if evs := e.Observe([]discovery.Device{heater}, now); len(evs) != 0 {
+		t.Fatalf("calentador a 55 °C (25-60) no debe alarmar, y nunca como cadena de frio: %v", types(evs))
+	}
+	heater.Readings = map[string]interface{}{"ai0_value": 6.0, "ai0_scaled": 20.0, "ai0_open_circuit": 0.0}
+	evs := e.Observe([]discovery.Device{heater}, now.Add(time.Minute))
+	if !has(evs, "process.out_of_range") || has(evs, "coldchain.out_of_range") {
+		t.Fatalf("calentador frio debe dar process.out_of_range (no coldchain): %v", types(evs))
+	}
+}
+
 func TestColdChainProbeAtScaleEdgeIsSensorFault(t *testing.T) {
 	e := NewEngine(Thresholds{}, NewState())
 	d := discovery.Device{

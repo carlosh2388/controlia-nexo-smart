@@ -1,8 +1,12 @@
 # Agente_Go
 
+> **Manual completo y actualizado: [`docs/agentes-go-manual.md`](../../docs/agentes-go-manual.md)**
+> (agentes en produccion, fuentes, Modbus/EBO, eventos, config, operacion en el servidor,
+> diagnostico). Este README es la introduccion rapida.
+
 Agente en Go que corre en el servidor local de **un** edificio, escucha los protocolos IoT
-habilitados en su red (MQTT/Zigbee2MQTT, LoRaWAN, BACnet/IP), y reporta lo que descubre a la API
-central de Nodivo. Es la pieza de "instalar uno por edificio" del plan de automatización — ver
+habilitados en su red (Modbus TCP, LoRaWAN por ChirpStack o directo del gateway, MQTT/Zigbee2MQTT,
+BACnet/IP via bridge), detecta eventos y reporta lo que descubre a la API central de Nodivo. Es la pieza de "instalar uno por edificio" del plan de automatización — ver
 [`docs/agente-go.md`](../../docs/agente-go.md) para la arquitectura completa, el roadmap de fases
 y los diagramas.
 
@@ -29,8 +33,9 @@ ver "Como se evitan los duplicados" en `docs/agente-go.md`. Verificado en vivo c
   un area/sala desde el frontend (pestaña "Agente Go"), como con cualquier import manual.
 - ❌ **BACnet/LoRaWAN todavia no reciben comandos de vuelta** (Fase 3: falta un canal agente<-API
   para protocolos que no son MQTT).
-- ❌ **No deduplica contra dispositivos ya importados por los flujos manuales existentes** - ver la
-  advertencia en `docs/agente-go.md` antes de correrlo contra un edificio que ya tiene datos.
+- ✅ **Modbus TCP** (EBO AS-P de las sedes IGSS: ION7400, PM2130, generadores, ATS), solo lectura.
+- ✅ **LoRaWAN directo** desde el gateway (Semtech UDP :1700), solo recepcion por ahora.
+- ✅ **Eventos** en el agente con buffer en disco (`internal/events`).
 - ❌ No hace HTTP (Shelly/Tasmota/Home Assistant) todavia (Fase 4).
 
 ## Requisitos
@@ -110,11 +115,18 @@ sudo journalctl -u agente-go -f   # logs en vivo
 apps/Agente_Go/
   cmd/agent/main.go          - entrypoint: arma las fuentes habilitadas y arranca el agente
   internal/config/           - carga y valida config.yaml
+  cmd/chirpstack-keys/       - exporta llaves de sensores desde ChirpStack (solo lectura)
+  cmd/lora-sniffer/          - escucha/compara tramas crudas de gateways (solo lectura)
   internal/discovery/        - contrato Source/Device comun a cualquier protocolo
-  internal/discovery/mqttsource/ - driver MQTT/Zigbee2MQTT (Fase 1)
+  internal/discovery/mqttsource/    - MQTT/Zigbee2MQTT
+  internal/discovery/lorawansource/ - LoRaWAN via MQTT de ChirpStack
+  internal/discovery/gatewaysource/ - LoRaWAN directo del gateway (UDP 1700)
+  internal/discovery/bacnetsource/  - BACnet via apps/bacnet-bridge
+  internal/discovery/modbussource/  - Modbus TCP (perfiles ion7400/pm2130/generator)
+  internal/events/           - motor de eventos y buffer en disco
   internal/reporter/         - cliente HTTP hacia POST /devices/agent-sync
   internal/agent/            - junta snapshots de todas las fuentes y sincroniza cada tick
-  config.example.yaml        - plantilla de configuracion (copiar a config.yaml)
+  config.*.example.yaml      - plantillas de configuracion (copiar a config.yaml)
 ```
 
 ## Como agregar un protocolo nuevo (Fase 2+)

@@ -1,6 +1,10 @@
 services:
   postgres:
-    image: postgres:16
+    # PostgreSQL 16 + TimescaleDB (ver docker/postgres/Dockerfile). Usa el mismo volumen que la
+    # imagen postgres:16 anterior: misma version mayor y misma base Debian.
+    build: docker/postgres
+    image: siasa-postgres-timescale:16.15-2.31.0
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: siasa
@@ -52,12 +56,18 @@ services:
       # Desktop en Windows no puede enrutar UDP/47808 hacia la LAN real del edificio.
       BACNET_BRIDGE_URL: ${BACNET_BRIDGE_URL:-http://host.docker.internal:3099}
       BACNET_BRIDGE_TOKEN: ${BACNET_BRIDGE_TOKEN:-}
+      # Centro de mando: lee el monitoreo central (10.30.10.27) y, para las alarmas/correos de cada
+      # equipo, la API de cada sede. Clave y API keys solo en el servidor (.env y config/centro/).
+      CENTRAL_URL: ${CENTRAL_URL:-}
+      CENTRAL_CLAVE: ${CENTRAL_CLAVE:-}
+      CENTRAL_SEDES_FILE: /app/config/centro/sedes.json
     ports:
       - "3010:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - area_uploads:/app/uploads
+      - ./config/centro:/app/config/centro:ro
     depends_on:
       - postgres
       - redis

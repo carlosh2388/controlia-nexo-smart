@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { ArrayMaxSize, IsArray, IsEnum, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength, ValidateNested } from "class-validator";
+import { ArrayMaxSize, IsArray, IsEnum, IsIn, IsISO8601, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength, ValidateNested } from "class-validator";
 import { DeviceKind, DeviceProtocol } from "@prisma/client";
 import { MqttJsonConfigDto } from "./mqtt-json-config.dto";
 import { AgentEventDto } from "../../site-events/dto/site-event.dto";
@@ -76,6 +76,31 @@ export class AgentSyncDeviceDto {
   @ValidateNested()
   @Type(() => MqttJsonConfigDto)
   mqttJson?: MqttJsonConfigDto;
+
+  /**
+   * Hora en que el agente LEYO el equipo (agente 0.5+, Modbus). Si viene, el historial se guarda
+   * con esta hora en vez de la de llegada a la API. Los agentes viejos no la mandan.
+   */
+  @IsOptional()
+  @IsISO8601()
+  readAt?: string;
+}
+
+/**
+ * Lectura que el agente no pudo entregar cuando la tomo (la API no respondia) y que reenvia
+ * despues desde su disco (data/backlog). Se guarda con su hora real y marca el hueco como recuperado.
+ */
+export class AgentBacklogItemDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(300)
+  externalId!: string;
+
+  @IsISO8601()
+  readAt!: string;
+
+  @IsObject()
+  readings!: Record<string, unknown>;
 }
 
 /** Body de POST /devices/agent-sync: un lote de dispositivos descubiertos por un Agente_Go de un edificio. */
@@ -107,4 +132,12 @@ export class AgentSyncDto {
   @ValidateNested({ each: true })
   @Type(() => AgentEventDto)
   events?: AgentEventDto[];
+
+  /** Lecturas pendientes que el agente guardo en disco mientras la API no respondia (agente 0.5+). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(2000)
+  @ValidateNested({ each: true })
+  @Type(() => AgentBacklogItemDto)
+  backlog?: AgentBacklogItemDto[];
 }

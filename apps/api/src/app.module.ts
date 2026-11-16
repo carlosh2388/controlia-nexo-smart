@@ -18,6 +18,9 @@ import { BacnetModule } from "./adapters/bacnet/bacnet.module";
 import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { AreasModule } from "./areas/areas.module";
 import { SiteEventsModule } from "./site-events/site-events.module";
+import { AgentsModule } from "./agents/agents.module";
+import { AccessModule } from "./access/access.module";
+import { CentroModule } from "./centro/centro.module";
 
 @Module({
   imports: [
@@ -55,6 +58,9 @@ import { SiteEventsModule } from "./site-events/site-events.module";
     ApiKeysModule,
     AreasModule,
     SiteEventsModule,
+    AgentsModule,
+    AccessModule,
+    CentroModule,
   ],
 })
 export class AppModule {}

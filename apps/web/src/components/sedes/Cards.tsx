@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
-import { AirArt, DoorArt, EvaArt, GeneratorArt, IonArt, PmArt, RingGauge, TrendIcon, WiseArt } from "./Art";
-import { aiKeys, co2Limit, coldChainChannels, fmt, isDoorOpen, num, str, type ColdChainChannel, type SedeDevice } from "../../utils/sedes";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useDeviceHistory } from "../../api/devices";
+import { DialGauge, DoorArt, EvaArt, FridgeArt, GeneratorArt, IonArt, Leo592Art, PmArt, RingGauge, TrendIcon, WiseArt } from "./Art";
+import { aiKeys, co2Limit, coldChainChannels, fmt, isDoorOpen, num, str, wiseGroup, type ColdChainChannel, type SedeDevice } from "../../utils/sedes";
 
 /**
  * Tarjetas de la pestaña Sedes, una por tipo de equipo (diseño final aprobado: ilustracion
@@ -33,7 +34,7 @@ function TrendButton({ d, onTrend }: { d: SedeDevice; onTrend: (d: SedeDevice) =
     <button
       type="button"
       onClick={() => onTrend(d)}
-      className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-[10px] border border-[#2C3D50] bg-[#0E151D] px-3 py-2 text-[13px] font-semibold text-[#CFE0F5] transition-colors hover:border-[#3A4E64] hover:bg-[#1B2735]"
+      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[10px] border border-[#2C3D50] bg-[#0E151D] px-3 py-2 text-[13px] font-semibold text-[#CFE0F5] transition-colors hover:border-[#3A4E64] hover:bg-[#1B2735]"
     >
       <TrendIcon />
       Ver tendencias
@@ -44,9 +45,9 @@ function TrendButton({ d, onTrend }: { d: SedeDevice; onTrend: (d: SedeDevice) =
 function Tile({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
     <div className="min-w-0 rounded-[10px] bg-[#0E151D] px-2.5 py-2">
-      <div className="truncate text-[11px] text-[#93A4B5]">{label}</div>
+      <div className="truncate text-xs text-[#93A4B5]">{label}</div>
       <div className="sd-num text-base font-semibold text-[#E6EDF3]">
-        {value} <span className="text-[11px] font-normal text-[#93A4B5]">{unit}</span>
+        {value} <span className="text-xs font-normal text-[#93A4B5]">{unit}</span>
       </div>
     </div>
   );
@@ -330,9 +331,9 @@ export function DoorTile({ d, onTrend }: { d: SedeDevice; onTrend: (d: SedeDevic
         <div className="truncate text-[13px] font-semibold" title={d.name}>
           {d.area || d.name}
         </div>
-        {d.area && <div className="sd-num truncate text-[10px] text-[#7D8FA1]">{d.name}</div>}
+        {d.area && <div className="sd-num truncate text-xs text-[#7D8FA1]">{d.name}</div>}
         <div className={`text-xs font-semibold ${open ? "text-[#FFC979]" : "text-[#8FE0B5]"}`}>{status}</div>
-        <div className="sd-num text-[11px] text-[#93A4B5]" style={{ color: battery != null && battery < 20 ? WARN : undefined }}>
+        <div className="sd-num text-xs text-[#93A4B5]" style={{ color: battery != null && battery < 20 ? WARN : undefined }}>
           Bat. {fmt(battery, 0)}%
         </div>
       </div>
@@ -381,9 +382,20 @@ export function EnvCard({ d, onTrend }: { d: SedeDevice; onTrend: (d: SedeDevice
   );
 }
 
-export function WiseCard({ d, onTrend }: { d: SedeDevice; onTrend: (d: SedeDevice) => void }) {
-  const cold = coldChainChannels(d);
-  if (cold.length) return <ColdChainCard d={d} channels={cold} onTrend={onTrend} />;
+export function WiseCard({
+  d,
+  doors,
+  onTrend,
+}: {
+  d: SedeDevice;
+  /** Sensores de puerta por codigo de equipo (doorsByCode); se muestran dentro de su refrigerador. */
+  doors?: Map<string, SedeDevice[]>;
+  onTrend: (d: SedeDevice) => void;
+}) {
+  const channels = coldChainChannels(d);
+  const group = wiseGroup(d);
+  if (channels.length && (group === "pump" || group === "heating")) return <ProcessCard d={d} group={group} channels={channels} onTrend={onTrend} />;
+  if (channels.length) return <ColdChainCard d={d} channels={channels} doors={doors ?? new Map()} onTrend={onTrend} />;
   const keys = aiKeys(d.readings);
   const ais = keys.map((k) => ({ k, label: k.replace(/_value$/i, "").toUpperCase(), v: num(d.readings, k) }));
   return (
@@ -412,63 +424,189 @@ export function WiseCard({ d, onTrend }: { d: SedeDevice; onTrend: (d: SedeDevic
             <span className="sd-num text-right">{fmt(a.v, 2)} mA</span>
           </div>
         ))}
-        {ais.length === 0 && <div className="text-xs text-[#93A4B5]">Sin entradas analógicas en el último uplink.</div>}
+        {ais.length === 0 && <div className="text-xs text-[#93A4B5]">Esperando la trama con entradas analógicas.</div>}
       </div>
       <TrendButton d={d} onTrend={onTrend} />
     </CardShell>
   );
 }
 
+function channelState(c: ColdChainChannel): "ok" | "low" | "high" | "fault" | "none" {
+  if (c.fault) return "fault";
+  if (c.value == null) return "none";
+  if (c.min != null && c.value < c.min) return "low";
+  if (c.max != null && c.value > c.max) return "high";
+  return "ok";
+}
+
+/** Barra del rango permitido con el marcador del valor actual. */
+function RangeBar({ c }: { c: ColdChainChannel }) {
+  const st = channelState(c);
+  const out = st === "low" || st === "high";
+  const span = c.min != null && c.max != null ? c.max - c.min : 10;
+  const lo = (c.min ?? (c.value ?? 0) - 5) - span;
+  const hi = (c.max ?? (c.value ?? 0) + 5) + span;
+  const pos = c.value == null || c.fault ? 0 : Math.max(0, Math.min(100, ((c.value - lo) / (hi - lo)) * 100));
+  const bandL = c.min != null ? ((c.min - lo) / (hi - lo)) * 100 : 0;
+  const bandW = c.min != null && c.max != null ? ((c.max - c.min) / (hi - lo)) * 100 : 100;
+  return (
+    <div className="relative h-1.5 rounded bg-[#1B2633]" aria-hidden="true">
+      <div className="absolute inset-y-0 rounded bg-[#1E3A2E]" style={{ left: `${bandL}%`, width: `${bandW}%` }} />
+      {!c.fault && (
+        <div
+          className="absolute -top-[3px] h-3 w-1.5 rounded-sm transition-[left] duration-700"
+          style={{ left: `calc(${pos}% - 3px)`, background: out ? WARN : "#4FC3F7" }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Estado de un sensor de puerta asociado a un equipo; clic = tendencias de esa puerta. */
+function DoorChip({ door, index, total, onTrend }: { door: SedeDevice; index: number; total: number; onTrend: (d: SedeDevice) => void }) {
+  const open = door.online && isDoorOpen(door.readings);
+  const battery = num(door.readings, "battery");
+  const tamper = str(door.readings.tamper_status).toLowerCase() === "uninstalled";
+  const label = total > 1 ? `Puerta ${index + 1}` : "Puerta";
+  const status = !door.online ? "sin señal" : open ? "abierta" : "cerrada";
+  return (
+    <button
+      type="button"
+      onClick={() => onTrend(door)}
+      title={`${door.name} · ver tendencias`}
+      className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-full [@media(pointer:coarse)]:min-h-[44px] border px-2.5 py-1 text-xs transition-colors hover:bg-[#1B2735] ${
+        open ? "sd-alert border-[#7A4A12] bg-[#2A1E0C] text-[#FFC979]" : !door.online ? "border-[#5A3A2A] bg-[#1A1210] text-[#C9A08A]" : "border-[#22443A] bg-[#0F1D18] text-[#8FE0B5]"
+      }`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${open ? "bg-[#FFB547]" : door.online ? "bg-[#4CC38A]" : "bg-[#7D8FA1]"}`} aria-hidden="true" />
+      <span className="font-semibold">
+        {label} {status}
+      </span>
+      {battery != null && (
+        <span className="sd-num" style={{ color: battery < 20 ? WARN : "#93A4B5" }}>
+          {fmt(battery, 0)}%
+        </span>
+      )}
+      {tamper && <span className="rounded bg-[#3A1612] px-1 text-xs font-semibold text-[#FF8A7A]">sabotaje</span>}
+    </button>
+  );
+}
+
 /**
- * WISE de cadena de frio: un renglon por refrigerador/congelador (nombre del tag operative_area de
- * ChirpStack), temperatura en °C convertida por el Agente_Go y su rango permitido.
+ * Cadena de frio: una tarjeta por WISE con un renglon por refrigerador/congelador. Cada equipo se
+ * dibuja con sus puertas reales (sensores LEO S595 con el mismo codigo, ej. HES010) que se abren
+ * en el dibujo cuando el sensor reporta "abierta", su temperatura y su rango permitido.
  */
-function ColdChainCard({ d, channels, onTrend }: { d: SedeDevice; channels: ColdChainChannel[]; onTrend: (d: SedeDevice) => void }) {
+function ColdChainCard({
+  d,
+  channels,
+  doors,
+  onTrend,
+}: {
+  d: SedeDevice;
+  channels: ColdChainChannel[];
+  doors: Map<string, SedeDevice[]>;
+  onTrend: (d: SedeDevice) => void;
+}) {
+  // Equipo resaltado en 3D (uno a la vez por tarjeta); clic de nuevo o Esc lo regresa.
+  const [lifted, setLifted] = useState<string | null>(null);
+  const rows = channels.map((c) => ({ c, st: channelState(c), doors: c.code ? doors.get(c.code.toUpperCase()) ?? [] : [] }));
+  const outCount = rows.filter((r) => r.st === "low" || r.st === "high").length;
+  const openCount = rows.reduce((s, r) => s + r.doors.filter((x) => x.online && isDoorOpen(x.readings)).length, 0);
+  const faultCount = rows.filter((r) => r.st === "fault").length;
   return (
     <CardShell compact={false} offline={!d.online}>
       <div className="flex items-center gap-3">
-        <WiseArt active={channels.map((c) => c.value != null)} />
+        <WiseArt active={channels.map((c) => !c.fault && c.value != null)} />
         <div className="min-w-0 flex-1">
           <div className="font-semibold">{d.area || d.name}</div>
           <div className="truncate text-xs text-[#93A4B5]">
-            Cadena de frío · {d.model || "WISE"} · {d.name}
+            {d.model || "WISE"} · {d.name}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1.5 text-xs">
+            <span className="rounded-full border border-[#22406E] bg-[#13213A] px-2 py-0.5 text-[#A9C8FF]">{channels.length} equipos</span>
+            {outCount > 0 && <span className="rounded-full border border-[#7A2A22] bg-[#2A1210] px-2 py-0.5 text-[#FF8A7A]">{outCount} fuera de rango</span>}
+            {openCount > 0 && <span className="sd-alert rounded-full border border-[#7A4A12] bg-[#2A1E0C] px-2 py-0.5 text-[#FFC979]">{openCount} puerta(s) abierta(s)</span>}
+            {faultCount > 0 && <span className="rounded-full border border-[#7A4A12] bg-[#1F1A10] px-2 py-0.5 text-[#FFC979]">{faultCount} sonda(s) sin señal</span>}
           </div>
           <OfflineTag d={d} />
         </div>
       </div>
-      <ul className="flex flex-col gap-1.5">
-        {channels.map((c) => {
-          const out = c.value != null && ((c.min != null && c.value < c.min) || (c.max != null && c.value > c.max));
-          // Posicion del valor dentro de una escala de rango ±(ancho del rango) para la barrita.
-          const span = c.min != null && c.max != null ? c.max - c.min : 10;
-          const lo = (c.min ?? (c.value ?? 0) - 5) - span;
-          const hi = (c.max ?? (c.value ?? 0) + 5) + span;
-          const pos = c.value == null ? 0 : Math.max(0, Math.min(100, ((c.value - lo) / (hi - lo)) * 100));
-          const bandL = c.min != null ? ((c.min - lo) / (hi - lo)) * 100 : 0;
-          const bandW = c.min != null && c.max != null ? ((c.max - c.min) / (hi - lo)) * 100 : 100;
+      <ul className="flex flex-col gap-2">
+        {rows.map(({ c, st, doors: ds }) => {
+          const out = st === "low" || st === "high";
+          const open = ds.map((x) => x.online && isDoorOpen(x.readings));
+          const anyOpen = open.some(Boolean);
+          const freezer = /congelador/i.test(c.category) || (c.max != null && c.max <= 0);
+          const lcd = c.fault ? "----" : c.value == null ? "--.-" : `${c.value.toFixed(1)}°`;
           return (
-            <li key={c.key} className="rounded-[10px] bg-[#0E151D] px-2.5 py-2">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0 truncate text-xs text-[#B4C2D0]" title={`${c.name}${c.code ? ` · ${c.code}` : ""}`}>
-                  {c.name}
+            <li
+              key={c.key}
+              className={`grid grid-cols-[58px_minmax(0,1fr)] items-center gap-3 rounded-[12px] border p-2.5 transition-[background-color,border-color,box-shadow] duration-300 ${
+                lifted === c.key
+                  ? "border-[#2F5B86] bg-[#122233] shadow-[0_0_0_1px_rgba(79,195,247,0.25),0_10px_24px_-12px_rgba(79,195,247,0.5)]"
+                  : out
+                    ? "border-[#7A2A22] bg-[#0E151D]"
+                    : anyOpen
+                      ? "border-[#7A4A12] bg-[#0E151D]"
+                      : "border-transparent bg-[#0E151D]"
+              }`}
+            >
+              <button
+                type="button"
+                aria-pressed={lifted === c.key}
+                aria-label={`${lifted === c.key ? "Quitar resaltado de" : "Resaltar"} ${c.name}`}
+                title={lifted === c.key ? "Clic para regresarlo" : "Clic para resaltar en 3D"}
+                onClick={() => setLifted((k) => (k === c.key ? null : c.key))}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setLifted(null);
+                }}
+                className={`sd-fridge-btn relative flex min-h-[44px] cursor-pointer items-center justify-center rounded-[10px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5B9BFF] ${
+                  lifted === c.key ? "z-10" : ""
+                }`}
+              >
+                <span className="sd-fridge-3d inline-block">
+                  <FridgeArt
+                    variant={freezer ? "freezer" : "fridge"}
+                    open={open.length ? open : [false]}
+                    lcd={lcd}
+                    tone={c.fault ? "fault" : out ? "warn" : "ok"}
+                    lifted={lifted === c.key}
+                    label={`${c.name}: ${c.fault ? "sonda sin señal" : `${fmt(c.value, 1)} ${c.unit}`}${anyOpen ? ", puerta abierta" : ""}`}
+                  />
                 </span>
-                <span className="sd-num shrink-0 text-base font-semibold" style={{ color: out ? WARN : "#E6EDF3" }}>
-                  {fmt(c.value, 1)} °C
-                </span>
-              </div>
-              <div className="relative mt-1.5 h-1.5 rounded bg-[#1B2633]" aria-hidden="true">
-                <div className="absolute inset-y-0 rounded bg-[#1E3A2E]" style={{ left: `${bandL}%`, width: `${bandW}%` }} />
-                <div
-                  className="absolute -top-[3px] h-3 w-1.5 rounded-sm transition-[left] duration-700"
-                  style={{ left: `calc(${pos}% - 3px)`, background: out ? WARN : "#4FC3F7" }}
-                />
-              </div>
-              <div className="mt-1 flex justify-between text-[11px] text-[#7D8FA1]">
-                <span>
-                  {c.category || c.channel}
-                  {c.code ? ` · ${c.code}` : ""}
-                </span>
-                <span>{c.min != null && c.max != null ? `${c.min} a ${c.max} °C` : "sin rango"}</span>
+              </button>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="line-clamp-2 min-w-0 break-words text-[13px] font-semibold leading-snug text-[#DCE6F0]" title={`${c.name}${c.code ? ` · ${c.code}` : ""}`}>
+                    {c.name}
+                  </span>
+                  {c.fault ? (
+                    <span className="shrink-0 text-xs font-semibold" style={{ color: WARN }} title="Corriente pegada a 4/20 mA o circuito abierto: sonda desconectada o dañada">
+                      Sonda sin señal
+                    </span>
+                  ) : (
+                    <span className="sd-num shrink-0 text-lg font-semibold" style={{ color: out ? WARN : "#E6EDF3" }}>
+                      {fmt(c.value, 1)}
+                      <span className="text-xs font-normal text-[#93A4B5]"> {c.unit}</span>
+                    </span>
+                  )}
+                </div>
+                <RangeBar c={c} />
+                <div className="flex justify-between gap-2 text-xs text-[#7D8FA1]">
+                  <span className="truncate">
+                    {c.category || c.channel}
+                    {c.code ? ` · ${c.code}` : ""}
+                  </span>
+                  <span className="shrink-0">{c.min != null && c.max != null ? `${c.min} a ${c.max} ${c.unit}` : "sin rango"}</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {ds.length ? (
+                    ds.map((x, i) => <DoorChip key={x.id} door={x} index={i} total={ds.length} onTrend={onTrend} />)
+                  ) : (
+                    <span className="text-xs text-[#7D8FA1]">Sin sensor de puerta</span>
+                  )}
+                </div>
               </div>
             </li>
           );
@@ -479,32 +617,180 @@ function ColdChainCard({ d, channels, onTrend }: { d: SedeDevice; channels: Cold
   );
 }
 
-export function AirCard({ d, onTrend }: { d: SedeDevice; onTrend: (d: SedeDevice) => void }) {
-  const co2 = num(d.readings, "co2");
-  const bad = co2 != null && co2 > co2Limit(d);
+const PROCESS_META = {
+  pump: { title: "Bombeo de agua", accent: "#4FC3F7", icon: "M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z" },
+  heating: { title: "Calderas y calentadores", accent: "#F2A33A", icon: "M12 3c1 3 4 4.5 4 8.5a4 4 0 0 1-8 0c0-2 1-3 1.5-4 .5 1.5 1.5 2 2 2 0-2-0.5-4 .5-6.5Z" },
+} as const;
+
+/**
+ * WISE que no son cadena de frio (el mismo equipo se usa para otros procesos): bombeo de agua (PSI)
+ * y calderas/calentadores (°C). Un dial de aguja por canal, con la escala del transmisor y la franja
+ * verde del rango permitido.
+ */
+function ProcessCard({
+  d,
+  group,
+  channels,
+  onTrend,
+}: {
+  d: SedeDevice;
+  group: "pump" | "heating";
+  channels: ColdChainChannel[];
+  onTrend: (d: SedeDevice) => void;
+}) {
+  const meta = PROCESS_META[group];
+  const STATE_TEXT = { ok: "En rango", low: group === "pump" ? "Presión baja" : "Temperatura baja", high: group === "pump" ? "Presión alta" : "Temperatura alta", fault: "Sonda sin señal", none: "Sin dato" };
   return (
     <CardShell compact={false} offline={!d.online}>
       <div className="flex items-center gap-3">
-        <AirArt />
+        <WiseArt active={channels.map((c) => !c.fault && c.value != null)} />
         <div className="min-w-0 flex-1">
-          <div className="font-semibold">{d.name}</div>
-          <div className="text-xs text-[#93A4B5]">
-            {d.model || "LEO S592"}
-            {d.area ? ` · ${d.area}` : ""}
+          <div className="flex items-center gap-1.5 font-semibold">
+            <svg className="sd-glow h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke={meta.accent} strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+              <path d={meta.icon} />
+            </svg>
+            <span className="truncate">{d.area || meta.title}</span>
           </div>
-          <div className="sd-num pt-0.5 text-[13px]">
-            {fmt(num(d.readings, "temperature"), 1)} °C · {fmt(num(d.readings, "humidity"), 0)} %HR · PM2.5 {fmt(num(d.readings, "pm2_5"), 0)}
+          <div className="truncate text-xs text-[#93A4B5]">
+            {d.model || "WISE"} · {d.name}
           </div>
           <OfflineTag d={d} />
         </div>
-        <RingGauge
-          size={58}
-          pct={co2 == null ? 0 : (co2 / 1500) * 100}
-          color={bad ? WARN : "#7BD88F"}
-          label={fmt(co2, 0)}
-          sub="ppm CO₂"
-          ariaLabel={`CO2 ${fmt(co2, 0)} ppm`}
-        />
+      </div>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2">
+        {channels.map((c) => {
+          const st = channelState(c);
+          const bad = st !== "ok";
+          return (
+            <div key={c.key} className={`flex flex-col items-center gap-1 rounded-[12px] border bg-[#0E151D] px-2 pb-2.5 pt-2 ${bad && st !== "none" ? "border-[#7A4A12]" : "border-transparent"}`}>
+              <div className="w-full truncate text-center text-xs text-[#B4C2D0]" title={`${c.name}${c.code ? ` · ${c.code}` : ""}`}>
+                {c.name}
+                {c.code ? <span className="text-[#7D8FA1]"> · {c.code}</span> : null}
+              </div>
+              <DialGauge
+                value={c.value}
+                scaleMin={c.scaleMin ?? Math.min(0, c.min ?? 0)}
+                scaleMax={c.scaleMax ?? Math.max(c.max ?? 100, (c.value ?? 0) * 1.2)}
+                lo={c.min}
+                hi={c.max}
+                unit={c.unit}
+                fault={c.fault}
+                accent={meta.accent}
+                label={`${c.name}: ${c.fault ? "sonda sin señal" : `${fmt(c.value, 1)} ${c.unit}`}`}
+              />
+              <span
+                className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                  st === "ok" ? "border-[#22443A] bg-[#0F1D18] text-[#8FE0B5]" : st === "none" ? "border-[#2C3D50] text-[#93A4B5]" : "border-[#7A4A12] bg-[#2A1E0C] text-[#FFC979]"
+                }`}
+              >
+                {STATE_TEXT[st]}
+              </span>
+              <span className="text-xs text-[#7D8FA1]">{c.min != null && c.max != null ? `Rango ${c.min} a ${c.max} ${c.unit}` : "sin rango"}</span>
+            </div>
+          );
+        })}
+      </div>
+      <TrendButton d={d} onTrend={onTrend} />
+    </CardShell>
+  );
+}
+
+const OCCUPANCY: Record<string, string> = { occupied: "Ocupado", vacant: "Libre" };
+
+/**
+ * LEO S592 (calidad de aire) dibujado como el equipo real. La grafica de su pantalla usa solo datos
+ * reales: en la vista normal se llena con cada lectura que llega; al resaltarlo en 3D (clic) se
+ * carga el historial de CO2 de la ultima hora.
+ */
+export function AirCard({ d, onTrend }: { d: SedeDevice; onTrend: (d: SedeDevice) => void }) {
+  const r = d.readings;
+  const co2 = num(r, "co2");
+  const limit = co2Limit(d);
+  const bad = co2 != null && co2 > limit;
+  const [lifted, setLifted] = useState(false);
+  const { data: history } = useDeviceHistory(lifted && !d.demo ? d.id : null, "1h");
+  // Lecturas de CO2 vistas en esta sesion (sin inventar datos: empieza con la lectura actual).
+  const seen = useRef<number[]>([]);
+  useEffect(() => {
+    if (co2 == null) return;
+    const s = seen.current;
+    if (s[s.length - 1] !== co2) seen.current = [...s, co2].slice(-40);
+  }, [co2]);
+  const histBars = (history?.points ?? []).map((p) => Number(p.co2)).filter((v) => Number.isFinite(v));
+  const bars = lifted && histBars.length ? histBars : seen.current.length ? seen.current : co2 != null ? [co2] : [];
+  const occ = OCCUPANCY[str(r.pirStatus).toLowerCase()] ?? str(r.pirStatus);
+  const metrics: [string, string, string][] = [
+    ["Temperatura", fmt(num(r, "temperature"), 1), "°C"],
+    ["Humedad", fmt(num(r, "humidity"), 0), "%HR"],
+    ["PM2.5", fmt(num(r, "pm2_5"), 0), "µg/m³"],
+    ["PM10", fmt(num(r, "pm10"), 0), "µg/m³"],
+    ["TVOC", fmt(num(r, "tvoc"), 0), "índice"],
+    ["HCHO", fmt(num(r, "hcho"), 2), "mg/m³"],
+  ];
+  return (
+    <CardShell compact={false} offline={!d.online}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{d.area || d.name}</div>
+          <div className="truncate text-xs text-[#93A4B5]">
+            {d.model || "LEO S592"} · {d.name}
+          </div>
+          <OfflineTag d={d} />
+        </div>
+        <span
+          className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${
+            bad ? "border-[#7A2A22] bg-[#2A1210] text-[#FF8A7A]" : "border-[#22443A] bg-[#0F1D18] text-[#8FE0B5]"
+          }`}
+        >
+          CO₂ {fmt(co2, 0)} ppm
+        </span>
+      </div>
+      <button
+        type="button"
+        aria-pressed={lifted}
+        aria-label={`${lifted ? "Quitar resaltado de" : "Resaltar"} ${d.area || d.name}`}
+        title={lifted ? "Clic para regresarlo" : "Clic para resaltar en 3D (con historial de CO₂ de la última hora)"}
+        onClick={() => setLifted((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setLifted(false);
+        }}
+        className={`sd-leo-btn relative flex cursor-pointer items-center justify-center rounded-[12px] py-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5B9BFF] ${
+          lifted ? "z-10 bg-[#122233]" : "hover:bg-[#0E151D]"
+        }`}
+      >
+        <span className="sd-leo-3d inline-block">
+          <Leo592Art
+            co2={co2}
+            temperature={num(r, "temperature")}
+            humidity={num(r, "humidity")}
+            pm25={num(r, "pm2_5")}
+            pm10={num(r, "pm10")}
+            bars={bars}
+            alert={bad}
+            lifted={lifted}
+            label={`${d.area || d.name}: CO2 ${fmt(co2, 0)} ppm${bad ? ` (sobre ${limit})` : ""}, ${fmt(num(r, "temperature"), 1)} °C, ${fmt(num(r, "humidity"), 0)} % de humedad`}
+          />
+        </span>
+      </button>
+      <div className="grid grid-cols-3 gap-1.5">
+        {metrics.map(([label, value, unit]) => (
+          <Tile key={label} label={label} value={value} unit={unit} />
+        ))}
+      </div>
+      <div className="flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs text-[#93A4B5]">
+        <span>
+          Límite CO₂ <span className="sd-num text-[#CFE0F5]">{limit} ppm</span>
+        </span>
+        {occ && (
+          <span>
+            Ocupación <span className="text-[#CFE0F5]">{occ}</span>
+          </span>
+        )}
+        {str(r.lightLevel) && (
+          <span>
+            Luz <span className="sd-num text-[#CFE0F5]">{str(r.lightLevel)}</span>
+          </span>
+        )}
       </div>
       <TrendButton d={d} onTrend={onTrend} />
     </CardShell>
@@ -615,7 +901,7 @@ export function RadioTable({ devices, onTrend }: { devices: SedeDevice[]; onTren
               <tr key={d.id} className="border-b border-[#1B2633] last:border-b-0">
                 <td className="px-3 py-2">
                   <div className="font-semibold">{d.name}</div>
-                  <div className="sd-num text-[11px] text-[#7D8FA1]">
+                  <div className="sd-num text-xs text-[#7D8FA1]">
                     {d.attrs.devAddr ? `DevAddr ${str(d.attrs.devAddr).toUpperCase()}` : ""}
                     {d.attrs.devEui ? ` · DevEUI ${str(d.attrs.devEui).toUpperCase()}` : ""} · cifrado
                   </div>

@@ -1,0 +1,2 @@
+Modbus conectado a EBO-ASP 127.0.0.1 ID 1
+RESULTADO: BLOQUEADO (sin respuesta tras 30.007s, conexiones=1)

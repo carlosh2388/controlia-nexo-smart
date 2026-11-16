@@ -691,6 +691,50 @@ func (e *Engine) ruleEnvironment(em *emitter, d discovery.Device) {
 // (aiN_tolerance) que se interpreta como MINUTOS de gracia fuera de rango antes de alarmar
 // (una puerta de refrigerador abierta un momento no es una alarma). Solo se evaluan los canales
 // configurados con tags; si el sensor no tiene tags por canal, se evaluan todos.
+// ruleScaledChannel evalua un canal 4-20 mA que no es cadena de frio (presion de agua del bombeo,
+// temperatura de calentadores/calderas...) contra su rango del tag aiN_threshold_min/max, con
+// aiN_tolerance como minutos de gracia, igual que la cadena de frio pero con sus propios eventos:
+// water_pressure -> water.pressure_low/high/normal; cualquier otro tipo -> process.out_of_range/normal.
+func (e *Engine) ruleScaledChannel(em *emitter, d discovery.Device, ch, name string, v float64) {
+	lo, _ := num(d.Attributes, "tag_"+ch+"_threshold_min")
+	hi, _ := num(d.Attributes, "tag_"+ch+"_threshold_max")
+	if hi <= lo {
+		return
+	}
+	kind := text(d.Attributes, "tag_"+ch+"_type")
+	unit := text(d.Attributes, "tag_"+ch+"_unit")
+	graceMin, _ := num(d.Attributes, "tag_"+ch+"_tolerance")
+	key := d.ExternalID + "|" + ch + "_scaled_out"
+	if v < lo || v > hi {
+		if _, ok := e.st.OpenSince[key]; !ok {
+			e.st.OpenSince[key] = em.now
+		}
+	} else {
+		delete(e.st.OpenSince, key)
+	}
+	since, isOut := e.st.OpenSince[key]
+	active := isOut && em.now.Sub(since).Minutes() >= graceMin
+
+	outType, normalType := "process.out_of_range", "process.normal"
+	if kind == "water_pressure" {
+		outType, normalType = "water.pressure_high", "water.pressure_normal"
+		if v < lo {
+			outType = "water.pressure_low"
+		}
+	}
+	data := map[string]interface{}{"channel": strings.ToUpper(ch), "equipment": name, "type": kind, "unit": unit, "min": lo, "max": hi}
+	em.alarm(d.ExternalID, ch+"_scaled", active,
+		func() Event {
+			return em.event(&d, outType, Warning,
+				fmt.Sprintf("%s: %s en %.1f %s, fuera de rango (%.0f a %.0f %s) por más de %.0f min", label(d), name, v, unit, lo, hi, unit, graceMin),
+				ptr(v), data)
+		},
+		func(m float64) Event {
+			return em.event(&d, normalType, Info,
+				fmt.Sprintf("%s: %s volvió a rango (%.1f %s)", label(d), name, v, unit), ptr(v), data)
+		})
+}
+
 func (e *Engine) ruleWise(em *emitter, d discovery.Device) {
 	configured := map[int]bool{}
 	for k := 0; k < 8; k++ {
@@ -767,6 +811,10 @@ func (e *Engine) ruleWise(em *emitter, d discovery.Device) {
 							ptr(t), map[string]interface{}{"channel": strings.ToUpper(ch), "equipment": name})
 					})
 			}
+		}
+
+		if v, ok := num(d.Readings, ch+"_scaled"); ok && !sensorFault {
+			e.ruleScaledChannel(em, d, ch, name, v)
 		}
 
 		em.alarm(d.ExternalID, ch+"_open", openCircuit == 1,
