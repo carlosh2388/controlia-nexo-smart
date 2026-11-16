@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "siasa-iot": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["apps/mcp/server.js"]
+    }
+  }
+}

@@ -12,6 +12,7 @@ ControlIA Nexo Smart es una plataforma IoT para controlar, visualizar y automati
 - [Automatizaciones](./automations.md)
 - [Operaciones](./operations.md)
 - [Piloto Gravix: arquitectura y bitácora](./piloto-gravix.md)
+- [Servidor MCP (consultas de Claude a la API, solo lectura)](../apps/mcp/README.md)
 - Procedimientos paso a paso: [Agente Go](./procedimientos/agente-go.md), [Integrar sede IGSS](./procedimientos/sede-igss.md), [Eventos de sede](./procedimientos/eventos-sede.md)
 
 ## Resumen Tecnico
