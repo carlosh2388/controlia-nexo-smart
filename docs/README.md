@@ -4,14 +4,19 @@ ControlIA Nexo Smart es una plataforma IoT para controlar, visualizar y automati
 
 ## Contenido
 
-- [Arquitectura](./architecture.md)
+- **[Arquitectura general con Agente Go (diagrama completo y bitácora)](./arquitectura-general.md)**
+- [Arquitectura de la API y adaptadores de TEC 3](./architecture.md)
+- [Centro de mando, permisos y red por fases](./centro-de-mando.md)
+- [Agentes Go: manual](./agentes-go-manual.md)
 - [Despliegue](./deployment.md)
 - [API](./api.md)
 - [Base de Datos](./database.md)
 - [Frontend](./frontend.md)
 - [Automatizaciones](./automations.md)
 - [Operaciones](./operations.md)
-- [Piloto Gravix: arquitectura y bitácora](./piloto-gravix.md)
+- **[Gravix: arquitectura de la solución implementada](./gravix-arquitectura.md)**
+- **[Gravix de sede: diseño para producción (un Gravix local por sede, reemplazo del AS-P)](./gravix-sede.md)**
+- [Piloto Gravix: bitácora y comparativo](./piloto-gravix.md)
 - [Servidor MCP (consultas de Claude a la API, solo lectura)](../apps/mcp/README.md)
 - Procedimientos paso a paso: [Agente Go](./procedimientos/agente-go.md), [Integrar sede IGSS](./procedimientos/sede-igss.md), [Eventos de sede](./procedimientos/eventos-sede.md)
 

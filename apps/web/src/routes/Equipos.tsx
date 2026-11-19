@@ -10,45 +10,31 @@ import {
   type ScanIdentity,
 } from "../api/agents";
 import { useAccess } from "../api/access";
-import { INDICADORES, NORMA_TXT, useGuardarUmbrales, useProbarLectura, useUmbrales, type Limites, type Norma } from "../api/calidad";
-import { usePilotDevices, useSaveDirectConnection, type PilotDevice } from "../api/pilot";
+import { usePilotDevices } from "../api/pilot";
 import { extractErrorMessage } from "../api/errors";
 import AgentDevices from "./AgentDevices";
 import AgentConfig from "./AgentConfig";
+import { FichaCampos, atributosDeFicha, faseSugerida, fichaVacia, sugerirDeviceId, type Ficha } from "../components/red/Ficha";
+import { hace, perfilDe, servidores } from "../components/red/equiposUtil";
+import ConfigEquipos from "../components/red/ConfigEquipos";
+import AgenteGo from "../components/red/AgenteGo";
+import { NuevaSede } from "../components/red/RedAdmin";
+import { useGuardarSede, useRed, useSedeDeAgente } from "../api/red";
 
 /**
- * Pestaña "Equipos" (mockup aprobado "Gestión de equipos"): reemplaza a "Agente Go" y
- * "Configuración". Descubrir y agregar (el agente identifica ION7400 / PM2130 / generador),
- * topología en vivo, configuración por equipo (conexión, prueba de lectura, registros, umbrales)
- * y los agentes. Todo lo que toca un medidor real es solo lectura (función 03).
+ * Pestaña "Equipos" (mockups aprobados "Gestión de equipos" y "Plataforma"): Agente Go (esquema en
+ * vivo de cada agente), descubrir y agregar (el agente identifica ION7400 / PM2130 / generador),
+ * topología en vivo, configuración por equipo (ficha, conexión, umbrales, registros) y los agentes.
+ * Todo lo que toca un medidor real es solo lectura (función 03).
  */
 
-type Seccion = "descubrir" | "topologia" | "config" | "agentes";
+type Seccion = "agente" | "descubrir" | "topologia" | "config" | "agentes";
 
 const MODELO_TXT: Record<string, string> = { ION7400: "Analizador ION7400", PM2130: "Medidor PM2130", generator: "Controlador de generador", "": "No identificado" };
 const PERFIL_DE: Record<string, string> = { ION7400: "ion7400-directo", PM2130: "pm2130-directo", generator: "generador-directo" };
 
-function perfilDe(d: PilotDevice | null | undefined) {
-  const m = `${d?.model ?? ""} ${d?.name ?? ""}`.toLowerCase();
-  if (m.includes("2130")) return "pm2130-directo";
-  if (m.includes("gen")) return "generador-directo";
-  return "ion7400-directo";
-}
-
-function servidores(c: AgentProtocols | undefined): ModbusServerConfig[] {
-  if (!c) return [];
-  if (c.modbusServers?.length) return c.modbusServers;
-  return c.modbus ? [c.modbus] : [];
-}
-
-function hace(s: string | null) {
-  if (!s) return "sin datos";
-  const seg = Math.max(0, Math.round((Date.now() - new Date(s).getTime()) / 1000));
-  return seg < 60 ? `hace ${seg} s` : seg < 3600 ? `hace ${Math.round(seg / 60)} min` : `hace ${Math.round(seg / 3600)} h`;
-}
-
 export default function Equipos() {
-  const [sec, setSec] = useState<Seccion>("descubrir");
+  const [sec, setSec] = useState<Seccion>("agente");
   const agentsQ = useAgents();
   const agents = agentsQ.data ?? [];
   const [bk, setBk] = useState<string | null>(null);
@@ -56,8 +42,17 @@ export default function Equipos() {
     if (!bk && agents.length) setBk((agents.find((a) => a.buildingKey.endsWith("-directo")) ?? agents.find((a) => a.hasConfig) ?? agents[0]).buildingKey);
   }, [agents, bk]);
   const agent = agents.find((a) => a.buildingKey === bk) ?? null;
+  const access = useAccess();
+  const esAdmin = access.data?.role === "admin";
+  const red = useRed();
+  const sedeDe = useSedeDeAgente();
+  const sede = sedeDe(bk);
+  const [crearSede, setCrearSede] = useState(false);
 
-  const tabs: [Seccion, string][] = [["descubrir", "Descubrir y agregar"], ["topologia", "Topología en vivo"], ["config", "Configuración"], ["agentes", "Agentes"]];
+  const tabs: [Seccion, string][] = [["agente", "Agente Go"], ["descubrir", "Descubrir y agregar"], ["topologia", "Topología en vivo"], ["config", "Configuración"], ["agentes", "Agentes"]];
+  /** Agente → sede que ya lo usa (para no repetir un agente en dos sedes). */
+  const agentesEnUso: Record<string, string> = { "igss-escuintla": "Escuintla", "igss-escuintla-directo": "Escuintla" };
+  for (const s of red.data?.sedes ?? []) if (s.origen === "nodivo") for (const a of s.agentes) agentesEnUso[a] ??= s.nombre;
 
   return (
     <div className="flex flex-col gap-4 pb-16">
@@ -68,18 +63,45 @@ export default function Equipos() {
           ))}
         </div>
         {sec !== "agentes" && (
-          <label className="flex items-center gap-2 text-sm text-slate-400">
-            Agente
-            <select value={bk ?? ""} onChange={(e) => setBk(e.target.value)} className="min-h-[38px] rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-100">
-              {agents.map((a) => <option key={a.buildingKey} value={a.buildingKey}>{a.buildingKey}{a.lastSync?.agentVersion ? ` · v${a.lastSync.agentVersion}` : ""}</option>)}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm text-slate-400">
+              Agente
+              <select value={bk ?? ""} onChange={(e) => setBk(e.target.value)} className="min-h-[38px] rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-100">
+                {agents.map((a) => <option key={a.buildingKey} value={a.buildingKey}>{a.buildingKey} · {sedeDe(a.buildingKey)?.nombre ?? "sin sede"}{a.lastSync?.agentVersion ? ` · v${a.lastSync.agentVersion}` : ""}</option>)}
+              </select>
+            </label>
+            {bk && (sede ? (
+              <span className="flex min-h-[38px] items-center gap-2 rounded-lg border px-3 text-sm font-semibold text-slate-100" style={{ borderColor: `${sede.grupo?.color ?? "#475569"}88`, background: `${sede.grupo?.color ?? "#475569"}1f` }} title="Los equipos de este agente pertenecen a esta sede">
+                <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: sede.grupo?.color ?? "#475569" }} />
+                Sede: {sede.nombre}{sede.grupo ? <span className="font-normal text-slate-300">· {sede.grupo.nombre}</span> : null}
+              </span>
+            ) : (
+              <span className="flex min-h-[38px] items-center rounded-lg border border-amber-800 bg-amber-950/30 px-3 text-sm font-semibold text-amber-200">Sin sede asignada</span>
+            ))}
+          </div>
         )}
       </div>
+      {bk && !sede && sec !== "agentes" && red.data && (
+        <SinSede bk={bk} esAdmin={esAdmin} sedes={red.data.sedes.filter((s) => s.origen === "nodivo")} onCrear={() => setCrearSede(true)} />
+      )}
+      {crearSede && bk && red.data && (
+        <NuevaSede
+          grupos={red.data.grupos}
+          sedes={red.data.sedes}
+          idsExistentes={red.data.sedes.map((s) => s.id).concat(["escuintla"])}
+          agentesEnUso={agentesEnUso}
+          sedeId={null}
+          pasoInicial={1}
+          agenteInicial={bk}
+          onCerrar={() => setCrearSede(false)}
+          onAbrirSede={() => setCrearSede(false)}
+        />
+      )}
       {agentsQ.isLoading && <p className="py-8 text-center text-sm text-slate-500">Cargando agentes…</p>}
+      {sec === "agente" && bk && <AgenteGo agents={agents} bk={bk} onElegir={setBk} onIr={setSec} sedeDe={sedeDe} />}
       {sec === "descubrir" && bk && <Descubrir bk={bk} remoto={!!agent?.hasConfig} />}
       {sec === "topologia" && bk && <Topologia bk={bk} remoto={!!agent?.hasConfig} />}
-      {sec === "config" && bk && <Configuracion bk={bk} />}
+      {sec === "config" && bk && <ConfigEquipos key={bk} bk={bk} sedeNombre={sede?.nombre ?? null} />}
       {sec === "agentes" && (
         <div className="flex flex-col gap-8">
           <AgentDevices />
@@ -90,8 +112,54 @@ export default function Equipos() {
   );
 }
 
+/** Aviso: el agente elegido no pertenece a ninguna sede, asi que sus equipos no salen en el centro de mando. */
+function SinSede({ bk, esAdmin, sedes, onCrear }: { bk: string; esAdmin: boolean; sedes: import("../api/red").RedSede[]; onCrear: () => void }) {
+  const guardar = useGuardarSede();
+  const [destino, setDestino] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  function asignar() {
+    const s = sedes.find((x) => x.id === destino);
+    if (!s) return;
+    guardar.mutate(
+      { id: s.id, nombre: s.nombre, origen: "nodivo", grupoId: s.grupoId, agentes: [...new Set([...s.agentes, bk])], lat: s.lat, lon: s.lon, plantilla: s.plantilla },
+      { onError: (e) => setMsg(extractErrorMessage(e, "No se pudo asignar")) },
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-800 bg-amber-950/20 px-4 py-3" role="status">
+      <span className="min-w-[260px] flex-1 text-sm text-amber-100">
+        <b>El agente «{bk}» no está asignado a ninguna sede.</b> Sus equipos se leen y se guardan, pero no aparecen en el Centro de mando. Cada sede tiene su propio agente.
+      </span>
+      {esAdmin ? (
+        <>
+          <button type="button" onClick={onCrear} className="min-h-[38px] rounded-lg bg-sky-600 px-3.5 text-sm font-bold text-white hover:bg-sky-500">Crear sede con este agente</button>
+          {sedes.length > 0 && (
+            <span className="flex items-center gap-1.5">
+              <select value={destino} onChange={(e) => setDestino(e.target.value)} aria-label="Sede existente" className="min-h-[38px] rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-100">
+                <option value="">Asignar a una sede…</option>
+                {sedes.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+              </select>
+              <button type="button" disabled={!destino || guardar.isPending} onClick={asignar} className="min-h-[38px] rounded-lg border border-slate-600 px-3 text-sm font-semibold text-slate-100 disabled:opacity-40">Asignar</button>
+            </span>
+          )}
+          {msg && <span className="text-sm text-rose-300">{msg}</span>}
+        </>
+      ) : <span className="text-xs text-amber-200/80">Un administrador puede crearle su sede.</span>}
+    </div>
+  );
+}
+
+/**
+ * El agente reconoce el ION7400 porque acepta bloques grandes; otros medidores Schneider tambien los
+ * aceptan. Un "ION7400" que se nombra "Power Meter" (nombre de fabrica de la serie PM) queda por
+ * confirmar hasta que el agente lea el modelo del propio equipo.
+ */
+function porConfirmar(d: ScanIdentity) {
+  return d.model === "ION7400" && /power\s*meter/i.test(d.name ?? "");
+}
+
 /* ================= descubrir y agregar ================= */
-function Descubrir({ bk, remoto }: { bk: string; remoto: boolean }) {
+export function Descubrir({ bk, remoto }: { bk: string; remoto: boolean }) {
   const access = useAccess();
   const role = access.data?.role;
   const puedeBuscar = role === "admin" || role === "operator";
@@ -107,6 +175,14 @@ function Descubrir({ bk, remoto }: { bk: string; remoto: boolean }) {
   const corriendo = scan?.status === "pending" || scan?.status === "running";
   const ya = useMemo(() => new Set(servidores(cfgQ.data?.config).map((s) => `${s.host}#${s.unitId ?? 1}`)), [cfgQ.data]);
   const [nombres, setNombres] = useState<Record<string, string>>({});
+  /** Ficha de cada equipo encontrado (clave host#unitId), abierta en una sola tarjeta a la vez. */
+  const [fichas, setFichas] = useState<Record<string, Ficha>>({});
+  const [fichaAbierta, setFichaAbierta] = useState<string | null>(null);
+  const usados = useMemo(() => {
+    const ids = servidores(cfgQ.data?.config).flatMap((s) => (s.devices ?? []).map((d) => String(d.attributes?.device_id ?? ""))).filter(Boolean);
+    return [...ids, ...Object.values(fichas).map((f) => f.device_id).filter(Boolean)];
+  }, [cfgQ.data, fichas]);
+  const fichaDe = (clave: string, d: ScanIdentity) => fichas[clave] ?? { ...fichaVacia(), device_id: sugerirDeviceId(d.model, usados), fase_energy: faseSugerida(d.evidence) };
 
   const encontrados = (scan?.results ?? []).filter((r) => r.protocol === "modbus" && r.status === "ok");
   const filas = encontrados.flatMap((r) => (r.devices?.length ? r.devices : (r.unitIds ?? []).map((u): ScanIdentity => ({ unitId: u, model: "", confidence: 0, evidence: "agente anterior a 0.5.3: sin identificación" }))).map((d) => ({ host: r.host, port: r.port, d })));
@@ -125,9 +201,10 @@ function Descubrir({ bk, remoto }: { bk: string; remoto: boolean }) {
     if (!perfil) return setMsg({ t: "Equipo no identificado: agréguelo a mano en Agentes → configuración.", ok: false });
     const clave = `${host}#${d.unitId}`;
     const nombre = (nombres[clave] ?? d.name ?? "").trim() || `${d.model || "Equipo"} ${host} ID ${d.unitId}`;
+    const ficha = fichaDe(clave, d);
     const nuevo: ModbusServerConfig = {
       enabled: true, name: nombre, host, port, unitId: d.unitId, pollIntervalSeconds: 15, timeoutMs: 3000, readDelayMs: 100,
-      devices: [{ name: nombre, profile: perfil, start: 0, attributes: { model: d.model, identificadoPor: "agente", confianza: d.confidence } }],
+      devices: [{ name: nombre, profile: perfil, start: 0, attributes: atributosDeFicha(ficha, { model: d.model, identificadoPor: "agente", confianza: d.confidence }) }],
     };
     const config: AgentProtocols = { ...base.config, modbus: null, modbusServers: [...servidores(base.config), nuevo] };
     guardar.mutate(
@@ -175,24 +252,39 @@ function Descubrir({ bk, remoto }: { bk: string; remoto: boolean }) {
             {filas.map(({ host, port, d }) => {
               const clave = `${host}#${d.unitId}`;
               const instalado = ya.has(clave);
-              const color = d.model === "ION7400" ? "text-sky-300" : d.model === "PM2130" ? "text-emerald-300" : d.model === "generator" ? "text-amber-300" : "text-slate-400";
+              const dudoso = porConfirmar(d);
+              const color = dudoso ? "text-violet-300" : d.model === "ION7400" ? "text-sky-300" : d.model === "PM2130" ? "text-emerald-300" : d.model === "generator" ? "text-amber-300" : "text-slate-400";
+              const abierta = fichaAbierta === clave;
+              const ficha = fichaDe(clave, d);
               return (
-                <div key={clave} className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                <div key={clave} className={`flex flex-col gap-2 rounded-xl border bg-slate-950/60 p-3 ${abierta ? "border-sky-800" : "border-slate-800"}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <b className={`block text-sm ${color}`}>{MODELO_TXT[d.model] ?? d.model}</b>
+                      <b className={`block text-sm ${color}`}>{dudoso ? "Medidor Schneider · por confirmar" : MODELO_TXT[d.model] ?? d.model}</b>
                       <span className="mono text-xs text-slate-400">{host} · ID {d.unitId}</span>
                     </div>
-                    {d.confidence > 0 && <span className="mono rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-200" title="Qué tan seguro está el agente">{d.confidence} %</span>}
+                    {d.confidence > 0 && <span className="mono rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-200" title="Qué tan seguro está el agente">{dudoso ? "?" : `${d.confidence} %`}</span>}
                   </div>
                   <small className="text-xs text-slate-400">{d.evidence}</small>
+                  {dudoso && (
+                    <small className="rounded-lg border border-violet-900 bg-violet-950/30 px-2.5 py-1.5 text-xs text-violet-200">
+                      Se nombra «Power Meter» (nombre de fábrica de la serie PM), pero respondió como ION7400. Confirme el modelo en la placa del equipo antes de agregarlo.
+                    </small>
+                  )}
                   {instalado ? (
                     <span className="text-xs font-semibold text-emerald-300">Ya está en la configuración del agente</span>
                   ) : (
-                    <div className="flex gap-2">
-                      <input aria-label="Nombre del equipo" value={nombres[clave] ?? d.name ?? ""} onChange={(e) => setNombres({ ...nombres, [clave]: e.target.value })} placeholder="Nombre (ej. ANALIZADOR-7)" className="min-h-[36px] min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100" />
-                      <button type="button" disabled={!puedeAgregar || !d.model || guardar.isPending || !cfgQ.data} onClick={() => agregar(host, port, d)} title={puedeAgregar ? "" : "Solo un administrador cambia la configuración del agente"} className="min-h-[36px] rounded-lg border border-sky-700 px-3 text-sm font-bold text-sky-200 hover:bg-sky-950 disabled:opacity-40">Agregar</button>
-                    </div>
+                    <>
+                      <div className="flex gap-2">
+                        <input aria-label="Nombre del equipo" value={nombres[clave] ?? d.name ?? ""} onChange={(e) => setNombres({ ...nombres, [clave]: e.target.value })} placeholder="Nombre (ej. ANALIZADOR-7)" className="min-h-[36px] min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100" />
+                        <button type="button" disabled={!puedeAgregar || !d.model || guardar.isPending || !cfgQ.data} onClick={() => agregar(host, port, d)} title={puedeAgregar ? "" : "Solo un administrador cambia la configuración del agente"} className="min-h-[36px] rounded-lg border border-sky-700 px-3 text-sm font-bold text-sky-200 hover:bg-sky-950 disabled:opacity-40">Agregar</button>
+                      </div>
+                      <button type="button" aria-expanded={abierta} onClick={() => { if (!fichas[clave]) setFichas({ ...fichas, [clave]: ficha }); setFichaAbierta(abierta ? null : clave); }} className="flex min-h-[32px] items-center justify-between rounded-lg px-1 text-left text-xs font-semibold text-sky-300 hover:bg-slate-900">
+                        <span>Ficha del dispositivo {ficha.area || ficha.code_inventory ? `· ${[ficha.code_inventory, ficha.area].filter(Boolean).join(" · ")}` : "· área, edificio, nivel, inventario…"}</span>
+                        <span aria-hidden="true">{abierta ? "▴" : "▾"}</span>
+                      </button>
+                      {abierta && <FichaCampos valor={ficha} onChange={(f) => setFichas({ ...fichas, [clave]: f })} disabled={!puedeAgregar} />}
+                    </>
                   )}
                 </div>
               );
@@ -264,147 +356,3 @@ function Topologia({ bk, remoto }: { bk: string; remoto: boolean }) {
   );
 }
 
-/* ================= configuracion por equipo ================= */
-const MAPA: Record<string, { r: string; v: string; t: string }[]> = {
-  "ion7400-directo": [
-    { r: "3000-3005", v: "Corriente A, B, C", t: "float32" }, { r: "3020-3033", v: "Voltajes L-L y L-N", t: "float32" },
-    { r: "3054-3061", v: "Potencia activa por fase y total (W → kW)", t: "float32" }, { r: "3070-3077", v: "Potencia aparente (VA → kVA)", t: "float32" },
-    { r: "3110", v: "Frecuencia", t: "float32" }, { r: "3144-3151", v: "Factor de potencia", t: "float32" },
-    { r: "21300-21335", v: "THD de corriente y tensión", t: "float32 ×100" }, { r: "34649-34654", v: "Flicker Pst A/B/C", t: "float32" },
-    { r: "30112, 30450-30479", v: "Demanda pico", t: "float32" }, { r: "411-414", v: "Estado comercial / generador y transferencias", t: "entero 16" },
-  ],
-  "pm2130-directo": [
-    { r: "3000-3011", v: "Corrientes y promedio", t: "float32" }, { r: "3020-3037", v: "Voltajes L-L, L-N y promedios", t: "float32" },
-    { r: "3054-3085", v: "Potencias activa, reactiva, aparente y FP", t: "float32" }, { r: "3110", v: "Frecuencia", t: "float32" },
-    { r: "3204-3243", v: "Energías kWh, kVArh, kVAh", t: "int64" }, { r: "3764", v: "Demanda total", t: "float32" },
-    { r: "21300-21338", v: "THD", t: "float32" },
-  ],
-  "generador-directo": [
-    { r: "4770-4785", v: "kVA y kW por fase y total", t: "int32 CDAB" }, { r: "4786", v: "Factor de potencia", t: "float32 CDAB" },
-    { r: "4790-4797", v: "Frecuencias, fuente de velocidad, RPM", t: "int32 CDAB" }, { r: "4798", v: "Carga del motor %", t: "int32 CDAB" },
-    { r: "4800", v: "Temperatura del refrigerante", t: "int32 ×0.1 °C" }, { r: "4802", v: "Presión de aceite", t: "int32 CDAB" },
-    { r: "4804", v: "Voltaje de batería", t: "int32 ×0.1 V" }, { r: "4806", v: "Nivel de combustible", t: "int32 CDAB" },
-  ],
-};
-
-function Configuracion({ bk }: { bk: string }) {
-  const access = useAccess();
-  const puede = (access.data?.role === "admin" || access.data?.role === "operator") && !!access.data?.actions.includes("agentes");
-  const pilot = usePilotDevices(bk);
-  const devs = pilot.data?.devices ?? [];
-  const [id, setId] = useState<string | null>(null);
-  const dev = devs.find((d) => d.id === id) ?? devs[0] ?? null;
-  const perfil = perfilDe(dev);
-
-  const [f, setF] = useState({ ip: "", port: 502, unitId: 1, intervalSeconds: 15, enabled: true, compareWithAsp: true });
-  useEffect(() => {
-    const c = dev?.directConnection;
-    setF({ ip: c?.ip ?? "", port: c?.port ?? 502, unitId: c?.unitId ?? 1, intervalSeconds: c?.intervalSeconds ?? 15, enabled: c?.enabled ?? true, compareWithAsp: c?.compareWithAsp ?? true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dev?.id]);
-  const guardarCon = useSaveDirectConnection();
-  const probar = useProbarLectura();
-  const [msg, setMsg] = useState<{ t: string; ok: boolean } | null>(null);
-
-  const umb = useUmbrales(dev?.id ?? null);
-  const guardarUmb = useGuardarUmbrales();
-  const [norma, setNorma] = useState<Norma>("ntsd");
-  const [lim, setLim] = useState<Limites | null>(null);
-  useEffect(() => {
-    if (umb.data) { setNorma(umb.data.norma); setLim(umb.data.limites); }
-  }, [umb.data]);
-
-  const campo = "min-h-[38px] rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-100";
-
-  return (
-    <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
-      <nav aria-label="Equipos del agente" className="panel flex max-h-[70vh] flex-col gap-1 overflow-y-auto p-2">
-        {devs.map((d) => (
-          <button key={d.id} type="button" onClick={() => { setId(d.id); setMsg(null); probar.reset(); }} aria-current={dev?.id === d.id ? "true" : undefined} className={`flex min-h-[40px] items-center justify-between rounded-lg px-3 text-left text-sm ${dev?.id === d.id ? "bg-sky-600 text-white" : "text-slate-200 hover:bg-slate-800"}`}>
-            <span className="truncate">{d.name}</span>
-            <small className="mono text-[10px] opacity-70">{d.directConnection?.ip ? `ID ${d.directConnection.unitId ?? "—"}` : ""}</small>
-          </button>
-        ))}
-        {!devs.length && <p className="p-3 text-sm text-slate-500">Este agente no tiene equipos de energía.</p>}
-      </nav>
-
-      {dev && (
-        <div className="flex flex-col gap-4">
-          <section className="panel flex flex-col gap-3 p-4">
-            <span className="eyebrow">Conexión · {dev.name} · perfil {perfil}</span>
-            <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
-              <label className="flex flex-col gap-1 text-xs text-slate-400">IP<input className={`${campo} mono`} value={f.ip} onChange={(e) => setF({ ...f, ip: e.target.value.trim() })} placeholder="10.0.6.9" /></label>
-              <label className="flex flex-col gap-1 text-xs text-slate-400">Puerto<input type="number" className={`${campo} mono`} value={f.port} onChange={(e) => setF({ ...f, port: Number(e.target.value) })} /></label>
-              <label className="flex flex-col gap-1 text-xs text-slate-400">ID Modbus<input type="number" min={0} max={255} className={`${campo} mono`} value={f.unitId} onChange={(e) => setF({ ...f, unitId: Number(e.target.value) })} /></label>
-              <label className="flex flex-col gap-1 text-xs text-slate-400">Intervalo (s)<input type="number" min={5} className={`${campo} mono`} value={f.intervalSeconds} onChange={(e) => setF({ ...f, intervalSeconds: Number(e.target.value) })} /></label>
-            </div>
-            <div className="flex flex-wrap items-center gap-4 text-sm text-slate-300">
-              <label className="flex items-center gap-2"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Lectura directa activa</label>
-              <label className="flex items-center gap-2"><input type="checkbox" checked={f.compareWithAsp} onChange={(e) => setF({ ...f, compareWithAsp: e.target.checked })} /> Comparar con el AS-P</label>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button type="button" disabled={!f.ip || probar.isPending || !puede} onClick={() => probar.mutate({ deviceId: dev.id, ip: f.ip, port: f.port, unitId: f.unitId, perfil })} className="min-h-[38px] rounded-lg border border-slate-600 px-4 text-sm font-bold text-slate-100 hover:bg-slate-800 disabled:opacity-40">{probar.isPending ? "Leyendo…" : "Probar lectura"}</button>
-              <button
-                type="button"
-                disabled={!f.ip || guardarCon.isPending || !puede}
-                onClick={() => guardarCon.mutate({ deviceId: dev.id, connection: { ...f, viaDeviceId: dev.directConnection?.viaDeviceId ?? null } }, { onSuccess: () => setMsg({ t: "Conexión guardada.", ok: true }), onError: (e) => setMsg({ t: extractErrorMessage(e, "No se pudo guardar"), ok: false }) })}
-                className="min-h-[38px] rounded-lg bg-sky-600 px-4 text-sm font-bold text-white disabled:opacity-40"
-              >Guardar conexión</button>
-              {!puede && <small className="text-xs text-slate-500">Su perfil no tiene el permiso "Configurar agentes y equipos".</small>}
-              {msg && <small className={`text-sm ${msg.ok ? "text-emerald-300" : "text-rose-300"}`}>{msg.t}</small>}
-            </div>
-            {probar.data && (
-              <div className={`rounded-xl border p-3 text-sm ${probar.data.ok && probar.data.valido ? "border-emerald-900 bg-emerald-950/30 text-emerald-100" : "border-rose-900 bg-rose-950/30 text-rose-100"}`} role="status">
-                {probar.data.ok ? (
-                  <>Respondió en <b className="mono">{probar.data.ms} ms</b> (función {probar.data.funcion}): {Object.entries(probar.data.valores ?? {}).map(([k, v]) => `${k.replace(/_/g, " ")} = ${v ?? "sin valor"}`).join(" · ")}{probar.data.valido ? "." : " — los valores no parecen de este tipo de equipo; revise el ID o el perfil."}</>
-                ) : (
-                  <>No respondió: {probar.data.error}</>
-                )}
-              </div>
-            )}
-            {probar.isError && <p className="text-sm text-rose-300">{extractErrorMessage(probar.error)}</p>}
-          </section>
-
-          <div className="grid gap-4 2xl:grid-cols-2">
-            <section className="panel flex flex-col gap-2 p-4">
-              <span className="eyebrow">Mapa de registros · {perfil}</span>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[420px] text-sm">
-                  <thead><tr className="text-left text-[11px] uppercase tracking-wider text-slate-500"><th className="py-1.5">Registro</th><th>Variable</th><th>Formato</th></tr></thead>
-                  <tbody>
-                    {(MAPA[perfil] ?? []).map((m) => (
-                      <tr key={m.r} className="border-t border-slate-800/80"><td className="mono py-1.5 text-sky-200">{m.r}</td><td className="text-slate-200">{m.v}</td><td className="mono text-xs text-slate-400">{m.t}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <small className="text-xs text-slate-500">Registros como los documenta Schneider (base 1); el agente pide la dirección menos uno. Solo función 03.</small>
-            </section>
-
-            <section className="panel flex flex-col gap-3 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="eyebrow">Umbrales por norma{umb.data?.propios ? " · propios del equipo" : ""}</span>
-                <select value={norma} onChange={(e) => { const n = e.target.value as Norma; setNorma(n); }} className={campo} aria-label="Norma">
-                  {(Object.keys(NORMA_TXT) as Norma[]).map((n) => <option key={n} value={n}>{NORMA_TXT[n]}</option>)}
-                </select>
-              </div>
-              {lim && (
-                <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
-                  {([["tension", "Tensión ± %"], ["nominal", "Nominal V"], ["desbalance", "Desbalance %"], ["thdV", "THD tensión %"], ["thdI", "THD corriente %"], ["pst", "Pst"], ["fp", "FP mínimo"], ["freq", "Frecuencia ± Hz"], ["carga", "Carga máx. %"]] as [keyof Limites, string][]).map(([k, t]) => (
-                    <label key={k} className="flex flex-col gap-1 text-xs text-slate-400">{t}
-                      <input type="number" step="any" className={`${campo} mono`} value={lim[k]} onChange={(e) => setLim({ ...lim, [k]: Number(e.target.value) })} />
-                    </label>
-                  ))}
-                </div>
-              )}
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" disabled={!lim || !puede || guardarUmb.isPending} onClick={() => lim && guardarUmb.mutate({ deviceId: dev.id, norma, limites: lim }, { onSuccess: () => setMsg({ t: "Umbrales guardados: se usan en Normas y cumplimiento.", ok: true }) })} className="min-h-[38px] rounded-lg bg-sky-600 px-4 text-sm font-bold text-white disabled:opacity-40">Guardar umbrales</button>
-                <small className="text-xs text-slate-500">Se evalúan: {INDICADORES.map((i) => i.t).join(", ")}.</small>
-              </div>
-            </section>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}

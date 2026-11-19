@@ -1,30 +1,35 @@
 # Arquitectura
 
-> Este documento cubre TEC 3 (adaptadores en proceso dentro de `apps/api`). Para edificios nuevos,
-> gestionados por un agente local en vez de adaptadores en proceso, ver
-> [`agente-go.md`](./agente-go.md).
+> **Vista completa y actualizada (18/11/2026)**: [`arquitectura-general.md`](./arquitectura-general.md),
+> con el diagrama general de Agente Go, API, base de datos, web y sistemas externos.
+> Este documento se centra en la API y los adaptadores en proceso de TEC 3.
+
+![Arquitectura general](./diagramas/arquitectura-general.svg)
 
 ## Vista General
 
 ```mermaid
 flowchart LR
-  U[Usuario / Navegador] --> W[Web React + Vite + Nginx]
-  W -->|REST JSON| A[NestJS API]
+  U[Usuario / Navegador] --> W[Web React + Vite + Nginx :5173]
+  W -->|REST JSON| A[NestJS API :3010]
   W -->|WebSocket /ws| RT[Realtime Gateway]
-  A --> P[(PostgreSQL)]
-  A --> R[(Redis)]
+  A --> P[("PostgreSQL 16 + TimescaleDB")]
+  A --> R[(Redis / BullMQ)]
   A --> M[Broker MQTT Mosquitto]
   A --> HA[Home Assistant API]
-  A --> EW[eWeLink HTTP API]
+  A --> EW[eWeLink LAN]
   A --> LW[Broker MQTT LoRaWAN / ChirpStack]
-  A -->|HTTP| BB["bacnet-bridge (Node, host, no Docker)"]
-  BB -->|UDP/47808 BACnet/IP| BAC["Gateway BACnet/IP AV/climatizacion\n(ej. VRF aires)"]
-  A --> EXT[Gateway externo x-api-key]
+  A -->|HTTP| BB["bacnet-bridge :3099 (nativo, fuera de Docker)"]
+  BB -->|UDP/47808 BACnet/IP| BAC["AC Smart 5 (VRF aires)"]
+  EXT[Integraciones y servidor MCP] -->|"x-api-key (:8081 o :3010)"| A
   M --> Z2M[Zigbee2MQTT / Dispositivos MQTT]
   RT --> W
 
-  AG["Agente_Go (edificios nuevos)"] -->|"POST /devices/agent-sync\nx-api-key role=agent"| A
-  AG -.->|"ver agente-go.md"| BB
+  AG["Agentes Go (uno por sede)"] -->|"POST /devices/agent-sync\nx-api-key rol agent"| A
+  A -.->|"GET /agents/:sede/config · control"| AG
+  AG -->|HTTP| BB
+  CEN["Monitoreo central IGSS\n10.30.10.27:8080"] -->|"solo lectura"| A
+  SED["APIs de sede api-SIASA"] -->|"solo lectura"| A
 ```
 
 ## Componentes
@@ -149,6 +154,15 @@ flowchart TB
   AppModule --> PrismaModule
   AppModule --> StateBusModule
   AppModule --> EventsModule
+  AppModule --> AgentsModule["AgentsModule\n(config remota, búsquedas)"]
+  AppModule --> TimeseriesModule["TimeseriesModule\n(Gravix: historial, huecos, normas)"]
+  AppModule --> SiteEventsModule
+  AppModule --> CentroModule["CentroModule\n(centro de mando IGSS)"]
+  AppModule --> RedModule["RedModule\n(fases y sedes nuevas)"]
+  AppModule --> AccessModule["AccessModule\n(perfiles y permisos)"]
+  AgentSyncService --> TimeseriesModule
+  AgentSyncService --> SiteEventsModule
+  CentroModule --> RedModule
 
   DevicesModule --> BullMQ
   DevicesModule --> AdapterRegistry

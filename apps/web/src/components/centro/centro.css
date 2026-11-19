@@ -13,11 +13,26 @@
 .cm .latido { animation: cm-latido 1.6s infinite; }
 .cm .entrar { animation: cm-entrar .3s ease-out; }
 
+/* campana de alertas: un anillo que late mientras haya alertas activas */
+@keyframes cm-anillo-ambar { 0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .55); } 70% { box-shadow: 0 0 0 12px rgba(245, 158, 11, 0); } 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); } }
+@keyframes cm-anillo-rojo { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, .6); } 70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+.cm .campana-ambar { animation: cm-anillo-ambar 2.4s ease-out infinite; }
+.cm .campana-roja { animation: cm-anillo-rojo 1.8s ease-out infinite; }
+
 .cm .mapa { position: relative; width: 100%; aspect-ratio: 640 / 420; border-radius: 12px; overflow: hidden; border: 1px solid #1a2742; }
 .cm .nodo { position: absolute; width: 0; height: 0; padding: 0; border: 0; background: none; cursor: pointer; }
 .cm .nodo:focus-visible .punto { outline: 2px solid #8ab8ff; outline-offset: 3px; }
 .cm .placa { position: absolute; display: flex; flex-direction: column; align-items: flex-start; padding: 5px 10px; border-radius: 8px; background: rgba(11, 18, 32, .92); white-space: nowrap; text-align: left; }
 .cm .ficha { position: absolute; width: 270px; padding: 12px; border-radius: 12px; background: #0e1626; border: 1px solid #2b3d5f; box-shadow: 0 18px 40px rgba(0, 0, 0, .6); display: flex; flex-direction: column; gap: 7px; pointer-events: none; z-index: 5; }
+
+/* ramas de una sede desplegada en el mapa: un punto por equipo */
+@keyframes cm-brote { from { opacity: 0; transform: scale(.2); } to { opacity: 1; transform: none; } }
+@keyframes cm-trazo { from { opacity: 0; } to { opacity: .85; } }
+.cm .rama { position: absolute; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; padding: 0; border-radius: 50%; border: 2px solid #0b1220; box-shadow: 0 0 10px rgba(124, 196, 255, .35); cursor: pointer; z-index: 5; animation: cm-brote .3s ease-out; transition: transform .12s ease; }
+.cm .rama:hover, .cm .rama:focus-visible { transform: scale(1.55); outline: none; box-shadow: 0 0 0 3px #fff; }
+.cm .rama-linea { animation: cm-trazo .35s ease-out; }
+.cm .ficha-rama { position: absolute; right: 10px; top: 10px; z-index: 6; width: 236px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: rgba(14, 22, 38, .96); border: 1px solid #2b3d5f; box-shadow: 0 18px 40px rgba(0, 0, 0, .6); }
+@media (max-width: 640px) { .cm .ficha-rama { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; } }
 
 /* tarjeta de equipo con su frente en 3D (componentes de Piloto Gravix) */
 .cm .eq-art { position: relative; height: 180px; overflow: hidden; background: radial-gradient(circle at 50% 30%, #1c2a47, #0a1222); }
@@ -28,6 +43,9 @@
 .cm-modal { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 14px; background: rgba(3, 6, 12, .75); backdrop-filter: blur(4px); }
 .cm-modal .caja { width: min(1240px, 100%); max-height: 100%; overflow: auto; border-radius: 16px; background: #0b1220; border: 1px solid #2b3d5f; box-shadow: 0 30px 80px rgba(0, 0, 0, .7); }
 .cm-modal .gx .dstage { height: 520px; border-radius: 0; }
+/* centro de alertas: arriba de la pantalla (no centrado), para que la lista crezca hacia abajo */
+.cm-modal.arriba { place-items: start center; padding-top: 6vh; overflow-y: auto; }
+.cm-modal.arriba .caja { max-height: none; }
 @media (max-width: 760px) {
   .cm-modal { padding: 0; }
   .cm-modal .caja { border-radius: 0; height: 100%; }

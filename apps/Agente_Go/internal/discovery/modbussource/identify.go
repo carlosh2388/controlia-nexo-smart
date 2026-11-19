@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -45,17 +46,41 @@ func Identify(host string, port, unit int, timeout time.Duration) Identity {
 		hz = decodeFloat32(freq[0], freq[1], false)
 	}
 	if hz >= 45 && hz <= 65 {
+		// Lo primero: el modelo que el propio equipo reporta (registros 50-69 del mapa comun de los
+		// medidores Schneider). Si no lo entrega, se usa la huella de abajo.
+		modelo := ""
+		if m, err := read(49, 20); err == nil {
+			modelo = registersText(m)
+		}
 		// ION7400 lee el bloque completo; el PM2130 lo rechaza con excepcion 3.
 		_, berr := read(2999, 78)
 		var exc *ExceptionError
 		if berr == nil {
-			id.Model, id.Profile, id.Confidence = "ION7400", "ion7400-directo", 90
-			id.Evidence = fmt.Sprintf("Lee el bloque 3000-3077 y da %.2f Hz en el 3110 (float32 ABCD)", hz)
+			nombre := ""
 			if name, err := read(29, 20); err == nil {
-				if n := registersText(name); n != "" {
-					id.Name = n
+				nombre = registersText(name)
+			}
+			id.Name = nombre
+			switch {
+			case reION7400.MatchString(modelo):
+				id.Model, id.Profile, id.Confidence = "ION7400", "ion7400-directo", 99
+				id.Evidence = fmt.Sprintf("Modelo \"%s\" leido del equipo (registros 50-69) · %.2f Hz en el 3110", modelo, hz)
+			case rePM2130.MatchString(modelo):
+				id.Model, id.Profile, id.Confidence = "PM2130", "pm2130-directo", 99
+				id.Evidence = fmt.Sprintf("Modelo \"%s\" leido del equipo (registros 50-69) · %.2f Hz en el 3110", modelo, hz)
+			case modelo != "" && reModeloMedidor.MatchString(modelo):
+				// Otro medidor (PM5xxx, PM8xxx...): Nodivo todavia no tiene perfil para leerlo.
+				id.Evidence = fmt.Sprintf("Modelo \"%s\" leido del equipo: todavia no hay perfil de lectura para el (por confirmar)", modelo)
+			case reNombrePM.MatchString(nombre):
+				// "Power Meter" es el nombre de fabrica de la serie PM: aceptar el bloque grande no basta
+				// para decir que es un ION7400.
+				id.Evidence = fmt.Sprintf("Se nombra \"%s\" y acepta bloques grandes, pero no entrega su modelo: confirmarlo en la placa (por confirmar)", nombre)
+			default:
+				id.Model, id.Profile, id.Confidence = "ION7400", "ion7400-directo", 90
+				id.Evidence = fmt.Sprintf("Lee el bloque 3000-3077 y da %.2f Hz en el 3110 (float32 ABCD)", hz)
+				if nombre != "" {
 					id.Confidence = 98
-					id.Evidence = fmt.Sprintf("Nombre \"%s\" en los registros 30-49 · %.2f Hz en el 3110", n, hz)
+					id.Evidence = fmt.Sprintf("Nombre \"%s\" en los registros 30-49 · %.2f Hz en el 3110", nombre, hz)
 				}
 			}
 			return id
@@ -63,6 +88,10 @@ func Identify(host string, port, unit int, timeout time.Duration) Identity {
 		if errors.As(berr, &exc) {
 			id.Model, id.Profile, id.Confidence = "PM2130", "pm2130-directo", 88
 			id.Evidence = fmt.Sprintf("Rechaza el bloque con registros vacios y da %.2f Hz en el 3110: se lee valor por valor", hz)
+			if rePM2130.MatchString(modelo) {
+				id.Confidence = 99
+				id.Evidence = fmt.Sprintf("Modelo \"%s\" leido del equipo (registros 50-69) · rechaza bloques con registros vacios: se lee valor por valor", modelo)
+			}
 			if v, err := read(3027, 2); err == nil && len(v) == 2 {
 				volt := decodeFloat32(v[0], v[1], false)
 				if volt > 50 && volt < 700 {
@@ -93,6 +122,13 @@ func Identify(host string, port, unit int, timeout time.Duration) Identity {
 	}
 	return id
 }
+
+var (
+	reION7400       = regexp.MustCompile(`(?i)ION\s*-?\s*7400|^7400$`)
+	rePM2130        = regexp.MustCompile(`(?i)PM\s*-?\s*21[23]\d|^2130$`)
+	reModeloMedidor = regexp.MustCompile(`(?i)\b(PM|ION|iEM|EM)\s*-?\s*\d{3,4}`)
+	reNombrePM      = regexp.MustCompile(`(?i)power\s*meter`)
+)
 
 // registersText convierte registros a texto (2 caracteres por registro) y deja solo lo imprimible.
 func registersText(regs []uint16) string {

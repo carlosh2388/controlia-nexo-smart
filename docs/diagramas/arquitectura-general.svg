@@ -1,0 +1,396 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1160" width="1800" height="1160" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif">
+  <title>Nodivo-SIASA: arquitectura general con Agente Go</title>
+  <defs>
+    <style>
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; }
+      .sub { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1; }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.2; }
+      .key { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.6; }
+      .agent { fill: #f0fdfa; stroke: #0d9488; stroke-width: 1.8; }
+      .chip { fill: #ffffff; stroke: #99f6e4; stroke-width: 1.2; }
+      .mod { fill: #f1f5f9; stroke: #cbd5e1; stroke-width: 1; }
+      .modk { fill: #ecfeff; stroke: #0891b2; stroke-width: 1.2; }
+      .ptitle { font-size: 13px; font-weight: 700; letter-spacing: 1.2px; fill: #334155; }
+      .stitle { font-size: 13px; font-weight: 700; fill: #0f172a; }
+      .t { font-size: 14px; font-weight: 700; fill: #0f172a; }
+      .ts { font-size: 12.5px; font-weight: 700; fill: #0f172a; }
+      .d { font-size: 11.5px; fill: #475569; }
+      .ds { font-size: 10.5px; fill: #64748b; }
+      .lbl { font-size: 11px; fill: #334155; font-weight: 600; paint-order: stroke; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }
+      .halo { fill: none; stroke: #ffffff; stroke-width: 7; stroke-linejoin: round; }
+      .ln { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+      .modbus { stroke: #2563eb; }
+      .lora { stroke: #059669; }
+      .udp { stroke: #0d9488; }
+      .bacnet { stroke: #d97706; }
+      .mqtt { stroke: #7c3aed; }
+      .http { stroke: #0f172a; stroke-width: 2.6; }
+      .cfg { stroke: #64748b; stroke-dasharray: 6 4; }
+      .ext { stroke: #db2777; }
+      .cli { stroke: #475569; }
+      .dash { stroke-dasharray: 6 4; }
+    </style>
+    <marker id="a-modbus" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+    <marker id="a-lora" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#059669"/></marker>
+    <marker id="a-udp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0d9488"/></marker>
+    <marker id="a-bacnet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#d97706"/></marker>
+    <marker id="a-mqtt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#7c3aed"/></marker>
+    <marker id="a-http" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0f172a"/></marker>
+    <marker id="a-cfg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#64748b"/></marker>
+    <marker id="a-ext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#db2777"/></marker>
+    <marker id="a-cli" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+
+  <!-- Fondo y encabezado -->
+  <rect width="1800" height="1160" fill="#f1f5f9"/>
+  <rect width="1800" height="82" fill="#0f172a"/>
+  <text x="40" y="44" font-size="26" font-weight="700" fill="#ffffff">Nodivo-SIASA · Arquitectura general con Agente Go</text>
+  <text x="40" y="68" font-size="13.5" fill="#94a3b8">Desde los equipos de campo hasta el operador: recolección por sede, API central, historial y sistemas externos</text>
+  <text x="1760" y="44" font-size="14" font-weight="600" fill="#e2e8f0" text-anchor="end">Estado al 18/11/2026</text>
+  <text x="1760" y="68" font-size="12" fill="#94a3b8" text-anchor="end">Rama dev-iot · servidor de producción 192.168.70.4</text>
+
+  <!-- ===================== COLUMNA A: RED DE CAMPO ===================== -->
+  <rect class="panel" x="30" y="104" width="390" height="1006" rx="12"/>
+  <text class="ptitle" x="50" y="132">1 · RED DE CAMPO (SEDES)</text>
+
+  <!-- IGSS Escuintla -->
+  <rect class="sub" x="42" y="146" width="366" height="566" rx="10"/>
+  <text class="stitle" x="58" y="172">IGSS Escuintla · red 10.0.6.x</text>
+
+  <rect class="box" x="56" y="186" width="344" height="56" rx="8"/>
+  <text class="t" x="70" y="209">6 × ION7400</text>
+  <text class="d" x="70" y="229">10.0.6.9 – .13 · Modbus TCP :502 · ID 21 / 255</text>
+
+  <rect class="box" x="56" y="256" width="344" height="56" rx="8"/>
+  <text class="t" x="70" y="279">7 × PM2130</text>
+  <text class="d" x="70" y="299">10.0.6.18 – .24 · Modbus TCP :502 · ID 2</text>
+
+  <rect class="box" x="56" y="326" width="344" height="56" rx="8"/>
+  <text class="t" x="70" y="349">2 × Generadores</text>
+  <text class="d" x="70" y="369">Controlador publicado en el AS-P (reg. 4770–4806)</text>
+
+  <path d="M56 214H48V435H56" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
+  <path d="M48 284H56M48 354H56" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
+
+  <rect class="key" x="56" y="402" width="344" height="64" rx="8"/>
+  <text class="t" x="70" y="426">EBO AS-P · EBO-ASP-ESCUINTLA</text>
+  <text class="d" x="70" y="446">10.0.6.26:502 · unit 1 · registros 101–5787</text>
+  <text class="ds" x="70" y="460">Concentra medidores y generadores (Schneider)</text>
+
+  <rect class="box" x="56" y="486" width="344" height="56" rx="8"/>
+  <text class="t" x="70" y="509">≈120 sensores LoRaWAN</text>
+  <text class="d" x="70" y="529">Milesight LEO S592 / S595 · WISE-4610 (cadena de frío)</text>
+
+  <rect class="box" x="56" y="560" width="344" height="56" rx="8"/>
+  <text class="t" x="70" y="583">Gateway Advantech WISE-6610</text>
+  <text class="d" x="70" y="603">EUI 0016c001f1dfff90 · US902</text>
+
+  <rect class="box" x="56" y="634" width="344" height="62" rx="8"/>
+  <text class="t" x="70" y="657">ChirpStack · 10.0.6.35</text>
+  <text class="d" x="70" y="677">MQTT :1883 · application/+/device/+/event/up</text>
+
+  <path class="ln" d="M228 542V558" stroke="#94a3b8" marker-end="url(#a-cli)"/>
+  <path class="ln" d="M228 616V632" stroke="#94a3b8" marker-end="url(#a-cli)"/>
+
+  <!-- TEC 3 -->
+  <rect class="sub" x="42" y="728" width="366" height="370" rx="10"/>
+  <text class="stitle" x="58" y="754">TEC 3 · Nivel 10 y Oficina</text>
+
+  <rect class="box" x="56" y="770" width="344" height="62" rx="8"/>
+  <text class="t" x="70" y="793">AC Smart 5 · BACnet/IP</text>
+  <text class="d" x="70" y="813">10.3.0.11:47808 · 13 unidades VRF (aires)</text>
+
+  <rect class="box" x="56" y="848" width="344" height="62" rx="8"/>
+  <text class="t" x="70" y="871">ChirpStack · 192.168.70.6</text>
+  <text class="d" x="70" y="891">MQTT :1883 · sensores Milesight de TEC 3</text>
+
+  <rect class="box" x="56" y="926" width="344" height="62" rx="8"/>
+  <text class="t" x="70" y="949">Gateway LoRa de prueba</text>
+  <text class="d" x="70" y="969">Semtech UDP :1700 · recepción sin ChirpStack</text>
+
+  <rect class="box" x="56" y="1004" width="344" height="62" rx="8"/>
+  <text class="t" x="70" y="1027">Broker MQTT · 10.3.0.25</text>
+  <text class="d" x="70" y="1047">Zigbee2MQTT (dimmers, switches)</text>
+
+  <!-- ===================== COLUMNA B: SERVIDOR ===================== -->
+  <rect class="panel" x="476" y="104" width="854" height="1006" rx="12"/>
+  <text class="ptitle" x="496" y="132">2 · SERVIDOR 192.168.70.4 (LINUX, USUARIO api)</text>
+
+  <!-- Procesos nativos -->
+  <rect class="sub" x="488" y="146" width="818" height="544" rx="10"/>
+  <text class="stitle" x="502" y="170">Procesos nativos, fuera de Docker · arranque por crontab @reboot</text>
+
+  <rect class="agent" x="500" y="182" width="780" height="292" rx="10"/>
+  <text class="t" x="515" y="205">Agente Go · un binario por sede (apps/Agente_Go)</text>
+  <text class="ds" x="1265" y="205" text-anchor="end">solo lectura · Modbus funciones 03/04 · sin escritura</text>
+
+  <!-- Fuentes -->
+  <rect class="chip" x="515" y="220" width="190" height="44" rx="7"/>
+  <text class="ts" x="527" y="238">modbussource</text>
+  <text class="ds" x="527" y="254">AS-P o medidor directo · perfiles</text>
+  <rect class="chip" x="515" y="272" width="190" height="44" rx="7"/>
+  <text class="ts" x="527" y="290">lorawansource</text>
+  <text class="ds" x="527" y="306">MQTT ChirpStack · tags · RSSI</text>
+  <rect class="chip" x="515" y="324" width="190" height="44" rx="7"/>
+  <text class="ts" x="527" y="342">gatewaysource</text>
+  <text class="ds" x="527" y="358">Semtech UDP 1700 · descifra</text>
+  <rect class="chip" x="515" y="376" width="190" height="44" rx="7"/>
+  <text class="ts" x="527" y="394">mqttsource</text>
+  <text class="ds" x="527" y="410">Zigbee2MQTT bridge/devices</text>
+  <rect class="chip" x="515" y="428" width="190" height="40" rx="7"/>
+  <text class="ts" x="527" y="445">bacnetsource</text>
+  <text class="ds" x="527" y="460">cliente HTTP de bacnet-bridge</text>
+
+  <!-- Núcleo -->
+  <rect class="chip" x="745" y="220" width="230" height="58" rx="7"/>
+  <text class="ts" x="759" y="243">Snapshot combinado</text>
+  <text class="ds" x="759" y="261">un registro por ExternalID</text>
+  <rect class="chip" x="745" y="296" width="230" height="58" rx="7"/>
+  <text class="ts" x="759" y="319">Motor de eventos</text>
+  <text class="ds" x="759" y="337">state.json · pending-events.json</text>
+  <rect class="chip" x="745" y="372" width="230" height="58" rx="7"/>
+  <text class="ts" x="759" y="395">Backlog en disco</text>
+  <text class="ds" x="759" y="413">archivos de 5 min · hasta 3 días</text>
+  <text class="ds" x="759" y="458">cmd/: agent · lora-sniffer · chirpstack-keys</text>
+
+  <!-- Salida -->
+  <rect class="chip" x="1010" y="220" width="255" height="58" rx="7" stroke="#0f172a"/>
+  <text class="ts" x="1024" y="243">reporter (HTTP)</text>
+  <text class="ds" x="1024" y="261">snapshot + eventos + backlog</text>
+  <rect class="chip" x="1010" y="296" width="255" height="58" rx="7"/>
+  <text class="ts" x="1024" y="319">Configuración remota (0.5+)</text>
+  <text class="ds" x="1024" y="337">versiones · aplica sin reiniciar</text>
+  <rect class="chip" x="1010" y="372" width="255" height="58" rx="7"/>
+  <text class="ts" x="1024" y="395">Búsqueda de equipos</text>
+  <text class="ds" x="1024" y="413">internal/scan · identify.go (0.5.5)</text>
+
+  <!-- Flujo interno del agente -->
+  <path class="ln" d="M705 242H725M705 294H725M705 346H725M705 398H725M705 448H725" stroke="#0d9488"/>
+  <path class="ln" d="M725 242V448" stroke="#0d9488"/>
+  <path class="ln" d="M725 249H743" stroke="#0d9488" marker-end="url(#a-udp)"/>
+  <path class="ln" d="M860 278V294" stroke="#0d9488" marker-end="url(#a-udp)"/>
+  <path class="ln" d="M975 249H1008" stroke="#0d9488" marker-end="url(#a-udp)"/>
+  <path class="ln" d="M975 325H992V256" stroke="#0d9488"/>
+  <path class="ln" d="M975 401H992V325" stroke="#0d9488"/>
+  <path class="ln dash" d="M1137 296V280" stroke="#64748b" marker-end="url(#a-cfg)"/>
+
+  <!-- bacnet-bridge -->
+  <rect class="box" x="500" y="492" width="330" height="58" rx="8"/>
+  <circle cx="815" cy="507" r="6" fill="#dc2626"/>
+  <text class="ts" x="514" y="514">bacnet-bridge · Node + bacstack</text>
+  <text class="ds" x="514" y="532">127.0.0.1:3099 · origen UDP 47808</text>
+  <text class="ds" x="514" y="545" fill="#b91c1c">Caído desde el 15/11 (sin memoria)</text>
+  <path class="halo" d="M600 492V470"/>
+  <path class="ln bacnet" d="M600 492V470" marker-end="url(#a-bacnet)"/>
+  <text class="lbl" x="608" y="485">HTTP</text>
+
+  <rect class="box" x="850" y="492" width="430" height="58" rx="8" fill="#fefce8" stroke="#eab308"/>
+  <text class="ts" x="864" y="514">Carpeta de cada agente: ~/agente-go-*/</text>
+  <text class="ds" x="864" y="532">agente-go · config.yaml (600, con API key) · start.sh</text>
+  <text class="ds" x="864" y="545">data/ (eventos, estado, backlog) · agente.log · *.bak-AAAAMMDDHHMM</text>
+
+  <!-- Instancias -->
+  <text class="ds" x="502" y="574" font-weight="700" fill="#334155">INSTANCIAS EN PRODUCCIÓN</text>
+  <rect class="box" x="500" y="582" width="188" height="96" rx="8"/>
+  <circle cx="674" cy="596" r="6" fill="#16a34a"/>
+  <text class="ts" x="512" y="601">agente-go</text>
+  <text class="ds" x="512" y="620">tec3-nivel10</text>
+  <text class="ds" x="512" y="636">LoRaWAN + BACnet · 30 s</text>
+  <text class="ds" x="512" y="652">35 equipos, sin duplicados</text>
+  <text class="ds" x="512" y="668">crontab: sí</text>
+
+  <rect class="box" x="697" y="582" width="188" height="96" rx="8"/>
+  <circle cx="871" cy="596" r="6" fill="#f59e0b"/>
+  <text class="ts" x="709" y="601">agente-go-tec3-oficina</text>
+  <text class="ds" x="709" y="620">tec3-oficina</text>
+  <text class="ds" x="709" y="636">Gateway LoRa directo · 15 s</text>
+  <text class="ds" x="709" y="652">En pausa: gateway en ChirpStack</text>
+  <text class="ds" x="709" y="668">crontab: sí</text>
+
+  <rect class="box" x="894" y="582" width="188" height="96" rx="8"/>
+  <circle cx="1068" cy="596" r="6" fill="#16a34a"/>
+  <text class="ts" x="906" y="601">agente-go-escuintla</text>
+  <text class="ds" x="906" y="620">igss-escuintla · v0.4</text>
+  <text class="ds" x="906" y="636">EBO AS-P + ChirpStack · 15 s</text>
+  <text class="ds" x="906" y="652">14/15 Modbus · ≈120 LoRaWAN</text>
+  <text class="ds" x="906" y="668">crontab: sí</text>
+
+  <rect class="box" x="1091" y="582" width="189" height="96" rx="8"/>
+  <circle cx="1266" cy="596" r="6" fill="#f59e0b"/>
+  <text class="ts" x="1103" y="601">…-escuintla-directo</text>
+  <text class="ds" x="1103" y="620">igss-escuintla-directo · v0.5.5</text>
+  <text class="ds" x="1103" y="636">12 medidores directo · 30 s</text>
+  <text class="ds" x="1103" y="652">config remota · backlog</text>
+  <text class="ds" x="1103" y="668" fill="#b45309">crontab: NO (pendiente)</text>
+
+  <!-- Docker -->
+  <rect class="sub" x="488" y="724" width="818" height="372" rx="10"/>
+  <text class="stitle" x="502" y="748">Docker Compose · siasa-iot-platform</text>
+
+  <rect class="key" x="500" y="760" width="520" height="252" rx="10"/>
+  <text class="t" x="514" y="783">API NestJS + Fastify · :3010 /api/v1</text>
+
+  <rect class="modk" x="512" y="795" width="160" height="46" rx="6"/>
+  <text class="ts" x="522" y="814">devices · agent-sync</text>
+  <text class="ds" x="522" y="831">estado en vivo, dedup</text>
+  <rect class="modk" x="682" y="795" width="160" height="46" rx="6"/>
+  <text class="ts" x="692" y="814">agents</text>
+  <text class="ds" x="692" y="831">config remota · búsquedas</text>
+  <rect class="modk" x="852" y="795" width="160" height="46" rx="6"/>
+  <text class="ts" x="862" y="814">timeseries · Gravix</text>
+  <text class="ds" x="862" y="831">historial, huecos, normas</text>
+
+  <rect class="mod" x="512" y="849" width="160" height="46" rx="6"/>
+  <text class="ts" x="522" y="868">site-events</text>
+  <text class="ds" x="522" y="885">eventos de sede</text>
+  <rect class="mod" x="682" y="849" width="160" height="46" rx="6"/>
+  <text class="ts" x="692" y="868">centro</text>
+  <text class="ds" x="692" y="885">centro de mando IGSS</text>
+  <rect class="mod" x="852" y="849" width="160" height="46" rx="6"/>
+  <text class="ts" x="862" y="868">red</text>
+  <text class="ds" x="862" y="885">fases · sedes nuevas · v1</text>
+
+  <rect class="mod" x="512" y="903" width="160" height="46" rx="6"/>
+  <text class="ts" x="522" y="922">access · users</text>
+  <text class="ds" x="522" y="939">perfiles y permisos</text>
+  <rect class="mod" x="682" y="903" width="160" height="46" rx="6"/>
+  <text class="ts" x="692" y="922">auth · api-keys</text>
+  <text class="ds" x="692" y="939">JWT · x-api-key · rol agent</text>
+  <rect class="mod" x="852" y="903" width="160" height="46" rx="6"/>
+  <text class="ts" x="862" y="922">adapters (TEC 3)</text>
+  <text class="ds" x="862" y="939">mqtt·http·ewelink·bacnet</text>
+
+  <rect class="mod" x="512" y="957" width="160" height="46" rx="6"/>
+  <text class="ts" x="522" y="976">realtime</text>
+  <text class="ds" x="522" y="993">WebSocket /ws</text>
+  <rect class="mod" x="682" y="957" width="160" height="46" rx="6"/>
+  <text class="ts" x="692" y="976">automations</text>
+  <text class="ds" x="692" y="993">reglas y horarios</text>
+  <rect class="mod" x="852" y="957" width="160" height="46" rx="6"/>
+  <text class="ts" x="862" y="976">gateway externo</text>
+  <text class="ds" x="862" y="993">:8081 · solo x-api-key</text>
+
+  <rect class="box" x="1035" y="760" width="258" height="100" rx="8" fill="#eef2ff" stroke="#6366f1"/>
+  <text class="ts" x="1048" y="782">PostgreSQL 16 + TimescaleDB</text>
+  <text class="ds" x="1048" y="801">devices · device_states · readings</text>
+  <text class="ds" x="1048" y="817">reading_gaps · centro_lecturas</text>
+  <text class="ds" x="1048" y="833">agent_configs · site_events</text>
+  <text class="ds" x="1048" y="849">red_grupos · red_sedes · users</text>
+
+  <rect class="box" x="1035" y="870" width="258" height="44" rx="8"/>
+  <text class="ts" x="1048" y="889">Redis</text>
+  <text class="ds" x="1048" y="905">cola BullMQ de comandos</text>
+  <rect class="box" x="1035" y="922" width="258" height="44" rx="8"/>
+  <text class="ts" x="1048" y="941">Mosquitto</text>
+  <text class="ds" x="1048" y="957">broker MQTT local</text>
+
+  <path class="ln cli" d="M1022 810H1033" marker-end="url(#a-cli)" marker-start="url(#a-cli)"/>
+  <path class="ln cli" d="M1022 892H1033" marker-end="url(#a-cli)"/>
+  <path class="ln cli" d="M1022 944H1033" marker-end="url(#a-cli)"/>
+
+  <rect class="box" x="500" y="1022" width="793" height="62" rx="8" fill="#f0f9ff" stroke="#0284c7"/>
+  <text class="t" x="514" y="1046">Web React + Vite (Nginx) · :5173</text>
+  <text class="d" x="514" y="1068">Centro de mando · Equipos · Sedes · Piloto Gravix · Usuarios y permisos · Vista de edificio</text>
+  <path class="ln cli" d="M760 1020V1014" marker-end="url(#a-cli)" marker-start="url(#a-cli)"/>
+  <text class="lbl" x="770" y="1019">REST + WebSocket</text>
+
+  <!-- ===================== COLUMNA C: EXTERNOS ===================== -->
+  <rect class="panel" x="1370" y="104" width="400" height="1006" rx="12"/>
+  <text class="ptitle" x="1390" y="132">3 · SISTEMAS EXTERNOS Y USUARIOS</text>
+
+  <rect class="box" x="1385" y="150" width="370" height="78" rx="8"/>
+  <text class="t" x="1399" y="173">Monitoreo central IGSS</text>
+  <text class="d" x="1399" y="193">10.30.10.27:8080 · GET /api/vista</text>
+  <text class="ds" x="1399" y="211">10 sedes · solo lectura · cada 15 s</text>
+
+  <rect class="box" x="1385" y="242" width="370" height="78" rx="8"/>
+  <text class="t" x="1399" y="265">APIs de sede api-SIASA (10)</text>
+  <text class="d" x="1399" y="285">GET /api/ebo/modbus-auto/eventos</text>
+  <text class="ds" x="1399" y="303">alarmas y hora de los correos · solo lectura</text>
+
+  <rect class="box" x="1385" y="334" width="370" height="66" rx="8"/>
+  <text class="t" x="1399" y="357">Home Assistant · eWeLink LAN</text>
+  <text class="d" x="1399" y="377">Adaptadores en proceso de TEC 3 (sí envían comandos)</text>
+
+  <rect class="box" x="1385" y="420" width="370" height="78" rx="8"/>
+  <text class="t" x="1399" y="443">Servidor MCP (apps/mcp)</text>
+  <text class="d" x="1399" y="463">Claude consulta la API con clave viewer</text>
+  <text class="ds" x="1399" y="481">solo lectura</text>
+
+  <rect class="box" x="1385" y="512" width="370" height="66" rx="8"/>
+  <text class="t" x="1399" y="535">Integraciones externas</text>
+  <text class="d" x="1399" y="555">Puerto :8081 · solo x-api-key</text>
+
+  <!-- Convenciones -->
+  <rect class="sub" x="1385" y="598" width="370" height="398" rx="10"/>
+  <text class="stitle" x="1401" y="624">Convenciones</text>
+  <g font-size="11.5" fill="#334155">
+    <path class="ln modbus" d="M1401 650H1451"/><text x="1463" y="654">Modbus TCP vía AS-P (03/04)</text>
+    <path class="ln modbus dash" d="M1401 678H1451"/><text x="1463" y="682">Modbus directo al medidor (Fase B)</text>
+    <path class="ln lora" d="M1401 706H1451"/><text x="1463" y="710">LoRaWAN por MQTT de ChirpStack</text>
+    <path class="ln udp" d="M1401 734H1451"/><text x="1463" y="738">LoRa directo · Semtech UDP 1700</text>
+    <path class="ln bacnet" d="M1401 762H1451"/><text x="1463" y="766">BACnet/IP UDP 47808 vía bridge</text>
+    <path class="ln mqtt" d="M1401 790H1451"/><text x="1463" y="794">MQTT / Zigbee2MQTT</text>
+    <path class="ln http" d="M1401 818H1451"/><text x="1463" y="822">HTTP agente → API (x-api-key, rol agent)</text>
+    <path class="ln cfg" d="M1401 846H1451"/><text x="1463" y="850">Config remota, control y búsquedas</text>
+    <path class="ln ext" d="M1401 874H1451"/><text x="1463" y="878">Lectura de sistemas externos</text>
+    <path class="ln cli" d="M1401 902H1451"/><text x="1463" y="906">Clientes de la API y navegador</text>
+    <circle cx="1407" cy="934" r="6" fill="#16a34a"/><text x="1421" y="938">Funcionando</text>
+    <circle cx="1517" cy="934" r="6" fill="#f59e0b"/><text x="1531" y="938">En pausa / pendiente</text>
+    <circle cx="1407" cy="962" r="6" fill="#dc2626"/><text x="1421" y="966">Caído</text>
+    <text x="1517" y="966" fill="#64748b">Azul: componente central</text>
+  </g>
+
+  <rect class="box" x="1385" y="1012" width="370" height="72" rx="8" fill="#f0f9ff" stroke="#0284c7"/>
+  <text class="t" x="1399" y="1036">Operadores y administradores</text>
+  <text class="d" x="1399" y="1056">Navegador · Administrador / Operador / Consulta</text>
+  <text class="ds" x="1399" y="1073">sedes y pantalla de inicio por usuario</text>
+
+  <!-- ===================== CONEXIONES ===================== -->
+  <!-- Halos (cruces limpios) -->
+  <g class="halo">
+    <path d="M400 284H432V236H513M400 214H432V236"/>
+    <path d="M400 434H438V251H513"/>
+    <path d="M400 665H444V287H513"/>
+    <path d="M400 801H450V521H498"/>
+    <path d="M400 879H456V301H513"/>
+    <path d="M400 957H462V346H513"/>
+    <path d="M400 1035H468V398H513"/>
+  </g>
+  <!-- Campo → agente -->
+  <path class="ln modbus dash" d="M400 284H432V236H513" marker-end="url(#a-modbus)"/>
+  <path class="ln modbus dash" d="M400 214H432V236"/>
+  <text class="lbl" x="300" y="252" font-size="10">Fase B: directo</text>
+  <path class="ln modbus" d="M400 434H438V251H513" marker-end="url(#a-modbus)"/>
+  <path class="ln lora" d="M400 665H444V287H513" marker-end="url(#a-lora)"/>
+  <path class="ln bacnet" d="M400 801H450V521H498" marker-end="url(#a-bacnet)"/>
+  <path class="ln lora" d="M400 879H456V301H513" marker-end="url(#a-lora)"/>
+  <path class="ln udp" d="M400 957H462V346H513" marker-end="url(#a-udp)"/>
+  <path class="ln mqtt" d="M400 1035H468V398H513" marker-end="url(#a-mqtt)"/>
+
+  <!-- Agente → API -->
+  <path class="ln http" d="M1265 242H1292V710H960V756" marker-end="url(#a-http)"/>
+  <text class="lbl" x="975" y="704">POST /devices/agent-sync · cada 15–30 s · eventos críticos al instante</text>
+  <!-- Config remota (API → agente) -->
+  <path class="ln cfg" d="M990 758V718H1300V325H1267" marker-end="url(#a-cfg)"/>
+  <path class="ln cfg" d="M1300 401H1267" marker-end="url(#a-cfg)"/>
+  <text class="lbl" x="1318" y="520" transform="rotate(-90 1318 520)" text-anchor="middle">GET /agents/:sede/config · control</text>
+
+  <!-- Externos → API (lectura) -->
+  <g class="halo"><path d="M1383 189H1342V734H1005V758"/></g>
+  <path class="ln ext" d="M1383 189H1342V734H1005V758" marker-end="url(#a-ext)"/>
+  <path class="ln ext" d="M1383 281H1342"/>
+  <path class="ln ext" d="M1383 367H1342"/>
+
+  <!-- Clientes → API -->
+  <path class="ln cli" d="M1383 459H1352V982H1022" marker-end="url(#a-cli)"/>
+  <path class="ln cli" d="M1383 545H1352"/>
+
+  <!-- Operadores → Web -->
+  <path class="ln cli" d="M1383 1048H1295" marker-end="url(#a-cli)"/>
+  <text class="lbl" x="1300" y="1040">HTTPS</text>
+
+  <!-- Pie -->
+  <text x="40" y="1140" font-size="11.5" fill="#64748b">Fuente: repositorio siasa-iot-platform (apps/Agente_Go, apps/api, apps/web, apps/bacnet-bridge, apps/mcp) · Detalle en docs/arquitectura-general.md</text>
+  <text x="1760" y="1140" font-size="11.5" fill="#64748b" text-anchor="end">Monitoreo central, APIs de sede, EBO y medidores: Nodivo solo lee, no escribe</text>
+</svg>

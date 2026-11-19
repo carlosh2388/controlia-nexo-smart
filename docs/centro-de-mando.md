@@ -115,6 +115,43 @@ mapa, la ficha lista todas sus alertas abiertas (equipo, área, severidad y desd
     norma.
   - *Agentes*: las pantallas anteriores (equipos descubiertos y protocolos) sin cambios.
 
+## Alertas en campana (16/11/2026)
+
+- La campana (junto a "En vivo") abre el **Centro de alertas**: activas e historial, filtro por
+  severidad, lista + detalle con "Ver equipo" e "Ir a la sede". Reemplaza el banner fijo y el panel de
+  alarmas de abajo; queda una franja delgada con los totales.
+- En la sede: encabezado con indicadores y su propia campana; pestañas **Equipos / Calidad de energía /
+  Eventos**. La ventana del equipo no cambió. El modo sala de control sigue mostrando las alertas.
+
+## Red por fases y sedes nuevas (17/11/2026)
+
+Mockup aprobado: https://claude.ai/artifact/AvVEMWJ1BVjJFoHvqdz5P1 (tablero "Plataforma").
+
+- **Grupos (fases)**: tablas `red_grupos` y `red_sedes` (migración `20261116200000_red_sedes_grupos`).
+  Arrancan Telemetría 1, 2 y 3. Las 10 sedes del monitoreo central sin fila en `red_sedes` quedan en
+  Telemetría 1. El administrador crea, renombra, colorea, ordena y borra grupos (botón "Grupos" del árbol)
+  y cambia la fase de cualquier sede ("Cambiar fase" en la sede).
+- **Sedes nuevas** (origen `nodivo`): botón "Nueva sede" del árbol, asistente de 4 pasos: datos y
+  plantilla → Agente Go (crea su API key de rol `agent` y arma el `config.yaml` con `remoteConfig: true`,
+  o usa uno existente) → descubrir equipos (la misma pantalla de Equipos) → listo. La sede se arma con los
+  equipos Modbus de sus agentes (`/pilot/<agente>/devices`) y entra sola al árbol, al mapa, la campana
+  (equipo fuera de línea = alerta crítica), el ranking y la sala de control.
+- **Mapa**: aro de color por fase y filtro por fase. Clic en una sede despliega sus **ramas** (un punto
+  por equipo: ION7400 celeste, PM2130 verde, generador ámbar; rojo si está caído); clic en una rama abre
+  ese equipo; doble clic o "Abrir la sede" abre la sede.
+- **Ficha del dispositivo**: los campos de la respuesta v1 de Telemetría 1 (`device_id`, `area`,
+  `building`, `floor`, `group`, `room`, `fase_energy`, `code_inventory`, `capacity`). Se llena al agregar
+  un equipo (Equipos → Descubrir) o después (Equipos → Configuración → "Ficha del dispositivo"). Se guarda
+  en los atributos del equipo en la configuración remota del agente (también `code`, `phase`,
+  `capacityKva`, que ya usaba la web).
+- **JSON v1**: `GET /api/v1/red/sedes/:id/telemetria` (botón "JSON v1" en la sede nueva) devuelve
+  `{ devices: [...], lectura }` con el mismo formato de Telemetría 1, ficha y métricas `{ value, unit }`.
+- **Agente 0.5.5**: al descubrir lee el modelo que reporta el equipo (registros 50-69). Un equipo que se
+  nombra "Power Meter" y no entrega modelo queda **por confirmar** (antes salía como ION7400). La web
+  también lo marca así en los resultados viejos. Instalado en `~/agente-go-escuintla-directo` el
+  17/11/2026 (respaldo `agente-go.bak-202611170038`). Falta confirmar en sitio en qué registro dan su
+  modelo los "Power Meter" de la red 10.0.2.x.
+
 ## Pendiente
 
 - "Reconocer alarma" desde Nodivo (hoy las alarmas se cierran solas en la sede al normalizarse).

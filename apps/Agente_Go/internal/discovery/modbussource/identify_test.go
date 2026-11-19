@@ -93,6 +93,67 @@ func TestIdentifyION7400(t *testing.T) {
 	}
 }
 
+func putText(regs map[int]uint16, addr int, s string) {
+	for i := 0; i < 20; i++ {
+		var hi, lo byte
+		if 2*i < len(s) {
+			hi = s[2*i]
+		}
+		if 2*i+1 < len(s) {
+			lo = s[2*i+1]
+		}
+		regs[addr+i] = uint16(hi)<<8 | uint16(lo)
+	}
+}
+
+// Medidor que acepta bloques grandes y reporta su modelo en los registros 50-69.
+func bloqueGrande(nombre, modelo string) map[int]uint16 {
+	regs := map[int]uint16{}
+	for a := 2999; a < 2999+78; a++ {
+		regs[a] = 0
+	}
+	putFloat(regs, 3109, 59.99)
+	if nombre != "" {
+		putText(regs, 29, nombre)
+	}
+	if modelo != "" {
+		putText(regs, 49, modelo)
+	}
+	return regs
+}
+
+func TestIdentifyModeloLeidoION(t *testing.T) {
+	host, port := simulador(t, bloqueGrande("ION7400-2313fc", "ION7400"), 0)
+	id := Identify(host, port, 255, 2*time.Second)
+	if id.Model != "ION7400" || id.Confidence != 99 || !strings.Contains(id.Evidence, "50-69") {
+		t.Fatalf("identidad inesperada: %+v", id)
+	}
+}
+
+func TestIdentifyPowerMeterConModeloPM2130(t *testing.T) {
+	host, port := simulador(t, bloqueGrande("Power Meter", "PM2130"), 0)
+	id := Identify(host, port, 2, 2*time.Second)
+	if id.Model != "PM2130" || id.Profile != "pm2130-directo" || id.Name != "Power Meter" {
+		t.Fatalf("un Power Meter que reporta PM2130 debe quedar como PM2130: %+v", id)
+	}
+}
+
+func TestIdentifyPowerMeterSinModeloQuedaPorConfirmar(t *testing.T) {
+	host, port := simulador(t, bloqueGrande("Power Meter", ""), 0)
+	id := Identify(host, port, 2, 2*time.Second)
+	if id.Model != "" || !strings.Contains(id.Evidence, "por confirmar") {
+		t.Fatalf("un Power Meter sin modelo no debe salir como ION7400: %+v", id)
+	}
+}
+
+func TestIdentifyOtroModeloSinPerfil(t *testing.T) {
+	host, port := simulador(t, bloqueGrande("Power Meter", "PM5560"), 0)
+	id := Identify(host, port, 1, 2*time.Second)
+	if id.Model != "" || !strings.Contains(id.Evidence, "PM5560") {
+		t.Fatalf("un modelo sin perfil debe quedar por confirmar: %+v", id)
+	}
+}
+
 func TestIdentifyPM2130(t *testing.T) {
 	regs := map[int]uint16{}
 	putFloat(regs, 3109, 59.98)

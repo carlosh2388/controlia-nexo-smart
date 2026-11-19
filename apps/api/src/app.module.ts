@@ -21,6 +21,7 @@ import { SiteEventsModule } from "./site-events/site-events.module";
 import { AgentsModule } from "./agents/agents.module";
 import { AccessModule } from "./access/access.module";
 import { CentroModule } from "./centro/centro.module";
+import { RedModule } from "./red/red.module";
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { CentroModule } from "./centro/centro.module";
     AgentsModule,
     AccessModule,
     CentroModule,
+    RedModule,
   ],
 })
 export class AppModule {}

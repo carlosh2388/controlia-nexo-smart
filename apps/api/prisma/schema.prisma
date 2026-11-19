@@ -449,3 +449,36 @@ model CentroLectura {
   @@id([sede, medidor, time])
   @@map("centro_lecturas")
 }
+
+/// Grupos del arbol del centro de mando (fases del proyecto: Telemetria 1, 2, 3...). Editables.
+model RedGrupo {
+  id        String    @id
+  nombre    String
+  color     String
+  orden     Int       @default(0)
+  sedes     RedSede[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("red_grupos")
+}
+
+/// Sedes de la red en Nodivo. origen "central": una de las sedes que ya lee el monitoreo central
+/// (solo se guarda su grupo); origen "nodivo": sede nueva leida por sus Agentes Go (buildingKeys).
+model RedSede {
+  id        String    @id
+  nombre    String
+  origen    String    @default("nodivo")
+  grupoId   String?
+  grupo     RedGrupo? @relation(fields: [grupoId], references: [id], onDelete: SetNull)
+  agentes   String[]  @default([])
+  lat       Float?
+  lon       Float?
+  plantilla String?
+  orden     Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([grupoId])
+  @@map("red_sedes")
+}

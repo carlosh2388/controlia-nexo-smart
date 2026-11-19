@@ -2,6 +2,10 @@
 
 Estado al 3 de noviembre de 2026. Sede piloto: **IGSS Escuintla**, servidor **192.168.70.4**.
 
+> **Arquitectura actualizada (18/11/2026)** con los dos caminos de lectura, los servicios de la API,
+> el modelo de datos, los flujos y el diagrama: [gravix-arquitectura.md](./gravix-arquitectura.md).
+> El diagrama de la sección 1 de este documento corresponde al 03/11 (Fase A).
+
 Gravix es la propuesta para que las sedes de Telemetría 2 y 3 no dependan del AS-P ni de las
 licencias EBO: el software de SIASA lee los medidores, guarda el historial, detecta los datos que
 faltan y los recupera. El piloto lo prueba en Escuintla **en paralelo al AS-P**, por fases y sin

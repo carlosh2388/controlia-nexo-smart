@@ -1,0 +1,312 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1160" width="1800" height="1160" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif">
+  <title>Gravix: arquitectura de la solución implementada (piloto IGSS Escuintla)</title>
+  <defs>
+    <style>
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; }
+      .sub { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1; }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.2; }
+      .key { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.6; }
+      .agent { fill: #f0fdfa; stroke: #0d9488; stroke-width: 1.8; }
+      .chip { fill: #ffffff; stroke: #99f6e4; stroke-width: 1.2; }
+      .svc { fill: #ecfeff; stroke: #0891b2; stroke-width: 1.3; }
+      .ptitle { font-size: 13px; font-weight: 700; letter-spacing: 1.2px; fill: #334155; }
+      .stitle { font-size: 13px; font-weight: 700; fill: #0f172a; }
+      .t { font-size: 14px; font-weight: 700; fill: #0f172a; }
+      .ts { font-size: 12.5px; font-weight: 700; fill: #0f172a; }
+      .d { font-size: 11.5px; fill: #475569; }
+      .ds { font-size: 10.8px; fill: #64748b; }
+      .lbl { font-size: 11px; fill: #334155; font-weight: 600; paint-order: stroke; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }
+      .halo { fill: none; stroke: #ffffff; stroke-width: 7; stroke-linejoin: round; }
+      .ln { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+      .modbus { stroke: #2563eb; }
+      .direct { stroke: #2563eb; stroke-dasharray: 7 4; }
+      .rs485 { stroke: #d97706; }
+      .http { stroke: #0f172a; stroke-width: 2.6; }
+      .cfg { stroke: #64748b; stroke-dasharray: 6 4; }
+      .db { stroke: #6366f1; }
+      .web { stroke: #0284c7; }
+      .int { stroke: #0891b2; }
+    </style>
+    <marker id="m-modbus" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+    <marker id="m-http" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0f172a"/></marker>
+    <marker id="m-cfg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#64748b"/></marker>
+    <marker id="m-db" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6366f1"/></marker>
+    <marker id="m-web" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0284c7"/></marker>
+    <marker id="m-int" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0891b2"/></marker>
+    <marker id="m-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#94a3b8"/></marker>
+  </defs>
+
+  <rect width="1800" height="1160" fill="#f1f5f9"/>
+
+  <!-- Encabezado -->
+  <rect width="1800" height="82" fill="#0f172a"/>
+  <text x="40" y="44" font-size="26" font-weight="700" fill="#ffffff">Gravix · Arquitectura de la solución implementada</text>
+  <text x="40" y="68" font-size="13.5" fill="#94a3b8">Leer los medidores sin depender del EBO AS-P, guardar todo el historial, detectar huecos y comparar ambos caminos</text>
+  <text x="1760" y="44" font-size="14" font-weight="600" fill="#e2e8f0" text-anchor="end">Piloto: IGSS Escuintla · 18/11/2026</text>
+  <text x="1760" y="68" font-size="12" fill="#94a3b8" text-anchor="end">Servidor 192.168.70.4 · solo lectura Modbus (funciones 03/04)</text>
+
+  <!-- Fases -->
+  <rect x="30" y="98" width="570" height="78" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.4"/>
+  <circle cx="52" cy="122" r="7" fill="#16a34a"/>
+  <text class="t" x="68" y="127">Fase A · Historial</text>
+  <text class="d" x="68" y="147">Cada lectura con su hora en TimescaleDB y cada hueco con su causa</text>
+  <text class="ds" x="68" y="165" fill="#15803d" font-weight="700">EN PRODUCCIÓN DESDE EL 03/11/2026</text>
+
+  <rect x="615" y="98" width="570" height="78" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+  <circle cx="637" cy="122" r="7" fill="#f59e0b"/>
+  <text class="t" x="653" y="127">Fase B · Lectura directa</text>
+  <text class="d" x="653" y="147">El agente lee cada medidor por su IP y se compara contra el AS-P</text>
+  <text class="ds" x="653" y="165" fill="#b45309" font-weight="700">EN PRUEBA DESDE EL 09/11 · COMPARATIVO CERRADO EL 12/11: VIABLE</text>
+
+  <rect x="1200" y="98" width="570" height="78" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <circle cx="1222" cy="122" r="7" fill="#94a3b8"/>
+  <text class="t" x="1238" y="127">Fase C · Recuperación</text>
+  <text class="d" x="1238" y="147">Rellenar huecos desde la memoria del ION7400 o por diferencia de contador</text>
+  <text class="ds" x="1238" y="165" fill="#475569" font-weight="700">PENDIENTE · VERIFICAR PRIMERO EN EL EQUIPO</text>
+
+  <!-- ============ 1 · SEDE ============ -->
+  <rect class="panel" x="30" y="192" width="400" height="858" rx="12"/>
+  <text class="ptitle" x="50" y="218">1 · SEDE IGSS ESCUINTLA · 10.0.6.x</text>
+
+  <rect class="sub" x="40" y="230" width="380" height="244" rx="10"/>
+  <text class="stitle" x="54" y="254">Camino EBO (el que existía)</text>
+  <rect class="box" x="54" y="268" width="352" height="56" rx="8"/>
+  <text class="t" x="68" y="291">6 ION7400 · 7 PM2130 · 2 generadores</text>
+  <text class="d" x="68" y="311">concentrados por el AS-P</text>
+  <path class="ln" d="M230 324V344" stroke="#94a3b8" marker-end="url(#m-gray)"/>
+  <rect class="key" x="54" y="348" width="352" height="64" rx="8"/>
+  <text class="t" x="68" y="372">EBO AS-P · EBO-ASP-ESCUINTLA</text>
+  <text class="d" x="68" y="392">10.0.6.26:502 · unit 1 · registros 101–5787</text>
+  <text class="ds" x="68" y="405">Schneider EcoStruxure</text>
+  <text class="ds" x="54" y="438">Republica solo parte de los datos, hasta 1 min atrasado</text>
+  <text class="ds" x="54" y="455">y con errores (THD I fase A = 0, flicker, FP del generador)</text>
+
+  <rect class="sub" x="40" y="486" width="380" height="554" rx="10"/>
+  <text class="stitle" x="54" y="510">Camino directo (Gravix)</text>
+
+  <rect class="box" x="54" y="524" width="352" height="56" rx="8"/>
+  <text class="t" x="68" y="547">ANALIZADOR-2 · 10.0.6.9 · ID 255</text>
+  <text class="d" x="68" y="567">ION7400 · puerta Modbus TCP hacia el RS-485</text>
+  <rect class="box" x="96" y="598" width="310" height="54" rx="8"/>
+  <text class="ts" x="110" y="620">ANALIZADOR-1 · ID 21</text>
+  <text class="ds" x="110" y="638">detrás del ANALIZADOR-2, por RS-485</text>
+  <rect class="box" x="96" y="666" width="310" height="54" rx="8"/>
+  <text class="ts" x="110" y="688">Generador Planta Hospital · ID 2</text>
+  <text class="ds" x="110" y="706">controlador en el mismo cable RS-485</text>
+  <path class="ln rs485" d="M72 580V693M72 625H94M72 693H94"/>
+  <text class="lbl" x="66" y="660" transform="rotate(-90 66 660)" text-anchor="middle" font-size="10" fill="#b45309">RS-485</text>
+
+  <rect class="box" x="54" y="738" width="352" height="56" rx="8"/>
+  <text class="t" x="68" y="761">ANALIZADOR-3 a 6 · 10.0.6.10 – .13</text>
+  <text class="d" x="68" y="781">ION7400 · ID 255 (el propio equipo)</text>
+  <rect class="box" x="54" y="808" width="352" height="56" rx="8"/>
+  <text class="t" x="68" y="831">PM2130-1 a 7 · 10.0.6.18 – .24 · ID 2</text>
+  <text class="d" x="68" y="851">la placa dice EM6400NG+: modelo por confirmar</text>
+
+  <rect x="54" y="880" width="352" height="146" rx="8" fill="#fefce8" stroke="#eab308"/>
+  <text class="ts" x="68" y="902">Mapa de registros verificado en el equipo</text>
+  <text class="ds" x="68" y="924">• Dirección Modbus = registro − 1 · float32 ABCD</text>
+  <text class="ds" x="68" y="943">• ION7400: W → kW, THD fracción → %, acepta bloques</text>
+  <text class="ds" x="68" y="962">• PM2130: rechaza bloques (excepción 3): valor por valor</text>
+  <text class="ds" x="68" y="981">• Generador: int32 CDAB, reg. 4770–4806 (como el AS-P)</text>
+  <text class="ds" x="68" y="1000">• NaN = no aplica, se omite (el AS-P lo vuelve 0)</text>
+  <text class="ds" x="68" y="1019">• 12 medidores responden en 3–9 ms desde el servidor</text>
+
+  <!-- ============ 2 · RECOLECCIÓN ============ -->
+  <rect class="panel" x="470" y="192" width="380" height="858" rx="12"/>
+  <text class="ptitle" x="490" y="218">2 · RECOLECCIÓN · AGENTES GO</text>
+
+  <rect class="agent" x="482" y="230" width="356" height="244" rx="10"/>
+  <circle cx="822" cy="250" r="6" fill="#16a34a"/>
+  <text class="t" x="496" y="255">agente-go-escuintla · v0.4</text>
+  <text class="d" x="496" y="274">igss-escuintla · producción · crontab</text>
+  <rect class="chip" x="496" y="288" width="328" height="52" rx="7"/>
+  <text class="ts" x="508" y="309">Perfiles ion7400 · pm2130 · generator</text>
+  <text class="ds" x="508" y="327">mapa del EBO dentro de profiles.go</text>
+  <rect class="chip" x="496" y="348" width="328" height="52" rx="7"/>
+  <text class="ts" x="508" y="369">Lee el AS-P cada 15 s</text>
+  <text class="ds" x="508" y="387">eventos y alarmas activos</text>
+  <rect class="chip" x="496" y="408" width="328" height="52" rx="7"/>
+  <text class="ts" x="508" y="429">Hora = llegada a la API</text>
+  <text class="ds" x="508" y="447">sin respaldo en disco (versión 0.4)</text>
+
+  <rect class="agent" x="482" y="486" width="356" height="554" rx="10"/>
+  <circle cx="822" cy="506" r="6" fill="#f59e0b"/>
+  <text class="t" x="496" y="511">agente-go-escuintla-directo · v0.5.5</text>
+  <text class="d" x="496" y="530">igss-escuintla-directo · 14 equipos · 30 s</text>
+  <g>
+    <rect class="chip" x="496" y="544" width="328" height="56" rx="7"/>
+    <text class="ts" x="508" y="566">Perfiles directos (direct.go)</text>
+    <text class="ds" x="508" y="585">ion7400-directo · pm2130-directo · generador-directo</text>
+    <rect class="chip" x="496" y="606" width="328" height="56" rx="7"/>
+    <text class="ts" x="508" y="628">Una conexión fija por medidor</text>
+    <text class="ds" x="508" y="647">cada 30 s · readDelayMs 100 · solo funciones 03/04</text>
+    <rect class="chip" x="496" y="668" width="328" height="56" rx="7"/>
+    <text class="ts" x="508" y="690">Armónicos (harmonics.go)</text>
+    <text class="ds" x="508" y="709">espectro H1–H63 cada 10 min · IEC 61000-4-30</text>
+    <rect class="chip" x="496" y="730" width="328" height="56" rx="7"/>
+    <text class="ts" x="508" y="752">readAt: hora real de cada lectura</text>
+    <text class="ds" x="508" y="771">la API guarda esa hora, no la de llegada</text>
+    <rect class="chip" x="496" y="792" width="328" height="56" rx="7"/>
+    <text class="ts" x="508" y="814">Respaldo en disco (internal/backlog)</text>
+    <text class="ds" x="508" y="833">bloques de 5 min · hasta 3 días · 4 por ciclo</text>
+    <rect class="chip" x="496" y="854" width="328" height="56" rx="7"/>
+    <text class="ts" x="508" y="876">Configuración remota</text>
+    <text class="ds" x="508" y="895">remoteConfig: true · consulta control cada 5 s</text>
+    <rect class="chip" x="496" y="916" width="328" height="56" rx="7"/>
+    <text class="ts" x="508" y="938">Búsqueda de equipos (identify.go)</text>
+    <text class="ds" x="508" y="957">reconoce ION7400, PM2130, generador y modelo</text>
+  </g>
+  <text class="ds" x="496" y="996" fill="#b45309" font-weight="700">Prueba: eventos apagados · NO está en el crontab</text>
+  <text class="ds" x="496" y="1014">RAM 10–14 MB · respaldo ≈36 MB por día</text>
+  <text class="ds" x="496" y="1030">Se empareja con el camino EBO por nombre del equipo</text>
+
+  <!-- ============ 3 · API ============ -->
+  <rect class="panel" x="890" y="192" width="470" height="858" rx="12"/>
+  <text class="ptitle" x="910" y="218">3 · API NESTJS · MÓDULOS timeseries Y agents</text>
+
+  <rect class="svc" x="905" y="230" width="400" height="70" rx="8" stroke="#0f172a"/>
+  <text class="t" x="919" y="253">AgentSyncService</text>
+  <text class="d" x="919" y="272">POST /devices/agent-sync · estado en vivo</text>
+  <text class="ds" x="919" y="289">solo los equipos Modbus pasan al historial</text>
+  <path class="ln int" d="M1105 300V318" marker-end="url(#m-int)"/>
+
+  <rect class="svc" x="905" y="320" width="400" height="86" rx="8"/>
+  <text class="t" x="919" y="343">TimeseriesService</text>
+  <text class="d" x="919" y="362">recordSnapshot · recordBacklog · recordHarmonics</text>
+  <text class="ds" x="919" y="380">usa readAt si viene; si no, la hora de llegada</text>
+  <text class="ds" x="919" y="396">descarta la misma lectura repetida en menos de 20 s</text>
+  <path class="ln int" d="M1105 406V424" marker-end="url(#m-int)"/>
+
+  <rect class="svc" x="905" y="426" width="400" height="86" rx="8"/>
+  <text class="t" x="919" y="449">GapDetectorService</text>
+  <text class="d" x="919" y="468">cada 15 s: más de 45 s sin dato → abre un hueco</text>
+  <text class="ds" x="919" y="486">causa: agente no reporta · equipo no responde · sin lecturas</text>
+  <text class="ds" x="919" y="502">reconcile: recovered (sin saltos de más de 90 s) o partial</text>
+
+  <rect class="svc" x="905" y="532" width="400" height="86" rx="8"/>
+  <text class="t" x="919" y="555">PilotService · /pilot/…</text>
+  <text class="d" x="919" y="574">devices · series (time_bucket) · gaps · espectro</text>
+  <text class="ds" x="919" y="592">compare: directo vs AS-P con tolerancia por métrica</text>
+  <text class="ds" x="919" y="608">excel (xlsx propio) · connection (lectura directa)</text>
+
+  <rect class="svc" x="905" y="638" width="400" height="86" rx="8"/>
+  <text class="t" x="919" y="661">QualityService</text>
+  <text class="d" x="919" y="680">normas NTSD · IEEE 519 · EN 50160 · cumplimiento</text>
+  <text class="ds" x="919" y="698">pronóstico por hora y tipo de día · umbrales por equipo</text>
+  <text class="ds" x="919" y="714">probar: una lectura función 03 al equipo</text>
+
+  <rect class="svc" x="905" y="744" width="400" height="70" rx="8"/>
+  <text class="t" x="919" y="767">AgentsService · /agents/:sede/…</text>
+  <text class="d" x="919" y="786">config versionada · control · búsquedas</text>
+  <text class="ds" x="919" y="803">rechaza si otro guardó una versión antes</text>
+
+  <rect x="905" y="840" width="440" height="200" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.6"/>
+  <text class="t" x="919" y="864">PostgreSQL 16 + TimescaleDB 2.31</text>
+  <text class="ds" x="1331" y="864" text-anchor="end">imagen siasa-postgres-timescale</text>
+  <text class="ts" x="919" y="892">readings</text>
+  <text class="ds" x="1035" y="889">hypertable de 1 día · llave (deviceId, metric, time)</text>
+  <text class="ds" x="1035" y="903">quality real / recuperada / estimada · comprime a 7 días</text>
+  <text class="ts" x="919" y="932">reading_gaps</text>
+  <text class="ds" x="1035" y="929">inicio, fin y causa de cada hueco por equipo</text>
+  <text class="ds" x="1035" y="943">open · closed · recovered · partial · estimated</text>
+  <text class="ts" x="919" y="972">devices</text>
+  <text class="ds" x="1035" y="969">metadata.directConnection · metadata.umbrales</text>
+  <text class="ds" x="1035" y="983">estado en vivo en device_states</text>
+  <text class="ts" x="919" y="1012">agent_configs</text>
+  <text class="ds" x="1035" y="1009">configuración por versión · versión aplicada</text>
+  <text class="ds" x="1035" y="1023">búsqueda pendiente y su resultado</text>
+
+  <!-- ============ 4 · WEB ============ -->
+  <rect class="panel" x="1400" y="192" width="370" height="858" rx="12"/>
+  <text class="ptitle" x="1420" y="218">4 · WEB NODIVO (REACT)</text>
+
+  <rect class="box" x="1415" y="230" width="340" height="212" rx="8" fill="#f0f9ff" stroke="#0284c7"/>
+  <text class="t" x="1429" y="254">Pestaña Piloto Gravix</text>
+  <g class="ds">
+    <text x="1429" y="278">• Barra de fases A/B/C e indicadores de la sede</text>
+    <text x="1429" y="300">• Equipo en 3D con sus pantallas reales (DeviceArt)</text>
+    <text x="1429" y="322">• Huecos de 7 días con causa · "Recuperar" en Fase C</text>
+    <text x="1429" y="344">• Conexión directa: IP, puerto, ID y puente RS-485</text>
+    <text x="1429" y="366">• Directo vs AS-P por métrica</text>
+    <text x="1429" y="388">• Armónicos y espectro (Armonicos.tsx)</text>
+    <text x="1429" y="410">• Informe comparativo 12/11 · Excel con columna EBO</text>
+  </g>
+
+  <rect class="box" x="1415" y="460" width="340" height="150" rx="8" fill="#f0f9ff" stroke="#0284c7"/>
+  <text class="t" x="1429" y="484">Centro de mando</text>
+  <g class="ds">
+    <text x="1429" y="508">• Normas y cumplimiento (95 % del tiempo)</text>
+    <text x="1429" y="530">• Predicción: perfil horario + tendencia diaria</text>
+    <text x="1429" y="552">• Calidad de energía con semáforo</text>
+    <text x="1429" y="574">• Gráficas: "comparar con" la lectura del EBO</text>
+    <text x="1429" y="596">• Usa la sede &lt;sede&gt;-directo si existe</text>
+  </g>
+
+  <rect class="box" x="1415" y="628" width="340" height="150" rx="8" fill="#f0f9ff" stroke="#0284c7"/>
+  <text class="t" x="1429" y="652">Equipos</text>
+  <g class="ds">
+    <text x="1429" y="676">• Descubrir y agregar (búsqueda del agente)</text>
+    <text x="1429" y="698">• Topología en vivo: IP y cable RS-485</text>
+    <text x="1429" y="720">• Configuración, umbrales y "Probar lectura"</text>
+    <text x="1429" y="742">• Ficha del dispositivo (formato JSON v1)</text>
+    <text x="1429" y="764">• Solo el administrador escribe la config</text>
+  </g>
+
+  <rect x="1415" y="796" width="340" height="244" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.4"/>
+  <text class="t" x="1429" y="820">Resultado del comparativo</text>
+  <text class="ds" x="1429" y="837">09/11 13:08 – 12/11 16:00 · ≈2.3 millones de valores</text>
+  <g class="ds" fill="#334155">
+    <text x="1429" y="862">• Voltaje: 99.6–100 % dentro de ±1 %</text>
+    <text x="1429" y="884">• Frecuencia: 100 % dentro de ±0.05 Hz</text>
+    <text x="1429" y="906">• Potencia ION7400 (15 min): 97–100 % en ±3 %</text>
+    <text x="1429" y="928">• Disponibilidad directa: 99.8–100 %</text>
+    <text x="1429" y="950">• AS-P: hasta 1 min de atraso y valores repetidos</text>
+    <text x="1429" y="972">• Directo corrige THD I fase A, I A del ANALIZADOR-2,</text>
+    <text x="1429" y="990">  flicker y FP del generador</text>
+  </g>
+  <text class="ts" x="1429" y="1022" fill="#15803d">Viable para reemplazar al AS-P como fuente</text>
+
+  <!-- ============ CONEXIONES ============ -->
+  <!-- AS-P → agente 0.4 -->
+  <path class="ln modbus" d="M406 380H452V352H480" marker-end="url(#m-modbus)"/>
+  <!-- Directo → agente 0.5.5 -->
+  <path class="ln direct" d="M406 552H448M406 766H448M406 836H448M448 552V836M448 700H480" marker-end="url(#m-modbus)"/>
+
+  <!-- Agentes → API -->
+  <path class="ln http" d="M838 262H903" marker-end="url(#m-http)"/>
+  <g class="halo"><path d="M838 700H868V280H903"/></g>
+  <path class="ln http" d="M838 700H868V280H903" marker-end="url(#m-http)"/>
+  <text class="lbl" x="845" y="254" font-size="10">agent-sync</text>
+
+  <!-- Config remota -->
+  <path class="ln cfg" d="M905 790H840" marker-end="url(#m-cfg)"/>
+  <text class="lbl" x="846" y="782" font-size="10">config</text>
+
+  <!-- Servicios ↔ BD -->
+  <path class="ln db" d="M1305 265H1325M1305 363H1325M1305 469H1325M1305 575H1325M1305 681H1325M1305 779H1325M1325 265V836" />
+  <path class="ln db" d="M1325 820V836" marker-end="url(#m-db)"/>
+
+  <!-- API → Web -->
+  <g class="halo">
+    <path d="M1305 560H1375V336H1413"/>
+    <path d="M1305 666H1384V535H1413"/>
+    <path d="M1305 796H1392V703H1413"/>
+  </g>
+  <path class="ln web" d="M1305 560H1375V336H1413" marker-end="url(#m-web)"/>
+  <path class="ln web" d="M1305 666H1384V535H1413" marker-end="url(#m-web)"/>
+  <path class="ln web" d="M1305 796H1392V703H1413" marker-end="url(#m-web)"/>
+
+  <!-- Leyenda -->
+  <g font-size="11.5" fill="#334155">
+    <path class="ln modbus" d="M40 1086H84"/><text x="92" y="1090">Modbus TCP por el AS-P (cada 15 s)</text>
+    <path class="ln direct" d="M330 1086H374"/><text x="382" y="1090">Modbus directo al medidor (cada 30 s)</text>
+    <path class="ln rs485" d="M630 1086H674"/><text x="682" y="1090">Cable RS-485</text>
+    <path class="ln http" d="M790 1086H834"/><text x="842" y="1090">HTTP agente → API (x-api-key)</text>
+    <path class="ln cfg" d="M1040 1086H1084"/><text x="1092" y="1090">Config remota</text>
+    <path class="ln db" d="M1200 1086H1244"/><text x="1252" y="1090">Lectura y escritura en la BD</text>
+    <path class="ln web" d="M1450 1086H1494"/><text x="1502" y="1090">REST hacia la web</text>
+  </g>
+  <text x="40" y="1140" font-size="11.5" fill="#64748b">Código: apps/Agente_Go/internal/discovery/modbussource (direct.go, harmonics.go, identify.go) · apps/Agente_Go/internal/backlog · apps/api/src/timeseries · apps/api/src/agents · apps/web/src/routes/Gravix.tsx</text>
+  <text x="1760" y="1140" font-size="11.5" fill="#64748b" text-anchor="end">Detalle: docs/gravix-arquitectura.md</text>
+</svg>

@@ -3,6 +3,12 @@
 > **Manual de operacion completo y actualizado** (que corre hoy, donde, como configurarlo,
 > eventos, operacion en el servidor y problemas conocidos): [`agentes-go-manual.md`](./agentes-go-manual.md).
 > Este documento queda como historial de diseño y decisiones.
+>
+> **Diagrama general actualizado (18/11/2026)**, con todas las fuentes, la config remota, el backlog,
+> las 4 instancias en producción y su relación con la API, la base de datos y los sistemas externos:
+> [`arquitectura-general.md`](./arquitectura-general.md).
+>
+> ![Arquitectura general](./diagramas/arquitectura-general.svg)
 
 Agente en Go, uno por edificio, que corre en el servidor local de ese edificio y escucha los
 protocolos IoT presentes en su red - **MQTT/Zigbee2MQTT, LoRaWAN (ChirpStack) y BACnet/IP ya
@@ -41,7 +47,10 @@ Se evaluaron dos caminos (ver la discusion completa en el historial del proyecto
   stacks distintos. Revisar esta decision si en el futuro los edificios reales no tienen
   conectividad confiable.
 
-## Vista general
+## Vista general (diseño original, septiembre 2026)
+
+La vista actual está en [`arquitectura-general.md`](./arquitectura-general.md). Desde entonces se
+agregaron Modbus, LoRaWAN directo, eventos, backlog en disco y configuración remota.
 
 ```mermaid
 flowchart LR
