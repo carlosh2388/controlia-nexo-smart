@@ -1,49 +1,28 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, BadGatewayException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { GrupoDto, SedeDto } from "./dto/red.dto";
-
-/** Ficha del dispositivo: los mismos campos que la respuesta v1 de Telemetria 1 (api-SIASA). */
-const FICHA = ["area", "building", "floor", "group", "room", "fase_energy", "code_inventory", "capacity"] as const;
-
-interface DeviceMeta {
-  model?: string | null;
-  attributes?: Record<string, unknown>;
-  agent?: { buildingKey?: string };
-}
+import { GrupoDto, ProbarGravixDto, SedeDto } from "./dto/red.dto";
+import { armarTelemetria, equiposDeAgentes } from "./telemetria";
+import { GravixService } from "./gravix.service";
 
 const slug = (s: string) =>
   s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
-/** Unidad de una metrica a partir de su clave (las claves del agente son las mismas del perfil EBO). */
-function unidad(k: string): string {
-  if (/^harm_/.test(k)) return /^harm_v/.test(k) ? "V" : "A";
-  if (/thd|load_metering|fuel_level/.test(k)) return "%";
-  if (/power_factor|pf_/.test(k)) return "";
-  if (/^energy_active|_kwh$/.test(k)) return "kWh";
-  if (/^energy_reactive|_kvarh$/.test(k)) return "kVArh";
-  if (/^energy_apparent|_kvah$/.test(k)) return "kVAh";
-  if (/reactive_power/.test(k)) return "kVAr";
-  if (/apparent_power|kva/.test(k)) return "kVA";
-  if (/active_power|demand|_kw_|kw_total/.test(k)) return "kW";
-  if (/voltage/.test(k)) return "V";
-  if (/current/.test(k)) return "A";
-  if (/frequency/.test(k)) return "Hz";
-  if (/flicker|pst/.test(k)) return "Pst";
-  if (/temp/.test(k)) return "°C";
-  if (/pressure/.test(k)) return "psi";
-  if (/speed/.test(k)) return "RPM";
-  return "";
-}
-
 @Injectable()
 export class RedService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly gravix: GravixService,
+  ) {}
 
+  /** Grupos y sedes. De las sedes Gravix: direccion, final de la clave y estado; nunca la clave. */
   async listar() {
-    const [grupos, sedes] = await Promise.all([
+    const [grupos, filas] = await Promise.all([
       this.prisma.redGrupo.findMany({ orderBy: [{ orden: "asc" }, { nombre: "asc" }] }),
       this.prisma.redSede.findMany({ orderBy: [{ orden: "asc" }, { nombre: "asc" }] }),
     ]);
+    const sedes = filas.map(({ apiKeyEnc, ...s }) =>
+      s.origen === "gravix" ? { ...s, claveFinal: this.gravix.finalDeClave(apiKeyEnc), estado: this.gravix.estadoDe(s.id) } : s,
+    );
     return { grupos, sedes };
   }
 
@@ -72,7 +51,13 @@ export class RedService {
   async guardarSede(id: string, dto: SedeDto) {
     if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(id)) throw new BadRequestException("Código de sede inválido (minúsculas, números y guiones)");
     if (dto.grupoId) await this.existeGrupo(dto.grupoId);
+    const anterior = await this.prisma.redSede.findUnique({ where: { id }, select: { alarmasFuente: true } });
+    const alarmasFuente = dto.alarmasFuente ?? anterior?.alarmasFuente ?? "api-siasa";
+    if (alarmasFuente === "gravix" && dto.origen !== "gravix") {
+      throw new BadRequestException("Las alarmas solo se pueden leer de Gravix si la sede tiene su propio Gravix");
+    }
     const data = {
+      alarmasFuente,
       nombre: dto.nombre,
       origen: dto.origen,
       grupoId: dto.grupoId ?? null,
@@ -81,64 +66,61 @@ export class RedService {
       lon: dto.lon ?? null,
       plantilla: dto.plantilla ?? null,
       orden: dto.orden ?? 0,
+      url: null as string | null,
+      apiKeyEnc: null as string | null,
     };
-    return this.prisma.redSede.upsert({ where: { id }, update: data, create: { id, ...data } });
+    if (dto.origen === "gravix") {
+      // Sede con su propio Gravix: se prueba la conexion y sus agentes salen de la propia sede.
+      const previa = await this.prisma.redSede.findUnique({ where: { id } });
+      const url = (dto.url ?? previa?.url ?? "").replace(/\/$/, "");
+      if (!url) throw new BadRequestException("Falta la dirección del Gravix de la sede (ej. http://10.20.5.10:3010)");
+      const key = dto.apiKey ?? (previa?.apiKeyEnc ? this.gravix.descifrar(previa.apiKeyEnc) : null);
+      if (!key) throw new BadRequestException("Falta la clave de consulta de la sede (CENTRO_API_KEY de su .env)");
+      const salud = await this.gravix.probar(url, key);
+      data.url = url;
+      data.apiKeyEnc = dto.apiKey || !previa?.apiKeyEnc ? this.gravix.cifrar(key) : previa.apiKeyEnc;
+      data.agentes = [...new Set(salud.agentes.map((a) => a.buildingKey))].sort();
+    }
+    const fila = await this.prisma.redSede.upsert({ where: { id }, update: data, create: { id, ...data } });
+    if (dto.origen === "gravix" || fila.origen === "gravix") await this.gravix.recargar();
+    const { apiKeyEnc, ...out } = fila;
+    return { ...out, claveFinal: this.gravix.finalDeClave(apiKeyEnc) };
   }
 
   async borrarSede(id: string) {
     const s = await this.prisma.redSede.findUnique({ where: { id } });
     if (!s) throw new NotFoundException("La sede no existe");
     await this.prisma.redSede.delete({ where: { id } });
+    if (s.origen === "gravix") await this.gravix.recargar();
     return { ok: true };
+  }
+
+  async probarGravix(dto: ProbarGravixDto) {
+    let key = dto.apiKey;
+    if (!key && dto.sedeId) {
+      const s = await this.prisma.redSede.findUnique({ where: { id: dto.sedeId } });
+      if (s?.apiKeyEnc) key = this.gravix.descifrar(s.apiKeyEnc);
+    }
+    if (!key) throw new BadRequestException("Escriba la clave de consulta de la sede (CENTRO_API_KEY de su .env)");
+    return this.gravix.probar(dto.url, key);
   }
 
   /**
    * Respuesta de la sede con el formato v1 de Telemetria 1 (api-SIASA): { devices: [...], lectura }.
    * Cada equipo lleva su ficha (area, building, floor, group, room, fase_energy, code_inventory, capacity)
    * tal como se cargo al agregarlo, y sus metricas { valor, unidad } de la ultima lectura.
+   * Si la sede tiene su propio Gravix, la respuesta la arma la sede.
    */
   async telemetria(id: string) {
     const sede = await this.prisma.redSede.findUnique({ where: { id } });
     if (!sede) throw new NotFoundException("La sede no existe");
-    const keys = sede.agentes;
-    const devices = keys.length
-      ? await this.prisma.device.findMany({
-          where: { protocol: "modbus", OR: keys.map((k) => ({ metadata: { path: ["agent", "buildingKey"], equals: k } })) },
-          include: { state: true },
-          orderBy: { name: "asc" },
-        })
-      : [];
-    const cuenta: Record<string, number> = {};
-    const out = devices.map((d) => {
-      const meta = (d.metadata as DeviceMeta | null) ?? {};
-      const a = meta.attributes ?? {};
-      const modelo = String(meta.model ?? a.model ?? "");
-      const tipo = /7400|ION/i.test(modelo) ? "ion" : /2130|PM/i.test(modelo) ? "pm" : /gen/i.test(modelo) || a.category === "generator" ? "generator" : "unknown";
-      const model = tipo === "ion" ? "7400" : tipo === "pm" ? "2130" : modelo;
-      cuenta[tipo] = (cuenta[tipo] ?? 0) + 1;
-      const base = tipo === "ion" ? "ion_7400" : tipo === "pm" ? "pm_2130" : tipo === "generator" ? "generador" : "equipo";
-      const ficha: Record<string, unknown> = {};
-      for (const k of FICHA) if (a[k] !== undefined && a[k] !== "") ficha[k] = a[k];
-      // Compatibilidad con los atributos que ya usaban los equipos de Escuintla.
-      if (ficha.fase_energy === undefined && a.phase) ficha.fase_energy = a.phase;
-      if (ficha.code_inventory === undefined && a.code) ficha.code_inventory = a.code;
-      if (ficha.capacity === undefined && a.capacityKva) ficha.capacity = a.capacityKva;
-      const readings = (d.state?.readings as Record<string, unknown> | null) ?? {};
-      const metrics: Record<string, { value: number; unit: string }> = {};
-      for (const [k, v] of Object.entries(readings)) {
-        if (typeof v === "number" && Number.isFinite(v) && !/^harm_/.test(k) && k !== "harm_read_at") metrics[k] = { value: v, unit: unidad(k) };
-      }
-      return {
-        device_id: String(a.device_id ?? `${base}_${cuenta[tipo]}`),
-        name: d.name,
-        type: tipo,
-        model,
-        online: String(d.state?.state === "online"),
-        ...ficha,
-        metrics,
-      };
-    });
-    return { devices: out, lectura: { sede: sede.nombre, codigo: sede.id, generado: new Date().toISOString() } };
+    if (sede.origen === "gravix") {
+      const r = await this.gravix.reenviar(id, "/api/v1/sede/telemetria");
+      if (r.status !== 200) throw new BadGatewayException(`La sede ${id} no entregó su JSON v1 (HTTP ${r.status})`);
+      return JSON.parse(r.body.toString("utf8"));
+    }
+    const equipos = await equiposDeAgentes(this.prisma, sede.agentes);
+    return armarTelemetria(equipos, { nombre: sede.nombre, codigo: sede.id });
   }
 
   private async existeGrupo(id: string) {

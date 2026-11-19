@@ -1,0 +1,4 @@
+# Los scripts que corren en Linux (servidor de sede, contenedores) deben quedar con fin de linea LF.
+*.sh text eol=lf
+deploy/** text eol=lf
+apps/Agente_Go/Dockerfile text eol=lf

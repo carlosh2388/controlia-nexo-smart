@@ -21,7 +21,7 @@ import "../components/gravix/gravix.css";
 import "../components/centro/centro.css";
 import { NormasCumplimiento, Prediccion } from "../components/centro/Calidad";
 import { ArmonicosPanel } from "../components/gravix/Armonicos";
-import { GRUPO_INICIAL, usePilotDevicesMany, useRed, type RedGrupo, type RedSede } from "../api/red";
+import { GRUPO_INICIAL, conAgentes, usePilotDevicesMany, useRed, webDeSede, type RedGrupo, type RedSede } from "../api/red";
 import { BotonJsonV1, EditarSede, GestionGrupos, NuevaSede } from "../components/red/RedAdmin";
 
 /**
@@ -114,7 +114,10 @@ function promedio(r: Record<string, unknown>, ks: string[]) {
 
 /** Arma una sede "como las del monitoreo central" con los equipos que leen sus Agentes Go. */
 function sedeNodivo(rs: RedSede, devices: PilotDevice[], ultimoSync: string | null, generado: string): CentroSede {
-  const sinRespuesta = !!rs.agentes.length && (!ultimoSync || Date.now() - new Date(ultimoSync).getTime() > SIN_RESPUESTA_MS);
+  // Sede con su propio Gravix: si el centro no la alcanza, no responde aunque su agente siga leyendo alla.
+  const gx = rs.origen === "gravix" ? rs.estado ?? null : null;
+  const gravixCaida = rs.origen === "gravix" && (!gx || !gx.ok);
+  const sinRespuesta = gravixCaida || (!!rs.agentes.length && (!ultimoSync || Date.now() - new Date(ultimoSync).getTime() > SIN_RESPUESTA_MS));
   const dispositivos: CentroDispositivo[] = devices.map((d) => {
     const a = d.attributes ?? {};
     const r = d.readings ?? {};
@@ -148,15 +151,17 @@ function sedeNodivo(rs: RedSede, devices: PilotDevice[], ultimoSync: string | nu
   return {
     id: rs.id,
     nombre: rs.nombre,
-    ip: rs.agentes.length ? `Agente Go · ${rs.agentes.join(", ")}` : "sin agente",
+    ip: rs.origen === "gravix" ? `Gravix de sede${gx?.version ? ` v${gx.version}` : ""} · ${rs.url ?? ""}` : rs.agentes.length ? `Agente Go · ${rs.agentes.join(", ")}` : "sin agente",
     lat: rs.lat,
     lon: rs.lon,
     panel: "",
     nivel,
     sin_respuesta: sinRespuesta,
-    error: sinRespuesta ? (ultimoSync ? `El agente no reporta desde ${new Date(ultimoSync).toLocaleString("es-GT")}` : "El agente todavía no se ha conectado") : !devices.length ? "Sin equipos todavía: búsquelos con «Buscar equipos»" : null,
-    ultima_consulta_ok: ultimoSync,
-    latencia_ms: null,
+    error: gravixCaida
+      ? `El Gravix de la sede no responde${gx?.error ? ` (${gx.error})` : ""}${gx?.ultimoContacto ? `; último contacto ${new Date(gx.ultimoContacto).toLocaleString("es-GT")}` : ""}`
+      : sinRespuesta ? (ultimoSync ? `El agente no reporta desde ${new Date(ultimoSync).toLocaleString("es-GT")}` : "El agente todavía no se ha conectado") : !devices.length ? "Sin equipos todavía: búsquelos con «Buscar equipos»" : null,
+    ultima_consulta_ok: gx?.ultimoContacto ?? ultimoSync,
+    latencia_ms: gx?.latenciaMs ?? null,
     estado: null,
     medidores: { total: dispositivos.length, ok: dispositivos.length - fuera.length, fuera: fuera.length, alerta: 0, espera: 0, generador: dispositivos.filter((d) => d.generador).length },
     dispositivos,
@@ -317,7 +322,7 @@ export default function CentroMando({ access }: { access: Access }) {
   const grupos: RedGrupo[] = useMemo(() => red.data?.grupos ?? [], [red.data]);
   const filasRed: RedSede[] = useMemo(() => red.data?.sedes ?? [], [red.data]);
   const nuevasCfg = useMemo(
-    () => filasRed.filter((s) => s.origen === "nodivo" && (access.sites.length === 0 || access.sites.includes(s.id))),
+    () => filasRed.filter((s) => conAgentes(s) && (access.sites.length === 0 || access.sites.includes(s.id))),
     [filasRed, access.sites],
   );
   const keysNuevas = useMemo(() => [...new Set(nuevasCfg.flatMap((s) => s.agentes))], [nuevasCfg]);
@@ -336,9 +341,13 @@ export default function CentroMando({ access }: { access: Access }) {
         sedes.push(sedeNodivo(rs, lista, syncs[syncs.length - 1] ?? null, vista.data.generado));
       }
     }
-    return { vistaUnida: vista.data ? unirRed(vista.data, sedes) : undefined, nuevasDevs: devs };
+    // Sedes cuyas alarmas se leen del Gravix de sede (opcion en "Editar sede"): sus alarmas abiertas son las del motor de Gravix.
+    const deGravix = new Map(filasRed.filter((f) => f.alarmasFuente === "gravix" && f.estado?.ok && f.estado.abiertos).map((f) => [f.id, f.estado!.abiertos!]));
+    const unida = vista.data ? unirRed(vista.data, sedes) : undefined;
+    const vistaUnida = unida && deGravix.size ? { ...unida, sedes: unida.sedes.map((s) => (deGravix.has(s.id) ? { ...s, abiertos: deGravix.get(s.id)! } : s)) } : unida;
+    return { vistaUnida, nuevasDevs: devs };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vista.data, nuevasCfg, keysNuevas, sello]);
+  }, [vista.data, nuevasCfg, keysNuevas, sello, filasRed]);
   /** Grupo (fase) de cada sede: su fila en la red; sin fila, las del monitoreo central van a Telemetría 1. */
   const grupoDe = (id: string): RedGrupo | null => {
     const fila = filasRed.find((s) => s.id === id);
@@ -348,7 +357,7 @@ export default function CentroMando({ access }: { access: Access }) {
 
   /** Agente → sede que lo usa: los dos de Escuintla (EBO y directo) y los de cada sede nueva. */
   const agentesEnUso: Record<string, string> = { [GRAVIX_KEY]: "Escuintla", [`${GRAVIX_KEY}-directo`]: "Escuintla" };
-  for (const s of filasRed) if (s.origen === "nodivo") for (const a of s.agentes) agentesEnUso[a] ??= s.id;
+  for (const s of filasRed) if (conAgentes(s)) for (const a of s.agentes) agentesEnUso[a] ??= s.id;
 
   const equipos = useEquipos(vistaUnida, pilot.data?.devices ?? [], pilotDir.data?.devices ?? [], nuevasDevs);
   const [sedeId, setSedeId] = useState<string | null>(null);
@@ -569,6 +578,7 @@ export default function CentroMando({ access }: { access: Access }) {
               onEditar={() => setEditarSede({ id: sede.id })}
               onQuitar={() => setEditarSede({ id: sede.id, quitar: true })}
               onBuscarEquipos={() => setNuevaSede({ sedeId: sede.id, paso: 3 })}
+              webGravix={webDeSede(filasRed.find((f) => f.id === sede.id))}
             />
           )}
         </div>
@@ -1281,7 +1291,7 @@ function MiniEquipo({ device }: { device: PilotDevice }) {
   );
 }
 
-function SedeVista({ sede, equipos, alarmas, filtro, setFiltro, onAbrir, onAlertas, enSala = false, grupo = null, nueva = false, esAdmin = false, onEditar, onQuitar, onBuscarEquipos }: {
+function SedeVista({ sede, equipos, alarmas, filtro, setFiltro, onAbrir, onAlertas, enSala = false, grupo = null, nueva = false, esAdmin = false, onEditar, onQuitar, onBuscarEquipos, webGravix = null }: {
   sede: CentroSede;
   equipos: Equipo[];
   alarmas: Alarma[];
@@ -1298,6 +1308,8 @@ function SedeVista({ sede, equipos, alarmas, filtro, setFiltro, onAbrir, onAlert
   onEditar?: () => void;
   onQuitar?: () => void;
   onBuscarEquipos?: () => void;
+  /** Sede con su propio Gravix: direccion de su web local (los equipos se agregan alla). */
+  webGravix?: string | null;
 }) {
   const [tab, setTab] = useState<"equipos" | "calidad" | "eventos">("equipos");
   const lista = equipos.filter((e) => filtro === "todos" || e.kind === filtro);
@@ -1325,12 +1337,14 @@ function SedeVista({ sede, equipos, alarmas, filtro, setFiltro, onAbrir, onAlert
             {grupo && <span className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold text-slate-100" style={{ background: `${grupo.color}26`, boxShadow: `inset 0 0 0 1px ${grupo.color}66` }}><span className="h-2 w-2 rounded-[3px]" style={{ background: grupo.color }} />{grupo.nombre}</span>}
             <span className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold" style={{ background: `${COLOR[sede.nivel]}22`, color: COLOR[sede.nivel] }}><span className="h-2 w-2 rounded-full" style={{ background: COLOR[sede.nivel] }} />{NIVEL_TXT[sede.nivel]}</span>
             <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${gravix || nueva ? "bg-emerald-950 text-emerald-300" : "bg-slate-800 text-slate-300"}`}>
-              {nueva ? `Agente Go · ${equipos.length} equipos leídos directo por su IP` : gravix ? `Piloto Gravix · ${equipos.filter((e) => e.pilotDirect).length} de ${equipos.length} leídos directo por su IP` : "Vía EBO AS-P → api-SIASA (Gravix todavía no)"}
+              {nueva ? `${webGravix ? "Gravix de sede" : "Agente Go"} · ${equipos.length} equipos leídos directo por su IP` : gravix ? `Piloto Gravix · ${equipos.filter((e) => e.pilotDirect).length} de ${equipos.length} leídos directo por su IP` : "Vía EBO AS-P → api-SIASA (Gravix todavía no)"}
             </span>
           </div>
           {!enSala && (esAdmin || nueva) && (
             <div className="mt-1 flex flex-wrap gap-1.5">
-              {nueva && esAdmin && onBuscarEquipos && <button type="button" onClick={onBuscarEquipos} className="min-h-[34px] rounded-lg bg-sky-600 px-3 text-xs font-bold text-white hover:bg-sky-500">Buscar equipos</button>}
+              {webGravix ? (
+                <a href={webGravix} target="_blank" rel="noreferrer" title="Buscar y agregar equipos, ficha y umbrales se hacen en la web local de la sede" className="flex min-h-[34px] items-center rounded-lg bg-sky-600 px-3 text-xs font-bold text-white hover:bg-sky-500">Abrir Gravix de la sede ↗</a>
+              ) : nueva && esAdmin && onBuscarEquipos && <button type="button" onClick={onBuscarEquipos} className="min-h-[34px] rounded-lg bg-sky-600 px-3 text-xs font-bold text-white hover:bg-sky-500">Buscar equipos</button>}
               {nueva && <BotonJsonV1 sedeId={sede.id} nombre={sede.nombre} />}
               {esAdmin && onEditar && <button type="button" onClick={onEditar} className="min-h-[34px] rounded-lg border border-slate-700 bg-slate-900 px-3 text-xs font-semibold text-slate-200 hover:bg-slate-800">{nueva ? "Editar sede" : "Cambiar fase"}</button>}
               {esAdmin && nueva && onQuitar && <button type="button" onClick={onQuitar} className="min-h-[34px] rounded-lg border border-rose-900 px-3 text-xs font-semibold text-rose-300 hover:bg-rose-950/40">Quitar sede</button>}

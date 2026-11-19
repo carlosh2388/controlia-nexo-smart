@@ -450,6 +450,48 @@ model CentroLectura {
   @@map("centro_lecturas")
 }
 
+/// Alarmas del Gravix de sede (motor de apps/api/src/alarmas): mismas columnas y reglas que api_eventos
+/// de api-SIASA (monitoreo/eventos_modbus.js), para que el Centro de mando las lea igual.
+model AlarmaEvento {
+  id                 String    @id @default(uuid())
+  codigo             String    @unique
+  sede               String
+  evento             String
+  severidad          String
+  dispositivo        String?
+  inventario         String?
+  inicio             DateTime  @db.Timestamptz(3)
+  fin                DateTime? @db.Timestamptz(3)
+  duracionS          Int?
+  detalle            Json?
+  notificadoEn       DateTime? @db.Timestamptz(3)
+  cierreNotificadoEn DateTime? @db.Timestamptz(3)
+  intentosCorreo     Int       @default(0)
+  creadoEn           DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([inicio(sort: Desc)])
+  @@index([fin])
+  @@map("alarma_eventos")
+}
+
+/// Correos de alarma que preparo el Gravix de sede: enviados, o solo preparados (modo paralelo,
+/// mientras los envia api-SIASA) para compararlos.
+model AlarmaCorreo {
+  id       String   @id @default(uuid())
+  tipo     String
+  asunto   String
+  codigos  String[] @default([])
+  para     String?
+  enviado  Boolean  @default(false)
+  motivo   String?
+  texto    String?
+  html     String?
+  creadoEn DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([creadoEn(sort: Desc)])
+  @@map("alarma_correos")
+}
+
 /// Grupos del arbol del centro de mando (fases del proyecto: Telemetria 1, 2, 3...). Editables.
 model RedGrupo {
   id        String    @id
@@ -464,7 +506,8 @@ model RedGrupo {
 }
 
 /// Sedes de la red en Nodivo. origen "central": una de las sedes que ya lee el monitoreo central
-/// (solo se guarda su grupo); origen "nodivo": sede nueva leida por sus Agentes Go (buildingKeys).
+/// (solo se guarda su grupo); origen "nodivo": sede nueva leida por sus Agentes Go (buildingKeys);
+/// origen "gravix": sede con su propio Gravix (VM local), el centro la consulta en `url`.
 model RedSede {
   id        String    @id
   nombre    String
@@ -472,6 +515,13 @@ model RedSede {
   grupoId   String?
   grupo     RedGrupo? @relation(fields: [grupoId], references: [id], onDelete: SetNull)
   agentes   String[]  @default([])
+  /// Solo origen "gravix": API de la sede, ej. http://10.20.5.10:3010
+  url       String?
+  /// Solo origen "gravix": clave de consulta (rol viewer) cifrada con AES-256-GCM.
+  apiKeyEnc String?
+  /// De donde lee el Centro de mando las alarmas y correos de la sede: "api-siasa" (la api-SIASA de la
+  /// sede, la que envia los correos hoy) o "gravix" (el motor de alarmas del Gravix de sede).
+  alarmasFuente String @default("api-siasa")
   lat       Float?
   lon       Float?
   plantilla String?

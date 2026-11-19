@@ -6,3 +6,10 @@ apps/api/dist
 apps/web/dist
 npm-debug.log
 *.tar.gz
+# Claves: no deben quedar dentro de ninguna imagen.
+.env
+**/.env
+apps/Agente_Go/config.yaml
+apps/Agente_Go/bin
+apps/Agente_Go/data
+config/centro

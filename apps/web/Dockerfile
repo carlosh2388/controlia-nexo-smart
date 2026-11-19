@@ -14,6 +14,9 @@ ARG VITE_API_URL=http://localhost:3000/api/v1
 ARG VITE_WS_URL=ws://localhost:3000/ws
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_WS_URL=$VITE_WS_URL
+# "sede" = web local del Gravix de sede (solo Equipos, Piloto Gravix y Usuarios).
+ARG VITE_GRAVIX_MODO=central
+ENV VITE_GRAVIX_MODO=$VITE_GRAVIX_MODO
 
 RUN npm run build:web
 

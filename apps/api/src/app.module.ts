@@ -22,6 +22,15 @@ import { AgentsModule } from "./agents/agents.module";
 import { AccessModule } from "./access/access.module";
 import { CentroModule } from "./centro/centro.module";
 import { RedModule } from "./red/red.module";
+import { SedeModule } from "./sede/sede.module";
+
+/**
+ * GRAVIX_MODO=central (por defecto): servidor central con Centro de mando, red y TEC 3.
+ * GRAVIX_MODO=sede: Gravix local de una sede (VM con Docker): agente, historial, huecos, normas,
+ * alarmas y la API /sede que consulta el Centro de mando. Ver docs/gravix-sede.md.
+ */
+const MODO_SEDE = process.env.GRAVIX_MODO === "sede";
+const SOLO_CENTRAL = [EwelinkModule, BacnetModule, AutomationsModule, AreasModule, CentroModule, RedModule];
 
 @Module({
   imports: [
@@ -53,16 +62,11 @@ import { RedModule } from "./red/red.module";
     AdaptersModule,
     DevicesModule,
     RealtimeModule,
-    AutomationsModule,
-    EwelinkModule,
-    BacnetModule,
     ApiKeysModule,
-    AreasModule,
     SiteEventsModule,
     AgentsModule,
     AccessModule,
-    CentroModule,
-    RedModule,
+    ...(MODO_SEDE ? [SedeModule] : SOLO_CENTRAL),
   ],
 })
 export class AppModule {}

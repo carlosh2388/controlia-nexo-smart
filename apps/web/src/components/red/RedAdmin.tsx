@@ -3,7 +3,7 @@ import { apiClient, API_BASE_URL } from "../../api/client";
 import { useAgents } from "../../api/agents";
 import { extractErrorMessage } from "../../api/errors";
 import type { CentroSede } from "../../api/centro";
-import { useBorrarGrupo, useBorrarSede, useCrearGrupo, useEditarGrupo, useGuardarSede, useTelemetriaV1, type RedGrupo, type RedSede } from "../../api/red";
+import { useBorrarGrupo, useBorrarSede, useCrearGrupo, useEditarGrupo, useGuardarSede, useProbarGravix, useTelemetriaV1, type FuenteAlarmas, type RedGrupo, type RedSede } from "../../api/red";
 import { Descubrir } from "../../routes/Equipos";
 
 /**
@@ -91,7 +91,11 @@ export function NuevaSede({ grupos, sedes, idsExistentes, agentesEnUso, sedeId, 
   const [plantilla, setPlantilla] = useState(existente?.plantilla ?? "hospital");
   const [lat, setLat] = useState(existente?.lat != null ? String(existente.lat) : "");
   const [lon, setLon] = useState(existente?.lon != null ? String(existente.lon) : "");
-  const [modo, setModo] = useState<"nuevo" | "existente">(existente?.agentes.length || agenteInicial ? "existente" : "nuevo");
+  const [modo, setModo] = useState<"nuevo" | "existente" | "gravix">(existente?.origen === "gravix" ? "gravix" : existente?.agentes.length || agenteInicial ? "existente" : "nuevo");
+  /** Sede con su propio Gravix: direccion de su API y clave de consulta (CENTRO_API_KEY de su .env). */
+  const [gxUrl, setGxUrl] = useState(existente?.url ?? "");
+  const [gxClave, setGxClave] = useState("");
+  const probar = useProbarGravix();
   const [agente, setAgente] = useState(existente?.agentes[0] ?? agenteInicial ?? "");
   const [clave, setClave] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +104,8 @@ export function NuevaSede({ grupos, sedes, idsExistentes, agentesEnUso, sedeId, 
   const guardar = useGuardarSede();
 
   const codigoFinal = codigoEditado ? codigo : nombre ? `igss-${slug(nombre)}` : "";
-  const bkAgente = modo === "nuevo" ? codigoFinal : agente;
+  const gxAgentes = probar.data?.agentes.map((a) => a.buildingKey) ?? existente?.agentes ?? [];
+  const bkAgente = modo === "gravix" ? gxAgentes[0] ?? "" : modo === "nuevo" ? codigoFinal : agente;
   const infoAgente = (agentes.data ?? []).find((a) => a.buildingKey === bkAgente) ?? null;
   const conectado = !!infoAgente?.lastSync;
   const nLat = lat.trim() === "" ? null : Number(lat), nLon = lon.trim() === "" ? null : Number(lon);
@@ -108,7 +113,9 @@ export function NuevaSede({ grupos, sedes, idsExistentes, agentesEnUso, sedeId, 
 
   const errPaso1 = nombre.trim().length < 2 ? "Escriba el nombre de la sede." : !CODIGO_OK.test(codigoFinal) ? "El código solo lleva minúsculas, números y guiones." : !existente && idsExistentes.includes(codigoFinal) ? "Ya existe una sede con ese código." : !grupoId ? "Elija la fase de telemetría." : !coordsOk ? "Revise la latitud y la longitud (por ejemplo 14.305 y -90.785)." : null;
   const usadoPor = bkAgente && agentesEnUso[bkAgente] && agentesEnUso[bkAgente] !== codigoFinal ? agentesEnUso[bkAgente] : null;
-  const errPaso2 = !bkAgente ? "Elija el agente de la sede." : !CODIGO_OK.test(bkAgente) ? "El código del agente no es válido." : usadoPor ? `Ese agente ya lee la sede ${usadoPor}: cada sede necesita su propio agente.` : null;
+  const errPaso2 = modo === "gravix"
+    ? !probar.data ? "Pruebe la conexión con el Gravix de la sede antes de seguir." : null
+    : !bkAgente ? "Elija el agente de la sede." : !CODIGO_OK.test(bkAgente) ? "El código del agente no es válido." : usadoPor ? `Ese agente ya lee la sede ${usadoPor}: cada sede necesita su propio agente.` : null;
 
   async function crearClave() {
     setCreandoClave(true);
@@ -126,7 +133,9 @@ export function NuevaSede({ grupos, sedes, idsExistentes, agentesEnUso, sedeId, 
   function guardarSede(siguiente: number) {
     setError(null);
     guardar.mutate(
-      { id: codigoFinal, nombre: nombre.trim(), origen: "nodivo", grupoId, agentes: [bkAgente], lat: nLat, lon: nLon, plantilla },
+      modo === "gravix"
+        ? { id: codigoFinal, nombre: nombre.trim(), origen: "gravix", grupoId, agentes: gxAgentes, lat: nLat, lon: nLon, plantilla, url: gxUrl.trim(), apiKey: gxClave.trim() || undefined }
+        : { id: codigoFinal, nombre: nombre.trim(), origen: "nodivo", grupoId, agentes: [bkAgente], lat: nLat, lon: nLon, plantilla },
       { onSuccess: () => setPaso(siguiente), onError: (e) => setError(extractErrorMessage(e, "No se pudo guardar la sede")) },
     );
   }
@@ -216,7 +225,7 @@ remoteConfig: true`;
             Para descubrir y leer equipos, la sede necesita un <b className="text-slate-50">Agente Go dentro de su red</b>: las IP de los medidores solo se alcanzan desde ahí. El agente solo lee (función 03); nunca escribe en los equipos.
           </p>
           <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(260px,1fr))]">
-            {([["nuevo", "Instalar un agente nuevo", "En una PC o servidor de la sede. Se le crea su API key aquí mismo."], ["existente", "Usar un agente que ya existe", "Si la sede ya tiene un Agente Go reportando a Nodivo."]] as const).map(([k, t, d]) => (
+            {([["gravix", "La sede tiene su Gravix", "VM de la sede con Gravix + Agente Go (docker compose). El centro la consulta."], ["nuevo", "Instalar un agente nuevo", "En una PC o servidor de la sede. Se le crea su API key aquí mismo."], ["existente", "Usar un agente que ya existe", "Si la sede ya tiene un Agente Go reportando a Nodivo."]] as const).map(([k, t, d]) => (
               <button key={k} type="button" aria-pressed={modo === k} onClick={() => setModo(k)} className={`flex flex-col gap-1.5 rounded-xl border p-4 text-left ${modo === k ? "border-sky-600 bg-sky-950/40" : "border-slate-800 bg-slate-950/60 hover:border-slate-600"}`}>
                 <span className="flex justify-between"><b className="text-[15px] text-slate-50">{t}</b>{modo === k && <span className="text-xs font-bold text-sky-300">✓ Elegida</span>}</span>
                 <span className="text-[12.5px] text-slate-400">{d}</span>
@@ -224,7 +233,36 @@ remoteConfig: true`;
             ))}
           </div>
 
-          {modo === "existente" ? (
+          {modo === "gravix" ? (
+            <div className="flex flex-col gap-3">
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(260px,1fr))]">
+                <label className={etiqueta}>Dirección del Gravix de la sede
+                  <input className={`${campo} mono`} value={gxUrl} onChange={(e) => { setGxUrl(e.target.value); probar.reset(); }} placeholder="http://10.20.5.10:3010" />
+                </label>
+                <label className={etiqueta}>Clave de consulta (CENTRO_API_KEY de su .env)
+                  <input className={`${campo} mono`} type="password" autoComplete="off" value={gxClave} onChange={(e) => { setGxClave(e.target.value); probar.reset(); }} placeholder={existente?.claveFinal ? `Guardada: ••••${existente.claveFinal}` : "siasa_…"} />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" disabled={!gxUrl.trim() || probar.isPending} onClick={() => probar.mutate({ url: gxUrl.trim(), apiKey: gxClave.trim() || undefined, sedeId: existente?.id })} className="min-h-[38px] rounded-lg border border-sky-700 px-3.5 text-sm font-bold text-sky-200 hover:bg-sky-950 disabled:opacity-50">
+                  {probar.isPending ? "Probando…" : "Probar conexión"}
+                </button>
+                <span className="text-xs text-slate-500">La clave queda cifrada en el servidor central y no se vuelve a mostrar.</span>
+              </div>
+              {probar.isError && <p className="rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2 text-sm text-rose-200" role="alert">{extractErrorMessage(probar.error, "No se pudo conectar con la sede")}</p>}
+              {probar.data && (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-emerald-800 bg-emerald-950/30 px-4 py-3" role="status">
+                  <span className="latido h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                  <span className="min-w-[220px] flex-1 text-sm">
+                    <b className="text-slate-100">Gravix de sede conectado · v{probar.data.version}</b>
+                    <span className="block text-xs text-slate-400">
+                      {probar.data.sede.nombre} · {probar.data.equipos} equipos · agentes: {probar.data.agentes.map((a) => `${a.buildingKey}${a.agentVersion ? ` v${a.agentVersion}` : ""}`).join(", ") || "ninguno todavía"}
+                    </span>
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : modo === "existente" ? (
             <label className={etiqueta}>Agente
               <select className={campo} value={agente} onChange={(e) => setAgente(e.target.value)}>
                 <option value="">Elija un agente…</option>
@@ -253,7 +291,7 @@ remoteConfig: true`;
             </div>
           )}
 
-          {bkAgente && (
+          {bkAgente && modo !== "gravix" && (
             <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 ${conectado ? "border-emerald-800 bg-emerald-950/30" : "border-amber-900 bg-amber-950/20"}`} role="status">
               <span className={`h-2.5 w-2.5 rounded-full ${conectado ? "latido bg-emerald-400" : "latido bg-amber-400"}`} />
               <span className="min-w-[220px] flex-1 text-sm">
@@ -271,7 +309,20 @@ remoteConfig: true`;
             <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold">Plantilla: {pl.t}</span>
             {pl.items.map((it) => <span key={it} className="rounded-full bg-slate-900 px-2.5 py-1 text-xs text-slate-400">{it}</span>)}
           </div>
-          {bkAgente ? <Descubrir bk={bkAgente} remoto={!!infoAgente?.hasConfig} /> : <p className="text-sm text-slate-400">La sede no tiene agente.</p>}
+          {modo === "gravix" ? (
+            <div className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+              <p>Esta sede tiene su propio Gravix: los equipos se buscan y se agregan en <b className="text-slate-100">su web local</b>, que lee la red de la sede. El centro los muestra solo en la próxima consulta (15 s).</p>
+              {(() => {
+                try {
+                  const u = new URL(gxUrl.trim());
+                  const web = `${u.protocol}//${u.hostname}:5173`;
+                  return <p>Web local de la sede: normalmente <a className="mono text-sky-300 underline" href={web} target="_blank" rel="noreferrer">{web}</a> (usuario admin; la clave está en ADMIN_PASSWORD de su .env).</p>;
+                } catch {
+                  return null;
+                }
+              })()}
+            </div>
+          ) : bkAgente ? <Descubrir bk={bkAgente} remoto={!!infoAgente?.hasConfig} /> : <p className="text-sm text-slate-400">La sede no tiene agente.</p>}
         </div>
       )}
 
@@ -319,10 +370,22 @@ export function EditarSede({ sede, fila, nueva, grupos, grupoActual, agentesEnUs
   const [agentes, setAgentes] = useState((fila?.agentes ?? []).join(", "));
   const [confirmar, setConfirmar] = useState(confirmarInicial);
   const [msg, setMsg] = useState<string | null>(null);
+  const esGravix = fila?.origen === "gravix";
+  const [url, setUrl] = useState(fila?.url ?? "");
+  const [claveNueva, setClaveNueva] = useState("");
+  const [fuenteAlarmas, setFuenteAlarmas] = useState<FuenteAlarmas>(fila?.alarmasFuente ?? "api-siasa");
   if (!sede) return null;
 
   function guardarCambios() {
     setMsg(null);
+    if (esGravix) {
+      const nLatG = lat.trim() === "" ? null : Number(lat), nLonG = lon.trim() === "" ? null : Number(lon);
+      guardar.mutate(
+        { id: sede!.id, nombre: nombre.trim(), origen: "gravix", grupoId, agentes: fila!.agentes, lat: nLatG, lon: nLonG, plantilla: fila?.plantilla ?? null, url: url.trim(), alarmasFuente: fuenteAlarmas, ...(claveNueva.trim() ? { apiKey: claveNueva.trim() } : {}) },
+        { onSuccess: onCerrar, onError: (e) => setMsg(extractErrorMessage(e, "No se pudo guardar")) },
+      );
+      return;
+    }
     const lista = agentes.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
     const ajeno = lista.find((a) => agentesEnUso[a] && agentesEnUso[a] !== sede!.id);
     if (nueva && ajeno) return setMsg(`El agente ${ajeno} ya lee la sede ${agentesEnUso[ajeno]}.`);
@@ -339,14 +402,14 @@ export function EditarSede({ sede, fila, nueva, grupos, grupoActual, agentesEnUs
   return (
     <Modal
       titulo={nueva ? `Editar sede · ${sede.nombre}` : `Fase de ${sede.nombre}`}
-      sub={nueva ? "Sede leída por Agentes Go" : "Sede del monitoreo central: aquí solo se elige su fase"}
+      sub={esGravix ? "Sede con su propio Gravix (VM local): el centro la consulta" : nueva ? "Sede leída por Agentes Go" : "Sede del monitoreo central: aquí solo se elige su fase"}
       ancho={720}
       onCerrar={onCerrar}
       pie={
         <>
           {nueva ? (
             confirmar ? (
-              <span className="flex flex-wrap items-center gap-2 text-sm text-rose-200">¿Quitar «{sede.nombre}» del centro de mando? Sale del árbol y del mapa; el agente, sus equipos y su historial no se borran.
+              <span className="flex flex-wrap items-center gap-2 text-sm text-rose-200">¿Quitar «{sede.nombre}» del centro de mando? Sale del árbol y del mapa; {esGravix ? "el Gravix de la sede sigue funcionando y no se borra nada allá." : "el agente, sus equipos y su historial no se borran."}
                 <button type="button" onClick={() => borrar.mutate(sede.id, { onSuccess: onBorrada, onError: (e) => setMsg(extractErrorMessage(e, "No se pudo quitar")) })} className="min-h-[36px] rounded-lg bg-rose-700 px-3 text-xs font-bold text-white">Sí, quitar</button>
                 <button type="button" onClick={() => setConfirmar(false)} className="min-h-[36px] rounded-lg border border-slate-700 px-3 text-xs text-slate-300">No</button>
               </span>
@@ -368,7 +431,38 @@ export function EditarSede({ sede, fila, nueva, grupos, grupoActual, agentesEnUs
               <label className={etiqueta}>Latitud<input className={`${campo} mono`} value={lat} onChange={(e) => setLat(e.target.value)} inputMode="decimal" /></label>
               <label className={etiqueta}>Longitud<input className={`${campo} mono`} value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" /></label>
             </div>
-            <label className={etiqueta}>Agentes Go de la sede (códigos separados por coma)<input className={`${campo} mono`} value={agentes} onChange={(e) => setAgentes(e.target.value)} /></label>
+            {esGravix ? (
+              <>
+                <label className={etiqueta}>Dirección del Gravix de la sede<input className={`${campo} mono`} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://10.20.5.10:3010" /></label>
+                <label className={etiqueta}>Clave de consulta (CENTRO_API_KEY)
+                  <input className={`${campo} mono`} type="password" autoComplete="off" value={claveNueva} onChange={(e) => setClaveNueva(e.target.value)} placeholder={fila?.claveFinal ? `Guardada: ••••${fila.claveFinal}. Déjela vacía para conservarla` : "Pegue la clave de la sede"} />
+                </label>
+                <p className="text-xs text-slate-500">Agentes de la sede (los informa la propia sede): <span className="mono text-slate-300">{fila?.agentes.join(", ") || "ninguno"}</span></p>
+                <fieldset className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
+                  <legend className="px-1 text-xs font-semibold text-slate-300">Alarmas y correos de la sede: ¿de dónde los lee el Centro de mando?</legend>
+                  {([
+                    ["api-siasa", "api-SIASA de la sede (actual)", "La que envía hoy los correos de alarma, con los datos del AS-P / EBO."],
+                    ["gravix", "Gravix de la sede", "Motor de alarmas de Gravix, con las mismas reglas, leyendo directo cada medidor. Deja de leer las alarmas de api-SIASA."],
+                  ] as const).map(([k, t, d]) => (
+                    <label key={k} className={`flex cursor-pointer gap-2.5 rounded-lg border p-2.5 ${fuenteAlarmas === k ? "border-sky-600 bg-sky-950/40" : "border-slate-800 hover:border-slate-600"}`}>
+                      <input type="radio" name="fuente-alarmas" checked={fuenteAlarmas === k} onChange={() => setFuenteAlarmas(k)} className="mt-1" />
+                      <span className="text-sm"><b className="text-slate-100">{t}</b><span className="block text-xs text-slate-400">{d}</span></span>
+                    </label>
+                  ))}
+                  {fila?.estado?.alarmas && (
+                    <p className="text-xs text-slate-400">
+                      Motor de Gravix: <b className="text-slate-200">{fila.estado.alarmas.motor}</b> · {fila.estado.alarmas.abiertos} alarma(s) abierta(s) · correo:{" "}
+                      <b className={fila.estado.alarmas.correoActivo ? "text-emerald-300" : "text-amber-200"}>{fila.estado.alarmas.correoActivo ? "envía" : "no envía (modo paralelo)"}</b>
+                    </p>
+                  )}
+                  <p className="text-[11px] leading-snug text-slate-500">
+                    Esta opción solo cambia lo que <b>muestra</b> el Centro de mando. Quién <b>envía</b> los correos se decide en cada sistema: hoy los envía api-SIASA; Gravix los prepara sin enviarlos (ALERTAS_CORREO_ACTIVO=false en el .env de la sede) para no duplicarlos.
+                  </p>
+                </fieldset>
+              </>
+            ) : (
+              <label className={etiqueta}>Agentes Go de la sede (códigos separados por coma)<input className={`${campo} mono`} value={agentes} onChange={(e) => setAgentes(e.target.value)} /></label>
+            )}
           </>
         )}
       </div>

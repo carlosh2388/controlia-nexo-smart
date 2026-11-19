@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { readFileSync } from "fs";
 import { PrismaService } from "../prisma/prisma.service";
 import { AccessService, type Access } from "../access/access.service";
+import { GravixService } from "../red/gravix.service";
 
 /**
  * Centro de mando dentro de Nodivo. NO reemplaza ni modifica el monitoreo central (10.30.10.27) ni
@@ -38,6 +39,7 @@ export class CentroService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly gravix: GravixService,
     config: ConfigService,
   ) {
     this.url = (config.get<string>("CENTRAL_URL") || "").replace(/\/$/, "");
@@ -126,12 +128,23 @@ export class CentroService implements OnModuleInit, OnModuleDestroy {
     if (!AccessService.seesSite(access, sede)) throw new ForbiddenException("No tiene acceso a esta sede");
   }
 
-  /** Alarmas de un equipo con la hora de sus correos (apertura y cierre), desde la base de la sede. */
+  /**
+   * Alarmas de un equipo con la hora de sus correos (apertura y cierre), desde la base de la sede.
+   * La fuente se elige por sede en el Centro de mando (red_sedes.alarmasFuente): "api-siasa" (la que
+   * envia los correos hoy) o "gravix" (el motor de alarmas del Gravix de sede, mismas columnas).
+   */
   async eventos(access: Access, sede: string, dispositivo: string, dias: number) {
     this.ver(access, sede);
-    const s = this.sedeCfg(sede);
     const desde = new Date(Date.now() - dias * 86_400_000).toISOString();
     const q = `dispositivo=${encodeURIComponent(dispositivo)}&desde=${encodeURIComponent(desde)}&limite=500`;
+    const fila = await this.prisma.redSede.findUnique({ where: { id: sede }, select: { origen: true, alarmasFuente: true } });
+    if (fila?.origen === "gravix" && fila.alarmasFuente === "gravix") {
+      const r = await this.gravix.reenviar(sede, `/api/v1/sede/eventos?${q}`);
+      if (r.status !== 200) throw new ServiceUnavailableException(`El Gravix de la sede ${sede} no respondio (HTTP ${r.status})`);
+      const body = JSON.parse(r.body.toString("utf8")) as { eventos?: unknown[]; origen?: string };
+      return { sede, dispositivo, dias, origen: body.origen ?? "gravix", eventos: body.eventos ?? [] };
+    }
+    const s = this.sedeCfg(sede);
     try {
       const r = await fetch(`http://${s.ip}:${s.puerto}/api/ebo/modbus-auto/eventos?${q}`, { headers: { "x-api-key": s.key }, signal: AbortSignal.timeout(10_000) });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);

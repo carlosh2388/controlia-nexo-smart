@@ -6,11 +6,12 @@ import { TimeseriesService } from "./timeseries.service";
 import { PilotService } from "./pilot.service";
 import { PilotController } from "./pilot.controller";
 import { QualityService } from "./quality.service";
+import { InfluxWriterService } from "./influx-writer.service";
 
 @Module({
   imports: [AuthModule, AgentsModule],
   controllers: [PilotController],
-  providers: [GapDetectorService, TimeseriesService, PilotService, QualityService],
-  exports: [TimeseriesService],
+  providers: [GapDetectorService, TimeseriesService, PilotService, QualityService, InfluxWriterService],
+  exports: [TimeseriesService, InfluxWriterService],
 })
 export class TimeseriesModule {}

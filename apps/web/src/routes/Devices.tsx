@@ -65,6 +65,9 @@ const TAB_TO_VIEW: Record<string, View> = {
   usuarios: "usuarios",
 };
 
+const MODO_SEDE = import.meta.env.VITE_GRAVIX_MODO === "sede";
+const VISTAS_SEDE = new Set<View>(["equipos", "gravix", "usuarios"]);
+
 function ActionButton({
   onClick,
   title,
@@ -337,8 +340,12 @@ export default function Devices() {
   const { toasts, push } = useToasts();
   // Menu por perfil: pestañas que el perfil puede ver y la pantalla con la que abre (Centro de mando).
   const access = useAccess();
-  const allowed = useMemo(() => new Set((access.data?.tabs ?? []).map((t) => TAB_TO_VIEW[t]).filter(Boolean)), [access.data]);
-  const homeView: View = TAB_TO_VIEW[access.data?.homeTab ?? "centro"] ?? "centro";
+  // Gravix de sede (VITE_GRAVIX_MODO=sede): solo las pestañas de la sede; el Centro de mando vive en el central.
+  const allowed = useMemo(
+    () => new Set((access.data?.tabs ?? []).map((t) => TAB_TO_VIEW[t]).filter((v) => v && (!MODO_SEDE || VISTAS_SEDE.has(v)))),
+    [access.data],
+  );
+  const homeView: View = MODO_SEDE ? "gravix" : TAB_TO_VIEW[access.data?.homeTab ?? "centro"] ?? "centro";
   const view: View = viewSel && allowed.has(viewSel) ? viewSel : homeView;
 
   useDeviceSocket();

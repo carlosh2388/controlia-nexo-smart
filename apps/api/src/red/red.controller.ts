@@ -4,7 +4,7 @@ import { AuthGuard } from "../auth/guards/auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { RedService } from "./red.service";
-import { GrupoDto, SedeDto } from "./dto/red.dto";
+import { GrupoDto, ProbarGravixDto, SedeDto } from "./dto/red.dto";
 
 const HUMANS = [Role.admin, Role.operator, Role.viewer];
 
@@ -54,6 +54,14 @@ export class RedController {
   @Delete("sedes/:id")
   borrarSede(@Param("id") id: string) {
     return this.red.borrarSede(id);
+  }
+
+  /** Prueba la conexion con un Gravix de sede (direccion + clave de consulta) antes de guardarlo. */
+  @Version("1")
+  @Roles(Role.admin)
+  @Post("gravix/probar")
+  probarGravix(@Body() dto: ProbarGravixDto) {
+    return this.red.probarGravix(dto);
   }
 
   /** Respuesta de la sede en el formato v1 de Telemetria 1 (devices con su ficha y metricas). */

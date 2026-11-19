@@ -1,0 +1,154 @@
+# Gravix de sede: Agente Go + Gravix (API, TimescaleDB, web local) en la VM Linux de cada sede.
+# Ver docs/gravix-sede.md. Todos los valores salen del .env (generado con ./generar-env.sh).
+#
+#   docker compose -p gravix-sede up -d --build
+#
+# Las imagenes se construyen desde este repositorio (contexto ../..). En produccion se descargan
+# del registro central con la version GRAVIX_VERSION.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+
+services:
+  db:
+    build: ../../docker/postgres
+    image: siasa-postgres-timescale:16.15-2.31.0
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gravix
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD}
+      POSTGRES_DB: gravix
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gravix -d gravix"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    logging: *logging
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ../../mosquitto/config:/mosquitto/config:ro
+    logging: *logging
+
+  gravix:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    image: gravix-sede-api:${GRAVIX_VERSION:-dev}
+    restart: unless-stopped
+    # Alarmas y correos (ALERTA_*, ALERTAS_*, SMTP_*, MEDIDORES_GENERADOR...) salen del .env tal cual.
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      GRAVIX_MODO: sede
+      GRAVIX_VERSION: ${GRAVIX_VERSION:-dev}
+      SEDE_CODIGO: ${SEDE_CODIGO:?falta SEDE_CODIGO}
+      SEDE_NOMBRE: ${SEDE_NOMBRE:-}
+      SEDE_WEB_PORT: ${WEB_PORT:-5173}
+      SEDE_AGENT_KEY: ${AGENT_API_KEY:?falta AGENT_API_KEY}
+      SEDE_CENTRO_KEY: ${CENTRO_API_KEY:?falta CENTRO_API_KEY}
+      SEED_ADMIN_USERNAME: admin
+      SEED_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?falta ADMIN_PASSWORD}
+      DATABASE_URL: postgresql://gravix:${DB_PASSWORD}@db:5432/gravix?schema=public
+      REDIS_URL: redis://redis:6379
+      MQTT_URL: mqtt://mosquitto:1883
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?falta JWT_ACCESS_SECRET}
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?falta JWT_REFRESH_SECRET}
+      JWT_REFRESH_EXPIRES_IN: 7d
+      LOG_LEVEL: warn
+      API_PORT: 3000
+      CORS_ORIGIN: "*"
+      TZ: America/Guatemala
+      # Copia de cada lectura en el InfluxDB de la sede, al mismo tiempo que TimescaleDB.
+      INFLUX_URL: ${INFLUX_URL:-http://influxdb:8086}
+      INFLUX_TOKEN: ${INFLUX_TOKEN:-}
+      INFLUX_ORG: ${INFLUX_ORG:-}
+      INFLUX_BUCKET: ${INFLUX_BUCKET:-}
+    ports:
+      - "${API_PORT:-3010}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mosquitto:
+        condition: service_started
+      influxdb:
+        condition: service_started
+    logging: *logging
+
+  # InfluxDB propio de la sede: copia de las lecturas para tableros (Grafana, etc.). La web de
+  # InfluxDB queda en INFLUX_PORT con el usuario admin y la clave INFLUX_ADMIN_PASSWORD del .env.
+  influxdb:
+    image: influxdb:2.8
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:?falta INFLUX_ADMIN_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:?falta INFLUX_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:?falta INFLUX_BUCKET}
+      DOCKER_INFLUXDB_INIT_RETENTION: ${INFLUX_RETENTION:-0}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:?falta INFLUX_TOKEN}
+      TZ: America/Guatemala
+    volumes:
+      - influx_data:/var/lib/influxdb2
+      - influx_config:/etc/influxdb2
+    ports:
+      - "${INFLUX_PORT:-8086}:8086"
+    logging: *logging
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: /api/v1
+        VITE_WS_URL: /ws
+        VITE_GRAVIX_MODO: sede
+    image: gravix-sede-web:${GRAVIX_VERSION:-dev}
+    restart: unless-stopped
+    volumes:
+      - ./nginx-sede.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    depends_on:
+      - gravix
+    logging: *logging
+
+  agente:
+    build: ../../apps/Agente_Go
+    image: gravix-sede-agente:${GRAVIX_VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      AGENT_BUILDING_KEY: ${AGENT_BUILDING_KEY:?falta AGENT_BUILDING_KEY}
+      AGENT_API_KEY: ${AGENT_API_KEY}
+      AGENT_API_URL: http://gravix:3000/api/v1
+      AGENT_SYNC_SECONDS: ${AGENT_SYNC_SECONDS:-30}
+      AGENT_EVENTS: ${AGENT_EVENTS:-false}
+      TZ: America/Guatemala
+    volumes:
+      - agente_data:/data
+    depends_on:
+      - gravix
+    logging: *logging
+
+volumes:
+  db_data:
+  agente_data:
+  influx_data:
+  influx_config:

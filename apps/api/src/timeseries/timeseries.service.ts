@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { GapDetectorService } from "./gap-detector.service";
+import { InfluxWriterService } from "./influx-writer.service";
 
 interface SnapshotItem {
   protocol: string;
@@ -34,6 +35,7 @@ export class TimeseriesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly gaps: GapDetectorService,
+    private readonly influx: InfluxWriterService,
   ) {}
 
   agentSeen(buildingKey: string, at: Date) {
@@ -58,11 +60,10 @@ export class TimeseriesService {
     if (!duplicate) {
       const time = readAt ?? at;
       try {
-        await this.prisma.reading.createMany({
-          data: values.map(([metric, value]) => ({ time, deviceId, metric, value })),
-          skipDuplicates: true,
-        });
+        const data = values.map(([metric, value]) => ({ time, deviceId, metric, value }));
+        await this.prisma.reading.createMany({ data, skipDuplicates: true });
         this.last.set(deviceId, { key, at: at.getTime() });
+        void this.influx.enqueue(data);
       } catch (err) {
         this.logger.warn(`No se pudo guardar el historial de ${deviceId}: ${(err as Error).message}`);
         return;
@@ -92,6 +93,7 @@ export class TimeseriesService {
     if (!rows.length || from == null || to == null) return 0;
     try {
       const res = await this.prisma.reading.createMany({ data: rows, skipDuplicates: true });
+      void this.influx.enqueue(rows);
       await this.gaps.reconcile(deviceId, new Date(from), new Date(to));
       return res.count;
     } catch (err) {
@@ -111,8 +113,10 @@ export class TimeseriesService {
     if (!harm.values.length || Number.isNaN(time.getTime()) || diff < -60_000 || diff > maxAgeMs) return;
     if (this.lastHarm.get(deviceId) === time.getTime()) return;
     try {
-      await this.prisma.reading.createMany({ data: harm.values.map(([metric, value]) => ({ time, deviceId, metric, value })), skipDuplicates: true });
+      const data = harm.values.map(([metric, value]) => ({ time, deviceId, metric, value }));
+      await this.prisma.reading.createMany({ data, skipDuplicates: true });
       this.lastHarm.set(deviceId, time.getTime());
+      void this.influx.enqueue(data);
     } catch (err) {
       this.logger.warn(`No se pudo guardar el espectro de armonicos de ${deviceId}: ${(err as Error).message}`);
     }

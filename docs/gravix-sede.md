@@ -1,6 +1,9 @@
 # Gravix de sede: diseño para producción
 
-Estado: **propuesta, 18/11/2026**. Todavía no se ha programado nada de este documento.
+Estado al **19/11/2026**: **fases 1 y 2 construidas y funcionando** en 192.168.70.4.
+- El Docker de prueba `gravix-sede-prueba` hace de sede (ver [§13](#13-docker-de-prueba-en-1921687004)).
+- El Centro de mando ya lo consulta como la sede "Escuintla · Gravix de sede (prueba)".
+- Las fases 3 (instalador) y 4 (operación) siguen pendientes.
 
 ## 1. Idea
 
@@ -88,16 +91,34 @@ Hay un único `docker-compose.yml` en `/opt/gravix-sede/` con estos servicios:
 | `db` | `siasa-postgres-timescale:16.15-2.31.0` (la misma de pruebas) | Historial, huecos, configuración del agente | Solo interno |
 | `gravix` | Imagen de la API actual con `GRAVIX_MODO=sede` | Recibe al agente, guarda, detecta huecos, normas, alarmas, API para el centro | `3010` |
 | `web` | Imagen web actual en modo sede | Equipos, ficha, búsqueda, historial y Piloto de esa sede | `5173` |
-| `agente` | Imagen nueva `agente-go` | Lee los medidores con `remoteConfig: true` contra `http://localhost:3010` | Ninguno |
+| `agente` | `gravix-sede-agente` (Alpine, 16 MB) | Lee los medidores con `remoteConfig: true` contra `http://gravix:3000` | Ninguno |
 | `redis` | `redis:7` | Lo pide hoy la API (BullMQ). Se puede quitar después en modo sede | Solo interno |
+| `mosquitto` | `eclipse-mosquitto:2` | Lo pide hoy el adaptador MQTT de la API. Se puede quitar después | Solo interno |
 
 Detalles:
 
-- **El agente usa `network_mode: host`.** Así llega a la LAN de los medidores igual que un programa
-  instalado en la VM, y la búsqueda de equipos funciona en toda la red de la sede.
-- **El backlog del agente** (`data/`) y la base de datos van en **volúmenes de Docker**. Sobreviven a
+- **El agente va en la red interna de Docker.** La lectura Modbus TCP y la búsqueda de equipos salen
+  a la LAN de la sede por la VM. Solo si una sede necesita BACnet por broadcast o recibir gateways
+  LoRa (UDP 1700), ese contenedor se cambia a `network_mode: host`.
+- **El `config.yaml` del agente se arma solo** al arrancar el contenedor, a partir del `.env`
+  (`docker-entrypoint.sh`). Lleva lo básico; los equipos vienen de la configuración remota.
+- **nginx de la web local** resuelve `gravix` con el DNS interno de Docker en cada consulta
+  (`resolver 127.0.0.11`). Sin eso, después de actualizar o recrear el contenedor de Gravix, la web
+  daba 502 hasta reiniciarla (encontrado y corregido el 19/11).
+- **El backlog del agente** (`/data`) y la base de datos van en **volúmenes de Docker**. Sobreviven a
   reinicios y actualizaciones.
-- **Mosquitto no hace falta** en la sede mientras no haya equipos MQTT o LoRaWAN. Se agrega si una sede lo necesita.
+- **La web local** usa rutas relativas (`/api/v1`, `/ws`) y nginx las pasa a la API, así **la misma
+  imagen sirve para cualquier sede**. En modo sede solo muestra Equipos, Piloto Gravix y Usuarios.
+- **Rotación de logs** de 50 MB × 10 en todos los servicios, la misma que se aplicó en Escuintla tras el incidente del 14/10.
+- **Cada sede tiene su propio InfluxDB 2.8** (servicio `influxdb` del compose; decisión del 19/11).
+  `generar-env.sh` crea su clave de admin y su token. Cada lectura que se guarda en TimescaleDB se
+  envía **al mismo tiempo** a ese InfluxDB (`timeseries/influx-writer.service.ts`).
+  - **TimescaleDB sigue siendo la base principal.** Los huecos, las normas, la comparación y la
+    recuperación salen de ahí. InfluxDB es una copia para tableros como Grafana.
+  - **Formato:** measurement `lectura`, tags `sede`, `agente`, `equipo` y `device_id`, un field por métrica y hora de lectura en ms.
+  - **Si InfluxDB se cae**, Gravix guarda en memoria hasta 200 000 líneas y reintenta cada 5 s. Nunca
+    frena el guardado en TimescaleDB.
+  - **Estado:** `/sede/salud` → `bases.influx` muestra las líneas escritas, el último envío correcto, el error y las pendientes.
 - **Respaldo:** cada noche se guarda un `pg_dump` en `/opt/gravix-sede/respaldos/` y se conservan 7 días.
 
 Tamaño sugerido de la VM: **2 vCPU, 4 GB de RAM y 100 GB de disco**. Hay que confirmarlo midiendo cuánto
@@ -119,37 +140,68 @@ No se escribe un Gravix nuevo. **Se reutiliza el código que ya funciona en prue
 | `sede` (**nuevo**: la API que consulta el centro) | — | ✅ |
 | `centro` (monitoreo central + **colector de sedes Gravix**) | ✅ | — |
 | `red` (grupos, sedes, instalador) | ✅ | — |
-| `adapters` (TEC 3: BACnet, eWeLink, HA), `automations`, `areas` | ✅ | — |
+| `ewelink`, `bacnet` (TEC 3), `automations`, `areas` | ✅ | — |
+| `adapters` (los usa `devices`; sin LoRaWAN si no hay `LORAWAN_MQTT_URL`) | ✅ | ✅ |
 
 ### API de la sede (lo que consulta el Centro de mando)
 
-Ruta base `http://<IP de la sede>:3010/api/v1/sede`. Usa una API key de solo lectura con el rol nuevo
-`centro`, que el instalador crea.
+Ruta base `http://<IP de la sede>:3010/api/v1`. Usa la **clave del centro** (`x-api-key`) con rol
+`viewer`: solo lectura y sin acceso a escribir nada. La API la registra sola al arrancar desde
+`CENTRO_API_KEY` del `.env`, igual que la clave del agente (`AGENT_API_KEY`, rol `agent`).
 
-| Método y ruta | Devuelve | Hoy existe como |
+| Método y ruta | Devuelve | Estado |
 | --- | --- | --- |
-| `GET /telemetria` | Formato v1 de Telemetría 1: `devices[]` con ficha y `metrics` | `GET /red/sedes/:id/telemetria` |
-| `GET /vista` | Resumen por equipo (estado, kW, V, A) con el mismo formato de cada sede en `/api/vista` | Nuevo (se arma con los mismos datos) |
-| `GET /eventos?dispositivo=&dias=` | Alarmas con apertura y cierre | `GET /sites/:buildingKey/events` |
-| `GET /historial?device=&metric=&desde=&hasta=` | Serie de una métrica | `GET /pilot/devices/:id/series` |
-| `GET /huecos?device=` | Huecos con su causa y estado | `GET /pilot/devices/:id/gaps` |
-| `GET /salud` | Versión de Gravix y del agente, última lectura, huecos abiertos, disco libre | Nuevo |
+| `GET /sede/salud` | Sede, versión del paquete, agentes (versión de config aplicada, último sync), equipos, última lectura, huecos abiertos, disco | **Construido** |
+| `GET /sede/vista` | Resumen por equipo (estado, kW, V prom., A prom.) con la forma de cada sede en `/api/vista` | **Construido** |
+| `GET /sede/telemetria` | Formato v1 de Telemetría 1: `devices[]` con ficha y `metrics` | **Construido** (mismo código que `/red/sedes/:id/telemetria`, ahora en `red/telemetria.ts`) |
+| `GET /pilot/:buildingKey/devices` | Equipos con su pareja directo/EBO | Ya existía, se usa tal cual |
+| `GET /pilot/devices/:id/series` · `/gaps` · `/compare` · `/espectro` · `/excel` | Historial, huecos, comparación, armónicos, Excel | Ya existía, se usa tal cual |
+| `GET /sites/:buildingKey/events` | Alarmas de la sede | Ya existía, se usa tal cual |
 
 El historial **se queda en la sede**, como pasaba con los trends del AS-P. El Centro de mando lo pide
 cuando alguien abre una gráfica, y guarda su foto de un minuto en `centro_lecturas` como ya hace hoy.
 
-## 6. Qué cambia en el Centro de mando
+## 6. Qué cambia en el Centro de mando (fase 2, construida el 19/11)
 
-1. **`red_sedes` incorpora el origen `gravix`.** Los campos nuevos son `url` (por ejemplo `http://10.20.5.10:3010`),
-   la API key cifrada, la versión instalada y el último contacto. Hoy existen `central` (Telemetría 1) y
-   `nodivo` (agentes en el servidor de pruebas).
-2. **Colector de sedes Gravix.** Cada 15 s consulta `GET /sede/vista` de cada sede `gravix`, con el mismo
-   ritmo que la vista central. Mezcla el resultado con la vista de 10.30.10.27, así el mapa, los totales
-   y la actividad muestran las 10 sedes de Telemetría 1 y las sedes nuevas juntas.
-3. **Sede sin respuesta:** se marca como en Telemetría 1 (`sin_respuesta`). La sede no pierde datos,
-   porque su Gravix sigue guardando.
-4. **Gráficas, alarmas y JSON v1** de una sede Gravix se piden a esa sede, a través del Centro de mando.
-5. **Botón "Abrir Gravix de la sede"** que lleva a la web local, para agregar equipos y editar la ficha.
+1. **`red_sedes` incorpora el origen `gravix`.** Se agregaron dos columnas en la migración
+   `20261119180000_red_sedes_gravix`:
+   - `url`: la API de la sede, por ejemplo `http://10.20.5.10:3010`.
+   - `apiKeyEnc`: la clave de consulta **cifrada con AES-256-GCM**. La llave sale de
+     `GRAVIX_KEYS_SECRET` o, si no existe, de `JWT_ACCESS_SECRET`.
+
+   `GET /red` nunca devuelve la clave: solo `claveFinal` (los últimos 4 caracteres) y `estado`.
+2. **Registro con prueba.** `POST /red/gravix/probar` (admin) llama a `/sede/salud` y da errores
+   claros en estos casos:
+   - no conecta;
+   - clave rechazada (401);
+   - clave del agente en vez de la de consulta (403);
+   - la dirección es de otra cosa, por ejemplo el puerto de la web.
+
+   Al guardar (`PUT /red/sedes/:id` con `origen: "gravix"`) se vuelve a probar, y **los agentes de
+   la sede los informa la propia sede**.
+3. **Colector** (`red/gravix.service.ts`).
+   - Cada 15 s consulta `GET /sede/vista` de cada sede Gravix, y `GET /sede/salud` cada minuto.
+   - Con eso guarda el estado de la sede: `ok`, error, último contacto, versión, latencia, equipos,
+     InfluxDB y puerto de la web.
+   - También aprende qué equipos tiene cada sede.
+   - Cada minuto guarda kW, V y A en `centro_lecturas`, igual que con Telemetría 1.
+4. **Paso automático de consultas** (`red/gravix-proxy.interceptor.ts`).
+   - Las consultas GET a `/pilot/devices/:id/...`, `/pilot/:agente/devices|cumplimiento` y
+     `/sites/:agente/events` de un equipo o agente de una sede Gravix **se piden a esa sede** con su
+     clave: historial, huecos, comparación, armónicos, Excel, pronóstico, umbrales y alarmas.
+   - Así la ventana del equipo y las demás pantallas funcionan sin cambios.
+   - Los cambios (PUT/POST) a un equipo de una sede Gravix responden 409 con la dirección de su web local.
+5. **JSON v1:** `GET /red/sedes/:id/telemetria` de una sede Gravix lo arma la propia sede.
+6. **En la web.**
+   - El asistente "Nueva sede" tiene la opción **"La sede tiene su Gravix"**: se escriben la dirección y
+     la clave, se prueba la conexión y se guarda.
+   - La sede aparece en el árbol y en el mapa como las sedes leídas por Agentes Go, con "Gravix de sede
+     vX · dirección".
+   - **"Sin respuesta"** se marca cuando el central no la alcanza. La sede no pierde datos, porque su
+     Gravix sigue guardando.
+   - El botón **"Abrir Gravix de la sede ↗"** lleva a su web local, donde se buscan y agregan equipos y se
+     edita la ficha.
+   - En "Editar sede" se puede cambiar la dirección o pegar una clave nueva.
 
 ## 7. Instalar una sede nueva (paso a paso)
 
@@ -209,6 +261,71 @@ Requisitos de red de la sede:
 Si una VM no llega al registro central, hay una **alternativa sin red**. El instalador va con las imágenes
 en un archivo (`docker save`) que se copia una sola vez con la VM.
 
+## 7b. Alarmas y correos (construido el 19/11, en paralelo con api-SIASA)
+
+Hoy los correos de alarma los envía la **api-SIASA de cada sede**, con los datos del AS-P
+(`monitoreo/eventos_modbus.js`). Gravix tiene **el mismo motor**, para poder reemplazarla
+(`apps/api/src/alarmas/`). Solo corre en el Gravix de sede.
+
+**Qué es igual a api-SIASA:**
+- Los eventos, con el mismo nombre, severidad y tiempos de confirmación:
+  `MEDIDOR_FUERA_DE_LINEA` (3 min), `MEDIDOR_EN_CERO` (3 min), `MEDIDOR_SIN_CAMBIO` (15 min),
+  "fuera de línea por valores repetidos" (5 min), `MEDIDOR_SIN_TRANSFERENCIA`,
+  `MEDIDOR_VIGILANTES_DESCONECTADOS` y `MEDIDOR_ION_DESCONECTADO` (60 s), `GENERADOR_EN_MARCHA` y `DATOS_CONGELADOS` (5 min).
+- Solo se vigilan los ION7400 y PM2130, igual que api-SIASA (`ion_7400_*`, `pm_2130_*`).
+- **Correo:**
+  - el mismo asunto (`[CRÍTICO] SIASA <sede> - <inventario> <equipo> - <título>`);
+  - el mismo HTML (copia de `plantilla_correo.js`);
+  - un solo correo cuando 3 o más medidores fallan a la vez;
+  - advertencias agrupadas cada 15 min, recordatorios, resumen diario y máximo de correos por hora.
+- **Variables:** las mismas en el `.env` de la sede (`ALERTA_*`, `ALERTAS_*`, `SMTP_*`, `MEDIDORES_GENERADOR`,
+  `EVENTOS_RETENCION_MESES`), con los mismos valores que Escuintla.
+- **Tabla `alarma_eventos`:** mismas columnas que `api_eventos`. `GET /sede/eventos` responde igual que
+  `/api/ebo/modbus-auto/eventos` y `GET /sede/alarmas/estado` igual que `/estado`.
+- **Al reiniciar** recupera los eventos abiertos y no repite correos de apertura.
+
+**Qué cambia, por cómo lee Gravix:**
+- Los datos vienen del Agente Go, que lee cada medidor directo. `DATOS_CONGELADOS` significa "Gravix no
+  recibe sincronizaciones del agente".
+- Las señales S1/S2 son `s1_commercial_energy_status` y `s2_generator_energy_status`.
+- No existen `LECTURA_ATASCADA`, `RECONEXIONES_FRECUENTES` ni `VIGILANTE_REINICIO`: eran de la
+  conexión Modbus de api-SIASA con el AS-P.
+- Los códigos de evento llevan `G` en el prefijo (`ESCG-…`), para distinguirlos de los de api-SIASA (`ESC-…`).
+- Si la sede todavía no tiene medidores, el estado es `sin_medidores`, no `congelado`.
+
+**Modo paralelo (cómo queda hoy):**
+- `ALERTAS_CORREO_ACTIVO=false` en el `.env` de la sede. Gravix **detecta y guarda** las alarmas y
+  **arma cada correo**, pero **no lo envía**: queda en `alarma_correos` como "preparado", para compararlo
+  con el que envió api-SIASA. Así no se duplican los correos.
+- Para revisarlos: `GET /sede/alarmas/correos`, `GET /sede/alarmas/correos/:id` (HTML) y
+  `GET /sede/alarmas/vista-previa?dispositivo=` (correo de prueba con datos reales, no se envía).
+- `ALARMAS_AGENTES` dice qué agente vigila el motor. En Escuintla será el directo, porque el de EBO
+  tiene los mismos medidores.
+
+**Opción en el Centro de mando:** en *Editar sede*, para las sedes con su propio Gravix, la opción
+**"Alarmas y correos de la sede: ¿de dónde los lee el Centro de mando?"** se guarda en
+`red_sedes.alarmasFuente`:
+- **api-SIASA (actual)**, que es la opción por defecto: alarmas, campana y "hora de los correos" salen de la api-SIASA de la sede.
+- **Gravix:** salen del motor de Gravix y el Centro de mando deja de leer las alarmas de api-SIASA.
+
+Esa opción solo cambia **lo que muestra** el Centro de mando. **Quién envía** se decide en cada sistema.
+
+**Para pasar a Gravix como emisor, en el futuro:**
+1. Comparar unas semanas los correos preparados de Gravix contra los enviados por api-SIASA.
+2. En el `.env` de la sede: `ALERTAS_CORREO_ACTIVO=true`, `SMTP_*` y `ALERTAS_CORREO_PARA`.
+3. Quien administra la api-SIASA de la sede apaga su envío (`ALERTAS_CORREO_ACTIVO=false` en su `.env`).
+4. En el Centro de mando: *Editar sede → Alarmas y correos → Gravix*.
+
+Probado el 19/11 con un simulador de 23 casos:
+- fuera de línea a los 3 min y no antes;
+- correo agrupado con 3 medidores;
+- voltaje en cero;
+- valores repetidos;
+- vigilantes a los 60 s;
+- datos congelados sin disparar los medidores;
+- formato de los eventos;
+- ningún correo enviado.
+
 ## 8. Control de claves desde el Centro de mando
 
 Cada sede tiene sus propias claves y **el inventario completo se lleva en el Centro de mando**:
@@ -216,7 +333,7 @@ Cada sede tiene sus propias claves y **el inventario completo se lleva en el Cen
 | Clave | Para qué | Dónde se usa |
 | --- | --- | --- |
 | Clave del agente (rol `agent`) | El Agente Go envía lecturas a su Gravix | Dentro de la VM |
-| Clave del centro (rol `centro`, solo lectura) | El Centro de mando consulta la sede | Centro de mando → sede |
+| Clave del centro (rol `viewer`, solo lectura) | El Centro de mando consulta la sede | Centro de mando → sede |
 | Código de instalación | Instalar una sola vez; vence en 24 h | Al instalar |
 
 En **Centro de mando → Red → Sedes Gravix** aparece, por sede: cada clave, quién la creó y cuándo,
@@ -252,8 +369,8 @@ muestra junto al estado de la sede.
 
 | Fase | Entregable | Cómo se prueba |
 | --- | --- | --- |
-| **1. Modo sede** | `GRAVIX_MODO`, módulo `sede` con sus 6 rutas, rol `centro`, imagen Docker del agente, `docker-compose` de sede | En una VM Linux de prueba (no en 192.168.70.4), leyendo un simulador Modbus o un medidor de laboratorio |
-| **2. Colector** | Origen `gravix` en `red_sedes`, colector cada 15 s y mezcla con la vista central | El Centro de mando en pruebas muestra la VM de la fase 1 como una sede más |
+| **1. Modo sede** ✅ 19/11 | `GRAVIX_MODO`, módulo `sede`, claves desde el `.env`, imagen Docker del agente, web en modo sede, `deploy/gravix-sede/` | Docker `gravix-sede-prueba` en 192.168.70.4 (proyecto aparte) |
+| **2. Colector** ✅ 19/11 | Origen `gravix`, clave cifrada, colector, paso automático de consultas, opción en "Nueva sede" | Sede `escuintla-gravix-prueba` (Telemetría 2) registrada en el Centro de mando de 192.168.70.4 |
 | **3. Instalador** | Código de un solo uso, línea de instalación, registro Docker en el central, script `gravix-sede` | Instalar desde cero en una VM limpia con un solo comando |
 | **4. Operación** | Respaldo nocturno, `actualizar` con vuelta atrás, pantalla de versiones | Actualizar la VM de prueba de 0.6.0 a 0.6.1 y forzar una falla para ver la vuelta atrás |
 
@@ -275,3 +392,38 @@ es el gateway RS-485 de varios equipos. Si Escuintla pasa a tener su VM, el agen
 - [arquitectura-general.md](./arquitectura-general.md): toda la plataforma.
 - [centro-de-mando.md](./centro-de-mando.md): Centro de mando, permisos y red por fases.
 - [agentes-go-manual.md](./agentes-go-manual.md): operación de los agentes.
+
+## 13. Docker de prueba en 192.168.70.4
+
+Instalado el **19/11/2026**. Hace de "VM de la sede Escuintla" y es un proyecto Docker **aparte**:
+no toca el stack `siasa-iot-platform` (3010/5173).
+
+| Dato | Valor |
+| --- | --- |
+| Carpeta | `/home/api/gravix-sede-prueba/src/` (copia del repo); compose en `deploy/gravix-sede/` |
+| Proyecto Docker | `gravix-sede-prueba` (servicios `db`, `gravix`, `web`, `agente`, `redis`, `mosquitto`) |
+| API de sede | `http://192.168.70.4:3110/api/v1` |
+| Web local | `http://192.168.70.4:5273`, usuario `admin`. La clave está en `ADMIN_PASSWORD` del `.env` |
+| Claves | `deploy/gravix-sede/.env` (permiso 600, fuera de git), generado con `generar-env.sh` |
+| Sede / agente | `SEDE_CODIGO=igss-escuintla`, buildingKey **`gravix-prueba-escuintla`**. Es provisional: si usara `igss-escuintla-directo` antes de mover el agente de verdad, el central le pediría a esta sede vacía los equipos directos de Escuintla |
+| En el Centro de mando | Sede `escuintla-gravix-prueba`, "Escuintla · Gravix de sede (prueba)", grupo Telemetría 2, dirección `http://192.168.70.4:3110` |
+| Versión | `GRAVIX_VERSION=0.1.0` (imágenes `gravix-sede-api`, `gravix-sede-web`, `gravix-sede-agente`) |
+| InfluxDB propio | Servicio `influxdb` del mismo compose, web en `http://192.168.70.4:8186`, usuario `admin`, clave en `INFLUX_ADMIN_PASSWORD` del `.env`, org `igss`, bucket `telemetry`. (El contenedor `influxdb-test` del puerto 8086 es otro, de agosto, y no se usa) |
+| Estado | Agente conectado y config remota v1 subida, **sin fuentes**: todavía no lee medidores, para no leerlos dos veces |
+
+Comandos, dentro de `deploy/gravix-sede/`:
+
+```bash
+docker compose -p gravix-sede-prueba ps
+docker compose -p gravix-sede-prueba logs -f --tail 50 agente
+docker compose -p gravix-sede-prueba build gravix web agente && docker compose -p gravix-sede-prueba up -d
+docker compose -p gravix-sede-prueba down        # detiene la prueba; los datos quedan en los volúmenes
+```
+
+Comprobado el 19/11:
+- `/sede/salud`, `/sede/vista` y `/sede/telemetria` responden con la clave del centro.
+- Sin clave responden 401. Con la clave del agente responden 403.
+- `/red` responde 404, porque en modo sede no existe.
+- La web abre y pasa `/api` por nginx.
+- El admin inicia sesión.
+- El stack actual siguió arriba sin reiniciarse.

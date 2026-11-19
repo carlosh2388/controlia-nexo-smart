@@ -18,7 +18,9 @@ async function seedAdmin() {
     data: { username, passwordHash, role: Role.admin },
   });
 
-  console.log(`Usuario admin creado: ${username} / ${password} (cambiar la contrasena despues del primer login).`);
+  // Si la clave vino del .env (Gravix de sede) no se escribe en el log.
+  const shown = process.env.SEED_ADMIN_PASSWORD ? "(clave del .env)" : password;
+  console.log(`Usuario admin creado: ${username} / ${shown} (cambiar la contrasena despues del primer login).`);
 }
 
 async function seedAreas() {
@@ -111,7 +113,8 @@ async function seedAreas() {
 
 async function main() {
   await seedAdmin();
-  await seedAreas();
+  // El Gravix de sede no usa las areas del edificio TEC 3.
+  if (process.env.GRAVIX_MODO !== "sede") await seedAreas();
 }
 
 main()
