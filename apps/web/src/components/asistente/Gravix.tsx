@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { CentroVista } from "../../api/centro";
-import { interpretar, normalizar, quitarDespertar, SUGERENCIAS, type Accion, type PestanaEquipo, type VistaRed } from "./comandos";
+import { interpretar, MENU, normalizar, quitarDespertar, usaContexto, type Accion, type PestanaEquipo, type VistaRed } from "./comandos";
+import { useAuthStore } from "../../store/auth.store";
 import "./gravix-asistente.css";
 
 /**
- * Gravix: asistente de voz del Centro de mando (fase 1, sin IA).
+ * Gravix: asistente de voz del Centro de mando (sin IA ni licencias: todo corre en el navegador).
  *  - Escucha (reconocimiento de voz del navegador) o lee lo que se escribe, entiende la frase con
  *    comandos.ts y lleva a la pantalla pedida; responde hablando (voces del sistema) y por escrito.
+ *  - Conversa: da la bienvenida, pregunta que desea hacer, pide el dato que falta (que sede, que
+ *    telemetria), recuerda de que se hablaba ("¿y sus alarmas?") y propone los siguientes pasos.
  *  - Avisa con un pitido y en voz alta cuando aparece una alarma critica nueva.
  * Solo lee y navega: no envia comandos a ningun equipo ni cambia configuracion.
  */
@@ -19,7 +22,28 @@ export interface GravixEquipo {
   inventario: string | null;
   estadoTxt: string;
   ok: boolean;
+  kind: "ion" | "pm" | "gen";
+  /** Ultima lectura del monitoreo central o del Agente Go (kW, fuente, voltaje). */
+  central: { estado: string; lectura: { kw: number | null; fuente: "comercial" | "generador" | null; v_prom: number | null } | null } | null;
 }
+
+/** De que se esta hablando y que dato espera Gravix. */
+interface Conversacion {
+  sedeId: string | null;
+  grupoId: string | null;
+  esperando: "sede" | "telemetria" | null;
+}
+
+const saludoHora = () => {
+  const h = new Date().getHours();
+  return h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches";
+};
+/** "chernandez" -> "Chernandez"; "juan.perez@x" -> "Juan". */
+const nombreCorto = (u: string | null | undefined) => {
+  const base = (u ?? "").split(/[@.\s_]/)[0];
+  return base ? base.charAt(0).toUpperCase() + base.slice(1) : "";
+};
+const kw = (v: number) => (v >= 100 ? Math.round(v).toLocaleString("es-GT") : v.toFixed(1));
 export interface GravixAlarma {
   codigo: string;
   titulo: string;
@@ -195,7 +219,11 @@ export default function Gravix(props: Props) {
   const [hablando, setHablando] = useState(false);
   const [prefs, setPrefsState] = useState<Prefs>(leerPrefs);
   const [errorMic, setErrorMic] = useState<string | null>(null);
-  const [globo, setGlobo] = useState<{ texto: string; accion: Accion } | null>(null);
+  const [globo, setGlobo] = useState<{ texto: string; accion?: Accion; bienvenida?: boolean } | null>(null);
+  /** Atajos que se muestran bajo la conversacion; cambian segun el tema. */
+  const [sugerencias, setSugerencias] = useState<string[]>(MENU);
+  const conv = useRef<Conversacion>({ sedeId: null, grupoId: null, esperando: null });
+  const usuario = useAuthStore((s) => s.user?.username);
 
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
@@ -262,11 +290,27 @@ export default function Gravix(props: Props) {
   const agregar = (de: Mensaje["de"], t: string, boton?: Mensaje["boton"]) =>
     setMensajes((m) => [...m.slice(-40), { id: ++idRef.current, de, texto: t, boton }]);
 
-  const decir = (t: string, boton?: Mensaje["boton"]) => {
+  const decir = (t: string, boton?: Mensaje["boton"], atajos?: string[]) => {
     agregar("gravix", t, boton);
     pendienteRef.current = boton?.accion ?? null;
+    if (atajos) setSugerencias(atajos);
     hablar(t);
   };
+
+  /** Atajos de seguimiento segun el tema: una sede, una telemetria o el menu. */
+  const atajosSede = (nombre: string) => [`¿Qué alarmas tiene ${nombre}?`, `¿Cuánto consume ${nombre}?`, `Equipos fuera de línea en ${nombre}`, `Generadores de ${nombre}`, "Volver al mapa"];
+  const atajosGrupo = (nombre: string) => [`¿Qué alarmas hay en ${nombre}?`, `Consumo de ${nombre}`, `Sedes que no responden en ${nombre}`, "Comparar telemetrías", "Menú"];
+
+  /** Potencia actual de un conjunto de equipos: suma de analizadores ION7400 (o PM2130 si no hay ION). */
+  const potencia = (eqs: GravixEquipo[]) => {
+    const conKw = (k: GravixEquipo["kind"]) => eqs.filter((e) => e.kind === k && typeof e.central?.lectura?.kw === "number");
+    const base = conKw("ion").length ? conKw("ion") : conKw("pm");
+    const total = base.reduce((s, e) => s + (e.central!.lectura!.kw as number), 0);
+    const mayor = [...base].sort((a, b) => (b.central!.lectura!.kw as number) - (a.central!.lectura!.kw as number))[0] ?? null;
+    const gens = conKw("gen").filter((e) => (e.central!.lectura!.kw as number) > 0.5);
+    return { total, n: base.length, tipo: base[0]?.kind === "pm" ? "medidores PM2130" : "analizadores ION7400", mayor, genKw: gens.reduce((s, e) => s + (e.central!.lectura!.kw as number), 0) };
+  };
+  const enMarcha = (e: GravixEquipo) => e.kind === "gen" && (e.central?.estado === "generador_en_marcha" || (e.central?.lectura?.kw ?? 0) > 0.5);
 
   /* ---------- respuestas con los datos del Centro de mando ---------- */
   const estadoRed = () => {
@@ -306,7 +350,8 @@ export default function Gravix(props: Props) {
       const ids = new Set(sedes.map((s) => s.id));
       const al = todas.filter((x) => ids.has(x.sedeId));
       const crit = al.filter((x) => x.severidad === "critico").length;
-      let f = `${nombreGrupo(id)}: ${plural(sedes.length, "sede", "sedes")}, ${responden} responden, ${eqs.filter((e) => e.ok).length} de ${eqs.length} medidores en línea, ${plural(crit, "crítica", "críticas")} y ${plural(al.length - crit, "advertencia", "advertencias")}.`;
+      const pot = potencia(eqs);
+      let f = `${nombreGrupo(id)}: ${plural(sedes.length, "sede", "sedes")}, ${responden} responden, ${eqs.filter((e) => e.ok).length} de ${eqs.length} medidores en línea${pot.n ? `, ${kw(pot.total)} kW en este momento` : ""}, ${plural(crit, "crítica", "críticas")} y ${plural(al.length - crit, "advertencia", "advertencias")}.`;
       if (detalle) {
         f += ` Sedes: ${sedes.map((s) => s.nombre).join(", ")}.`;
         const problemas = sedes.filter((s) => s.sin_respuesta || s.nivel !== "ok");
@@ -314,24 +359,117 @@ export default function Gravix(props: Props) {
       }
       return f;
     };
+    // Recordar el tema para las preguntas de seguimiento.
+    if ("sedeId" in a && a.sedeId) conv.current = { sedeId: a.sedeId, grupoId: null, esperando: null };
+    else if (gid) conv.current = { sedeId: null, grupoId: gid, esperando: null };
+    else conv.current = { ...conv.current, esperando: null };
     switch (a.tipo) {
       case "grupo": {
         if (a.grupoId) {
           ejecutar({ tipo: "inicio" });
           const conAlarmas = alarmas.length;
-          return decir(frasaGrupo(a.grupoId, true), conAlarmas ? { label: "Ver sus alarmas", accion: { tipo: "leer_alarmas", sedeId: null, grupoId: a.grupoId } } : undefined);
+          return decir(
+            `${frasaGrupo(a.grupoId, true)} ¿Desea revisar sus alarmas o el consumo?`,
+            conAlarmas ? { label: "Ver sus alarmas", accion: { tipo: "leer_alarmas", sedeId: null, grupoId: a.grupoId } } : undefined,
+            atajosGrupo(nombreGrupo(a.grupoId)),
+          );
         }
         const ids = [...grupos.map((g) => g.id as string | null), ...(vista.sedes.some((s) => !grupoDe(s.id)) ? [null] : [])];
         if (!ids.length) return decir("Todavía no hay telemetrías configuradas.");
-        return decir(`Estado por telemetría. ${ids.map((id) => frasaGrupo(id, false)).join(" ")}`);
+        return decir(`Estado por telemetría. ${ids.map((id) => frasaGrupo(id, false)).join(" ")} ¿Quiere el detalle de alguna?`, undefined, [...grupos.map((g) => `¿Cómo está ${g.nombre}?`), "Menú"]);
       }
       case "saludo": {
-        const e = estadoRed();
-        return decir(`Hola, soy Gravix. ${e.texto.endsWith("?") ? e.texto : `${e.texto} ¿Qué necesita hacer en el Centro de mando?`}`, e.boton);
+        const t = vista.totales;
+        const crit = todas.filter((x) => x.severidad === "critico");
+        const adv = todas.length - crit.length;
+        const nombre = nombreCorto(usuario);
+        let estado: string;
+        if (!todas.length) estado = `La red está en orden: ${t.sedes_responden} de ${t.sedes} sedes responden y no hay alarmas activas.`;
+        else {
+          const porSede = new Map<string, number>();
+          for (const x of crit.length ? crit : todas) porSede.set(x.sedeNombre, (porSede.get(x.sedeNombre) ?? 0) + 1);
+          const peor = [...porSede.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
+          estado = `En este momento hay ${crit.length ? `${plural(crit.length, "alarma crítica", "alarmas críticas")}${adv ? ` y ${plural(adv, "advertencia", "advertencias")}` : ""}` : plural(adv, "advertencia", "advertencias")}${peor ? `, la mayoría en ${peor}` : ""}.`;
+        }
+        return decir(
+          `${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix, su asistente del Centro de mando. ${estado} ¿Qué desea hacer hoy?`,
+          crit.length ? { label: "Ver alarmas críticas", accion: { tipo: "leer_alarmas", sedeId: null } } : undefined,
+          MENU,
+        );
+      }
+      case "menu":
+        return decir(
+          "Puedo revisar las alarmas, darle el estado de cada telemetría, consultar una sede, decirle el consumo de energía de este momento, los generadores en marcha o los equipos fuera de línea. También puedo llevarlo a cualquier pantalla. ¿Qué desea hacer?",
+          undefined,
+          MENU,
+        );
+      case "pedir_sede": {
+        conv.current = { ...conv.current, esperando: "sede" };
+        // Primero las sedes con novedades, para ofrecerlas como atajos.
+        const orden = [...vista.sedes].sort((x, y) => Number(y.sin_respuesta || y.nivel !== "ok") - Number(x.sin_respuesta || x.nivel !== "ok"));
+        const conProblema = orden.filter((s) => s.sin_respuesta || s.nivel !== "ok");
+        return decir(
+          `¿Qué sede desea consultar?${conProblema.length ? ` Con novedades están ${conProblema.slice(0, 3).map((s) => s.nombre).join(", ")}.` : ""}`,
+          undefined,
+          orden.slice(0, 8).map((s) => s.nombre),
+        );
+      }
+      case "pedir_telemetria": {
+        conv.current = { ...conv.current, esperando: "telemetria" };
+        if (!grupos.length) return decir("Todavía no hay telemetrías configuradas.");
+        return decir(`¿Qué telemetría? Tengo ${grupos.map((g) => g.nombre).join(", ")}.`, undefined, [...grupos.map((g) => g.nombre), "Comparar telemetrías"]);
+      }
+      case "gracias":
+        return decir("Con gusto. ¿Desea algo más?", undefined, MENU);
+      case "adios":
+        decir(`Hasta luego${nombreCorto(usuario) ? `, ${nombreCorto(usuario)}` : ""}. Aquí estaré si me necesita.`, undefined, MENU);
+        window.setTimeout(() => setAbierto(false), 2500);
+        return;
+      case "consumo": {
+        const sedeSel = a.sedeId ? vista.sedes.find((s) => s.id === a.sedeId) ?? null : null;
+        if (sedeSel) {
+          const pot = potencia(equipos.get(sedeSel.id) ?? []);
+          if (!pot.n) return decir(`${sedeSel.nombre} no tiene lecturas de potencia en este momento.`, undefined, atajosSede(sedeSel.nombre));
+          let f = `En ${sedeSel.nombre}, sus ${pot.tipo} suman ${kw(pot.total)} kW en este momento.`;
+          if (pot.mayor && pot.n > 1) f += ` El de mayor carga es ${pot.mayor.nombre}, con ${kw(pot.mayor.central!.lectura!.kw as number)} kW.`;
+          if (pot.genKw > 0) f += ` Además, sus generadores entregan ${kw(pot.genKw)} kW.`;
+          return decir(`${f} Para ver el consumo por horas, abra el equipo en Tendencias. ¿Desea algo más de ${sedeSel.nombre}?`, undefined, atajosSede(sedeSel.nombre));
+        }
+        // Telemetria o toda la red: total y las sedes de mayor consumo.
+        const sedes = vista.sedes.filter((s) => enGrupo(s.id));
+        const filas = sedes.map((s) => ({ s, pot: potencia(equipos.get(s.id) ?? []) })).filter((x) => x.pot.n);
+        if (!filas.length) return decir(`No hay lecturas de potencia${deGrupo || " en la red"} en este momento.`);
+        const total = filas.reduce((x, f) => x + f.pot.total, 0);
+        const top = [...filas].sort((x, y) => y.pot.total - x.pot.total).slice(0, 3);
+        return decir(
+          `${gid ? nombreGrupo(gid) : "La red"} suma ${kw(total)} kW en este momento, con lecturas de ${plural(filas.length, "sede", "sedes")}. Las de mayor consumo: ${top.map((x) => `${x.s.nombre} con ${kw(x.pot.total)} kW`).join(", ")}. ¿Desea el detalle de alguna?`,
+          { label: `Abrir ${top[0].s.nombre}`, accion: { tipo: "sede", sedeId: top[0].s.id, estado: true } },
+          [...top.map((x) => `¿Cuánto consume ${x.s.nombre}?`), ...(gid ? [] : ["Comparar telemetrías"]), "Menú"],
+        );
+      }
+      case "generadores": {
+        const sedes = vista.sedes.filter((s) => (a.sedeId ? s.id === a.sedeId : enGrupo(s.id)));
+        const eqs = sedes.flatMap((s) => equipos.get(s.id) ?? []);
+        const gens = eqs.filter((e) => e.kind === "gen");
+        const marcha = gens.filter(enMarcha);
+        const enPlanta = [...new Set(eqs.filter((e) => e.central?.lectura?.fuente === "generador").map((e) => e.sedeNombre))];
+        const donde = a.sedeId ? ` en ${nombreSede(a.sedeId)}` : deGrupo || " en la red";
+        if (!gens.length) return decir(`No tengo generadores registrados${donde}.`, undefined, a.sedeId ? atajosSede(nombreSede(a.sedeId)) : MENU);
+        let f = marcha.length
+          ? `Hay ${plural(marcha.length, "generador en marcha", "generadores en marcha")}${donde}: ${marcha.map((e) => `${e.nombre}${a.sedeId ? "" : ` de ${e.sedeNombre}`}${e.central?.lectura?.kw ? ` con ${kw(e.central.lectura.kw)} kW` : ""}`).join(", ")}.`
+          : `Ninguno de los ${plural(gens.length, "generador", "generadores")}${donde} está en marcha.`;
+        if (enPlanta.length) f += ` Alimentadas por generador: ${enPlanta.join(", ")}.`;
+        else f += " Todas las sedes están con energía comercial.";
+        const primero = marcha[0];
+        return decir(
+          `${f}${primero ? ` ¿Abro ${primero.nombre}?` : ""}`,
+          primero ? { label: `Abrir ${primero.nombre}`, accion: { tipo: "equipo", equipoKey: primero.key, pestana: "equipo" } } : undefined,
+          a.sedeId ? atajosSede(nombreSede(a.sedeId)) : MENU,
+        );
       }
       case "ayuda":
         return decir(
-          "Puedo llevarlo a cualquier parte del Centro de mando y decirle cómo está la red. Diga, por ejemplo: «resumen», «qué alarmas hay», «qué medidores están fuera de línea», «qué sedes no responden», «abre Escuintla», «cómo está Cobán», «alarmas de Escuintla», «ranking de sedes», «predicción», «abre el TR 1 en tendencias», «modo sala» o «cerrar». Para que lo escuche sin tocar el botón, active la escucha continua y empiece con «Gravix».",
+          "Puedo llevarlo a cualquier parte del Centro de mando y decirle cómo está la red. Diga, por ejemplo: «resumen», «menú», «consultar una sede», «cuánto consume Escuintla», «generadores en marcha», «qué alarmas hay», «qué medidores están fuera de línea», «qué sedes no responden», «abre Escuintla», «cómo está Cobán», «alarmas de Escuintla», «ranking de sedes», «predicción», «abre el TR 1 en tendencias», «modo sala» o «cerrar». Para que lo escuche sin tocar el botón, active la escucha continua y empiece con «Gravix».",
         );
       case "resumen": {
         const e = estadoRed();
@@ -396,7 +534,11 @@ export default function Gravix(props: Props) {
         const lista = equipos.get(s.id) ?? [];
         const medidores = lista.length ? `${s.medidores.ok || lista.length - s.medidores.fuera} de ${s.medidores.total || lista.length} medidores en línea` : "sin equipos todavía";
         const estado = s.sin_respuesta ? "La sede no responde en este momento." : `Está ${NIVEL_TXT[s.nivel] ?? s.nivel}, ${medidores}, ${n ? plural(n, "alarma activa", "alarmas activas") : "sin alarmas activas"}.`;
-        return decir(`Abro ${s.nombre}. ${estado}`, n ? { label: "Ver sus alertas", accion: { tipo: "alertas", sedeId: s.id } } : undefined);
+        return decir(
+          `Abro ${s.nombre}. ${estado} ¿Quiere ver sus alarmas, el consumo o los equipos fuera de línea?`,
+          n ? { label: "Ver sus alertas", accion: { tipo: "alertas", sedeId: s.id } } : undefined,
+          atajosSede(s.nombre),
+        );
       }
       case "equipo": {
         const e = [...equipos.values()].flat().find((x) => x.key === a.equipoKey);
@@ -418,7 +560,7 @@ export default function Gravix(props: Props) {
         setPrefs({ avisos: a.activar });
         return decir(a.activar ? "Avisos con sonido activados." : "Avisos con sonido desactivados.");
       case "desconocido":
-        return decir(`No entendí «${a.texto}». Pruebe con «resumen», «abre Escuintla», «alarmas» o pida «ayuda».`);
+        return decir(`Disculpe, no entendí «${a.texto}». Puede elegir una de estas opciones o decirme, por ejemplo, «¿cuánto consume Escuintla?».`, undefined, MENU);
     }
   };
 
@@ -440,15 +582,30 @@ export default function Gravix(props: Props) {
       return decir("Entendido. Aquí estoy si me necesita.");
     }
     const { vista, equipos, sedeActual, esAdmin, grupos } = p.current;
-    responder(
-      interpretar(orden, {
-        grupos,
-        sedes: vista.sedes.map((s) => ({ id: s.id, nombre: s.nombre })),
-        equipos: [...equipos.values()].flat(),
-        sedeActual,
-        esAdmin,
-      }),
-    );
+    let accion = interpretar(orden, {
+      grupos,
+      sedes: vista.sedes.map((s) => ({ id: s.id, nombre: s.nombre })),
+      equipos: [...equipos.values()].flat(),
+      sedeActual,
+      esAdmin,
+    });
+    const c = conv.current;
+    // Respuesta a "¿Qué telemetría?": basta con "la dos" o "2".
+    if (c.esperando === "telemetria" && accion.tipo === "desconocido") {
+      const num = /\b(\d+)\b/.exec(n)?.[1];
+      const g = num ? grupos.find((x) => normalizar(x.nombre).endsWith(` ${num}`)) : null;
+      if (g) accion = { tipo: "grupo", grupoId: g.id };
+    }
+    // Seguimiento: "¿y sus alarmas?", "¿y el consumo de esa sede?" usan la sede o telemetria de la que se hablaba.
+    if (usaContexto(n) && (c.sedeId || c.grupoId)) {
+      const sinLugar = "sedeId" in accion && !accion.sedeId && !("grupoId" in accion && accion.grupoId);
+      if (sinLugar) {
+        if (accion.tipo === "alertas") accion = { tipo: "leer_alarmas", sedeId: null };
+        accion = { ...accion, sedeId: c.sedeId, ...(c.grupoId ? { grupoId: c.grupoId } : {}) } as Accion;
+      } else if (accion.tipo === "resumen" && c.sedeId) accion = { tipo: "sede", sedeId: c.sedeId, estado: true };
+      else if (accion.tipo === "resumen" && c.grupoId) accion = { tipo: "grupo", grupoId: c.grupoId };
+    }
+    responder(accion);
   };
   const procesarRef = useRef(procesar);
   procesarRef.current = procesar;
@@ -602,6 +759,30 @@ export default function Gravix(props: Props) {
     if (!abierto && mensajes.length === 0) responder({ tipo: "saludo" });
   };
 
+  // Bienvenida: una vez por sesion del navegador, un globo invita a conversar (sin voz: el navegador
+  // no deja hablar antes del primer clic; al abrir el panel Gravix saluda en voz alta).
+  useEffect(() => {
+    let visto = false;
+    try {
+      visto = sessionStorage.getItem("gravix.bienvenida") === "1";
+      sessionStorage.setItem("gravix.bienvenida", "1");
+    } catch {
+      /* sin almacenamiento: se muestra igual */
+    }
+    if (visto) return;
+    const id = window.setTimeout(() => {
+      const nombre = nombreCorto(useAuthStore.getState().user?.username);
+      const n = p.current.alarmas.length;
+      setGlobo((g) =>
+        g ?? {
+          bienvenida: true,
+          texto: `${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix. ${n ? `Hay ${plural(n, "alarma activa", "alarmas activas")} en la red. ` : "La red está en orden. "}¿Le ayudo con algo?`,
+        },
+      );
+    }, 1500);
+    return () => window.clearTimeout(id);
+  }, []);
+
   const enviar = (e: React.FormEvent) => {
     e.preventDefault();
     callar();
@@ -615,11 +796,15 @@ export default function Gravix(props: Props) {
   return (
     <div className="gravix-asistente cm">
       {globo && !abierto && (
-        <div role="alert" className="gx-globo">
+        <div role={globo.bienvenida ? "status" : "alert"} className={globo.bienvenida ? "gx-globo gx-globo-info" : "gx-globo"}>
           <p className="text-[13px] leading-snug text-slate-100">{globo.texto}</p>
           <div className="mt-2 flex gap-2">
-            <button type="button" onClick={() => { p.current.ejecutar(globo.accion); setGlobo(null); }} className="min-h-[32px] rounded-lg bg-rose-600 px-3 text-xs font-bold text-white hover:bg-rose-500">Ver</button>
-            <button type="button" onClick={() => { setGlobo(null); callar(); }} className="min-h-[32px] rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-300 hover:bg-slate-800">Después</button>
+            {globo.bienvenida ? (
+              <button type="button" onClick={abrirPanel} className="min-h-[32px] rounded-lg bg-sky-600 px-3 text-xs font-bold text-white hover:bg-sky-500">Sí, ayúdame</button>
+            ) : (
+              <button type="button" onClick={() => { if (globo.accion) p.current.ejecutar(globo.accion); setGlobo(null); }} className="min-h-[32px] rounded-lg bg-rose-600 px-3 text-xs font-bold text-white hover:bg-rose-500">Ver</button>
+            )}
+            <button type="button" onClick={() => { setGlobo(null); callar(); }} className="min-h-[32px] rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-300 hover:bg-slate-800">{globo.bienvenida ? "Ahora no" : "Después"}</button>
           </div>
         </div>
       )}
@@ -655,7 +840,7 @@ export default function Gravix(props: Props) {
           </div>
 
           <div className="flex flex-wrap gap-1.5 px-4 pb-2">
-            {SUGERENCIAS.map((s) => (
+            {sugerencias.map((s) => (
               <button key={s} type="button" onClick={() => { callar(); procesar(s); }} className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11.5px] text-slate-300 hover:border-sky-600 hover:text-white">{s}</button>
             ))}
           </div>

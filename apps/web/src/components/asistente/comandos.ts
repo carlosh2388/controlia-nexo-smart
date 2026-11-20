@@ -37,6 +37,16 @@ export type Accion =
   | { tipo: "callar" }
   | { tipo: "avisos"; activar: boolean }
   | { tipo: "saludo" }
+  /** Dialogo: menu de opciones, pedir la sede o la telemetria que falta, cortesias. */
+  | { tipo: "menu" }
+  | { tipo: "pedir_sede" }
+  | { tipo: "pedir_telemetria" }
+  | { tipo: "gracias" }
+  | { tipo: "adios" }
+  /** Potencia actual (kW) de una sede, una telemetria o toda la red. */
+  | { tipo: "consumo"; sedeId: string | null; grupoId?: string | null }
+  /** Generadores en marcha y sedes alimentadas por generador. */
+  | { tipo: "generadores"; sedeId: string | null; grupoId?: string | null }
   | { tipo: "desconocido"; texto: string };
 
 /** Palabra para despertar a Gravix y como suele oirla el reconocedor de voz. */
@@ -134,7 +144,10 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
   if (!t) return { tipo: "saludo" };
 
   if (tiene(t, "silencio", "callate", "calla", "basta", "para de hablar", "deja de hablar")) return { tipo: "callar" };
-  if (tiene(t, "ayuda", "que puedes hacer", "que sabes hacer", "comandos", "opciones")) return { tipo: "ayuda" };
+  if (tiene(t, "ayuda", "comandos", "que sabes hacer")) return { tipo: "ayuda" };
+  if (tiene(t, "menu", "opciones", "que puedes hacer", "que puedo hacer", "que hago", "que me recomiendas", "ayudame", "en que me ayudas")) return { tipo: "menu" };
+  if (tiene(t, "gracias", "muchas gracias", "te agradezco", "perfecto gracias")) return { tipo: "gracias" };
+  if (tiene(t, "adios", "hasta luego", "hasta pronto", "nos vemos", "eso es todo", "nada mas")) return { tipo: "adios" };
   if (/\b(silencia|silenciar|desactiva|desactivar|apaga|apagar|quita|quitar)\b.*\b(aviso|avisos|sonido|sonidos)\b/.test(t)) return { tipo: "avisos", activar: false };
   if (/\b(activa|activar|enciende|encender|pon|poner)\b.*\b(aviso|avisos|sonido|sonidos)\b/.test(t)) return { tipo: "avisos", activar: true };
 
@@ -156,11 +169,20 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
   const grupoId = grupo?.id ?? null;
   const todasTelemetrias = !grupo && (tiene(t, "telemetrias", "por telemetria", "cada telemetria", "todas las telemetrias", "fases", "por fase"));
 
+  // Falta un dato: "consultar una sede", "ver una telemetria" -> Gravix pregunta cual.
+  // (normalizar convierte "una" en "1")
+  if (!sede && /\b(1|alguna|otra|cierta)\s+sede\b/.test(t)) return { tipo: "pedir_sede" };
+  if (!grupo && !todasTelemetrias && /\b(1|alguna|otra)\s+telemetria\b|^(ver |consultar |revisar )?(la )?telemetria$/.test(t)) return { tipo: "pedir_telemetria" };
+
   // Consultas: listas que Gravix lee en voz alta.
   if (/\b(sedes?)\b.*\b(no responde|no responden|sin respuesta|caida|caidas)\b/.test(t) || tiene(t, "sedes sin respuesta", "que sede no responde")) return { tipo: "sin_respuesta", grupoId };
   if (tiene(t, "fuera de linea", "desconectado", "desconectados", "caido", "caidos", "sin datos", "sin comunicacion", "no reportan", "no reporta", "fallando"))
     return { tipo: "fuera_de_linea", sedeId, grupoId };
-  if (/\b(cuales|que|lee|leeme|dime|lista|listame|detalle|detalla|menciona)\b.*\b(alarma|alarmas|alerta|alertas|criticas|advertencias)\b/.test(t) && !tiene(t, "cuantas", "cuantos"))
+  if (tiene(t, "generador", "generadores", "planta", "plantas", "planta electrica", "en planta"))
+    return { tipo: "generadores", sedeId, grupoId };
+  if (!tiene(t, "calidad") && tiene(t, "consumo", "consume", "consumen", "consumiendo", "potencia", "kw", "kilovatios", "carga", "demanda", "energia", "gasto de energia"))
+    return { tipo: "consumo", sedeId, grupoId };
+  if (/\b(cuales|que|lee|leeme|dime|lista|listame|detalle|detalla|menciona|revisar|revisa|repasa|repasar)\b.*\b(alarma|alarmas|alerta|alertas|criticas|advertencias)\b/.test(t) && !tiene(t, "cuantas", "cuantos"))
     return { tipo: "leer_alarmas", sedeId, grupoId };
   if (grupo && tiene(t, "cuantas", "cuantos")) return { tipo: "contar_alarmas", sedeId: null, grupoId };
   if (grupo && tiene(t, "alarma", "alarmas", "alerta", "alertas")) return { tipo: "leer_alarmas", sedeId: null, grupoId };
@@ -173,7 +195,7 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
 
   if (tiene(t, "incidentes", "incidente", "linea de tiempo")) return { tipo: "vista", vista: "incidentes" };
   if (tiene(t, "ranking", "clasificacion", "peores sedes", "mejores sedes")) return { tipo: "vista", vista: "ranking" };
-  if (tiene(t, "normas", "norma", "cumplimiento")) return { tipo: "vista", vista: "normas" };
+  if (tiene(t, "normas", "norma", "cumplimiento", "calidad")) return { tipo: "vista", vista: "normas" };
   if (tiene(t, "prediccion", "pronostico", "proyeccion")) return { tipo: "vista", vista: "prediccion" };
 
   if (sede) return { tipo: "sede", sedeId: sede.id, estado: tiene(t, "como esta", "como va", "estado", "resumen", "que pasa", "que tiene") };
@@ -186,5 +208,9 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
   return { tipo: "desconocido", texto: frase };
 }
 
-/** Ejemplos que se muestran como atajos en la ventana de Gravix. */
-export const SUGERENCIAS = ["Resumen de la red", "Estado por telemetría", "¿Qué alarmas hay?", "¿Qué medidores están fuera de línea?", "¿Qué sedes no responden?", "Abre Escuintla", "Ranking de sedes"];
+/** Frases de seguimiento que se refieren a lo ultimo que se hablo ("¿y sus alarmas?", "¿y el consumo de esa sede?"). */
+// ("esta"/"este" solos no cuentan: "¿como esta la red?" no se refiere a nada anterior)
+export const usaContexto = (t: string) => /^y\b/.test(t) || /\b(su|sus|esa|ese|ahi|alli|alla|la misma|el mismo|esta sede|este equipo|esta telemetria)\b/.test(t);
+
+/** Menu principal: atajos que Gravix ofrece al saludar o cuando no hay un tema en curso. */
+export const MENU = ["Revisar alarmas", "Estado por telemetría", "Consultar una sede", "Consumo de energía", "Generadores en marcha", "Equipos fuera de línea"];

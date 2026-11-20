@@ -130,6 +130,11 @@
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
+.gx-globo-info {
+  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(8, 24, 42, 0.97);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .gx-orbe::after,
   .gx-pulso {

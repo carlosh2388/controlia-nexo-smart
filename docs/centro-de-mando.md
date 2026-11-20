@@ -204,8 +204,31 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
     cada PC (lo hace el usuario o TI).
   - El reconocimiento de voz es el de Chrome/Edge y necesita internet (el audio lo procesa el
     servicio del navegador). Firefox no lo trae: queda la caja de texto.
-- Fase 2 (pendiente, requiere licencia de la API de Claude y salida a internet del servidor):
-  preguntas libres de analítica usando las mismas consultas del servidor MCP (`apps/mcp`).
+- Sin IA ni licencias (decisión del 20/11/2026): se probó una versión con la API de Claude (commit
+  4207efb) y se revirtió (6b80e5a) porque requiere licencia de pago. Gravix funciona solo con sus
+  reglas y los datos que ya tiene la pantalla.
+
+### Conversación (20/11/2026)
+
+- Bienvenida: al entrar al Centro de mando (una vez por sesión del navegador) aparece un globo
+  "Buenos días, <usuario>. Soy Gravix… ¿Le ayudo con algo?". Al abrir el panel saluda en voz alta
+  según la hora, resume la red en una frase y pregunta "¿Qué desea hacer hoy?".
+- Menú (atajos): Revisar alarmas, Estado por telemetría, Consultar una sede, Consumo de energía,
+  Generadores en marcha, Equipos fuera de línea. "Menú" / "¿qué puedo hacer?" lo repite.
+- Pide el dato que falta: "consultar una sede" → "¿Qué sede desea consultar?" (atajos con las sedes,
+  primero las que tienen novedades); "ver una telemetría" → "¿Qué telemetría?" (basta "la 2").
+- Recuerda el tema: después de una sede o telemetría, "¿y sus alarmas?", "y el consumo", "esa sede"
+  se refieren a ella. Los atajos cambian según el tema (alarmas, consumo, equipos fuera de línea,
+  generadores de esa sede; o de esa telemetría).
+- Consultas nuevas con las lecturas en pantalla:
+  - Consumo: "¿cuánto consume Escuintla?", "consumo de Telemetría 2", "consumo de energía" (red).
+    Es la **potencia de este momento** (kW): suma de los analizadores ION7400 de la sede (o de los
+    PM2130 si no tiene ION), más lo que entregan sus generadores; para la red o una telemetría, el
+    total y las 3 sedes de mayor consumo. El consumo por horas se ve en Tendencias del equipo.
+  - Generadores: "generadores en marcha", "generadores de Escuintla": cuáles están en marcha (estado
+    "generador en marcha" o más de 0.5 kW) y qué sedes están alimentadas por generador.
+  - "Comparar telemetrías" agrega los kW actuales de cada una.
+- Cortesías: "gracias" → "¿Desea algo más?"; "eso es todo" / "hasta luego" se despide y cierra el panel.
 
 ## Pendiente
 
