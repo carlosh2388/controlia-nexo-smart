@@ -4,8 +4,9 @@ import { Observable, map, of } from "rxjs";
 import { GravixService } from "./gravix.service";
 
 const EQUIPO = /^\/api\/v1\/(?:pilot\/devices|devices)\/([^/?]+)(\/[^?]*)?/;
-const AGENTE = /^\/api\/v1\/(?:pilot\/([^/?]+)\/(?:devices|cumplimiento)|sites\/([^/?]+)\/events)(?:\?|$)/;
+const AGENTE = /^\/api\/v1\/(?:pilot\/([^/?]+)\/(?:devices|cumplimiento)|sites\/([^/?]+)\/events|agents\/([^/?]+)(?:\/[^?]*)?)(?:\?|$)/;
 const LISTA = /^\/api\/v1\/devices(?:\?|$)/;
+const LISTA_AGENTES = /^\/api\/v1\/agents(?:\?|$)/;
 const ESTADO_AGENTES = /^\/api\/v1\/devices\/agent-status(?:\?|$)/;
 
 type Dev = { metadata?: { agent?: { buildingKey?: string } } | null; protocol?: string };
@@ -29,9 +30,14 @@ export class GravixProxyInterceptor implements NestInterceptor {
     if (context.getType() !== "http") return next.handle();
     const req = context.switchToHttp().getRequest<FastifyRequest>();
     const url = req.url;
-    if (!url.startsWith("/api/v1/pilot/") && !url.startsWith("/api/v1/sites/") && !url.startsWith("/api/v1/devices")) return next.handle();
+    if (!url.startsWith("/api/v1/pilot/") && !url.startsWith("/api/v1/sites/") && !url.startsWith("/api/v1/devices") && !url.startsWith("/api/v1/agents")) return next.handle();
 
     // Listas mezcladas con lo que informan las sedes
+    if (req.method === "GET" && LISTA_AGENTES.test(url)) {
+      const { keys, lista } = this.gravix.agentesDeSedes();
+      if (!keys.size) return next.handle();
+      return next.handle().pipe(map((local) => [...(Array.isArray(local) ? local : []).filter((a: { buildingKey?: string }) => !keys.has(a?.buildingKey ?? "")), ...lista]));
+    }
     if (req.method === "GET" && ESTADO_AGENTES.test(url)) {
       const { keys, lista } = this.gravix.estadoAgentesDeSedes();
       if (!keys.size) return next.handle();
@@ -47,12 +53,15 @@ export class GravixProxyInterceptor implements NestInterceptor {
 
     const eq = EQUIPO.exec(url);
     const ag = eq ? null : AGENTE.exec(url);
-    const sede = eq ? this.gravix.sedeDeEquipo(eq[1]) : ag ? this.gravix.sedeDeAgente(ag[1] ?? ag[2]) : null;
+    const sede = eq ? this.gravix.sedeDeEquipo(eq[1]) : ag ? this.gravix.sedeDeAgente(ag[1] ?? ag[2] ?? ag[3]) : null;
     if (!sede) return next.handle();
 
     if (req.method !== "GET") {
-      const web = this.gravix.urlDe(sede)?.replace(/:\d+$/, "");
-      throw new ConflictException(`Este equipo está en el Gravix de la sede ${sede}: los cambios se hacen en su web local${web ? ` (${web})` : ""}`);
+      const api = this.gravix.urlDe(sede);
+      const puerto = this.gravix.estadoDe(sede)?.webPuerto ?? 5173;
+      const web = api ? `${api.replace(/:\d+$/, "")}:${puerto}` : null;
+      const que = ag?.[3] ? "Este agente" : "Este equipo";
+      throw new ConflictException(`${que} está en el Gravix de la sede ${sede}: los cambios (configuración, búsqueda de equipos, umbrales) se hacen en su web local${web ? ` (${web})` : ""}`);
     }
 
     const r = await this.gravix.reenviar(sede, url);

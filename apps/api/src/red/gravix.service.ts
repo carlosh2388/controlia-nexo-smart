@@ -63,6 +63,8 @@ export class GravixService implements OnModuleInit, OnModuleDestroy {
   /** Lista completa de equipos (GET /devices) y estado de sus agentes, por sede: la usa la pestaña Sedes. */
   private readonly dispositivos = new Map<string, Record<string, unknown>[]>();
   private readonly estadoAgentes = new Map<string, Record<string, unknown>[]>();
+  /** Lista de agentes de cada sede (GET /agents): la usa la pestaña Equipos. */
+  private readonly listaAgentes = new Map<string, Record<string, unknown>[]>();
   /** Sedes que tambien trae el monitoreo central (Telemetria 1): su foto por minuto ya la guarda CentroService. */
   private readonly sedesCentrales: Set<string>;
   private timers: NodeJS.Timeout[] = [];
@@ -90,6 +92,19 @@ export class GravixService implements OnModuleInit, OnModuleDestroy {
     const lista: Record<string, unknown>[] = [];
     for (const s of this.sedes) {
       const d = this.dispositivos.get(s.id);
+      if (!d) continue;
+      s.agentes.forEach((k) => keys.add(k));
+      lista.push(...d);
+    }
+    return { keys, lista };
+  }
+
+  /** Agentes de las sedes Gravix con su config y ultimo sync (GET /agents). */
+  agentesDeSedes() {
+    const keys = new Set<string>();
+    const lista: Record<string, unknown>[] = [];
+    for (const s of this.sedes) {
+      const d = this.listaAgentes.get(s.id);
       if (!d) continue;
       s.agentes.forEach((k) => keys.add(k));
       lista.push(...d);
@@ -280,7 +295,12 @@ export class GravixService implements OnModuleInit, OnModuleDestroy {
       for (const d of vista.dispositivos ?? []) this.equipos.set(d.id, s.id);
       // Todos los equipos de la sede (energia y sensores) y el estado de sus agentes.
       const h = { headers: { "x-api-key": s.key }, signal: AbortSignal.timeout(8000) };
-      const [rd, ra] = await Promise.all([fetch(`${s.url}/api/v1/devices`, h).catch(() => null), fetch(`${s.url}/api/v1/devices/agent-status`, h).catch(() => null)]);
+      const [rd, ra, rg] = await Promise.all([
+        fetch(`${s.url}/api/v1/devices`, h).catch(() => null),
+        fetch(`${s.url}/api/v1/devices/agent-status`, h).catch(() => null),
+        fetch(`${s.url}/api/v1/agents`, h).catch(() => null),
+      ]);
+      if (rg?.ok) this.listaAgentes.set(s.id, (await rg.json()) as Record<string, unknown>[]);
       if (rd?.ok) {
         const lista = (await rd.json()) as Record<string, unknown>[];
         this.dispositivos.set(s.id, lista);
