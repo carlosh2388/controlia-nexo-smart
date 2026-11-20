@@ -1,7 +1,23 @@
 import axios from "axios";
 import { useAuthStore } from "../store/auth.store";
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000/api/v1";
+/**
+ * Abierta por HTTPS, la web no puede pedir datos a una API "http://" (el navegador lo bloquea):
+ * usa la misma direccion de la pagina y nginx pasa /api a la API (ver apps/web/https.conf.tpl).
+ */
+export function mismoOrigenSiHttps(url: string): string {
+  if (typeof window === "undefined" || window.location.protocol !== "https:") return url;
+  try {
+    const u = new URL(url, window.location.href);
+    if (u.protocol === "http:") return `https://${window.location.host}${u.pathname}`;
+    if (u.protocol === "ws:") return `wss://${window.location.host}${u.pathname}`;
+  } catch {
+    /* url invalida: se deja igual */
+  }
+  return url;
+}
+
+export const API_BASE_URL = mismoOrigenSiHttps(import.meta.env.VITE_API_URL ?? "http://localhost:3000/api/v1");
 
 export const apiClient = axios.create({ baseURL: API_BASE_URL });
 

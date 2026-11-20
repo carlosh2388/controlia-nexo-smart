@@ -21,7 +21,12 @@ export interface EquipoRef {
 export type Accion =
   | { tipo: "ayuda" }
   | { tipo: "resumen" }
-  | { tipo: "contar_alarmas"; sedeId: string | null }
+  | { tipo: "contar_alarmas"; sedeId: string | null; grupoId?: string | null }
+  | { tipo: "leer_alarmas"; sedeId: string | null; grupoId?: string | null }
+  | { tipo: "fuera_de_linea"; sedeId: string | null; grupoId?: string | null }
+  | { tipo: "sin_respuesta"; grupoId?: string | null }
+  /** Estado de una telemetria (grupo de sedes) o, con null, de todas comparadas. */
+  | { tipo: "grupo"; grupoId: string | null }
   | { tipo: "alertas"; sedeId: string | null }
   | { tipo: "vista"; vista: VistaRed }
   | { tipo: "inicio" }
@@ -103,7 +108,19 @@ function pestanaDe(t: string): PestanaEquipo | null {
   return null;
 }
 
+/** Telemetria (grupo de sedes: Telemetria 1, 2, 3...) mencionada por su nombre. */
+export function buscarGrupo(t: string, grupos: SedeRef[]): SedeRef | null {
+  let mejor: { g: SedeRef; largo: number } | null = null;
+  for (const g of grupos) {
+    const c = normalizar(g.nombre);
+    if (c && new RegExp(`\\b${c}\\b`).test(t) && (!mejor || c.length > mejor.largo)) mejor = { g, largo: c.length };
+  }
+  return mejor?.g ?? null;
+}
+
 export interface Contexto {
+  /** Telemetrias (grupos de sedes). */
+  grupos?: SedeRef[];
   sedes: SedeRef[];
   equipos: EquipoRef[];
   /** Sede abierta ahora (para "abre el TR 1" sin decir la sede). */
@@ -134,6 +151,21 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
     (sede ? null : buscarEquipo(t, ctx.equipos));
   if (equipo) return { tipo: "equipo", equipoKey: equipo.key, pestana: pestanaDe(t) ?? "equipo" };
 
+  // Telemetrias: "telemetria 2", "las tres telemetrias", "por telemetria".
+  const grupo = sede ? null : buscarGrupo(t, ctx.grupos ?? []);
+  const grupoId = grupo?.id ?? null;
+  const todasTelemetrias = !grupo && (tiene(t, "telemetrias", "por telemetria", "cada telemetria", "todas las telemetrias", "fases", "por fase"));
+
+  // Consultas: listas que Gravix lee en voz alta.
+  if (/\b(sedes?)\b.*\b(no responde|no responden|sin respuesta|caida|caidas)\b/.test(t) || tiene(t, "sedes sin respuesta", "que sede no responde")) return { tipo: "sin_respuesta", grupoId };
+  if (tiene(t, "fuera de linea", "desconectado", "desconectados", "caido", "caidos", "sin datos", "sin comunicacion", "no reportan", "no reporta", "fallando"))
+    return { tipo: "fuera_de_linea", sedeId, grupoId };
+  if (/\b(cuales|que|lee|leeme|dime|lista|listame|detalle|detalla|menciona)\b.*\b(alarma|alarmas|alerta|alertas|criticas|advertencias)\b/.test(t) && !tiene(t, "cuantas", "cuantos"))
+    return { tipo: "leer_alarmas", sedeId, grupoId };
+  if (grupo && tiene(t, "cuantas", "cuantos")) return { tipo: "contar_alarmas", sedeId: null, grupoId };
+  if (grupo && tiene(t, "alarma", "alarmas", "alerta", "alertas")) return { tipo: "leer_alarmas", sedeId: null, grupoId };
+  if (grupo || todasTelemetrias) return { tipo: "grupo", grupoId };
+
   // "Alarmas y correos" es solo para administradores: Gravix le explica al resto por que no entra.
   if (tiene(t, "correos", "correo", "configurar alarmas", "reglas")) return { tipo: "vista", vista: "alarmas" };
   if (tiene(t, "cuantas", "cuantos", "numero de", "hay alarmas", "hay alertas")) return { tipo: "contar_alarmas", sedeId };
@@ -155,4 +187,4 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
 }
 
 /** Ejemplos que se muestran como atajos en la ventana de Gravix. */
-export const SUGERENCIAS = ["Resumen de la red", "¿Cuántas alarmas hay?", "Llévame a las alarmas", "Abre Escuintla", "Ranking de sedes", "Predicción"];
+export const SUGERENCIAS = ["Resumen de la red", "Estado por telemetría", "¿Qué alarmas hay?", "¿Qué medidores están fuera de línea?", "¿Qué sedes no responden?", "Abre Escuintla", "Ranking de sedes"];

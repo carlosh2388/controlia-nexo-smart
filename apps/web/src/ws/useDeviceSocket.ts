@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../store/auth.store";
+import { mismoOrigenSiHttps } from "../api/client";
 
 // Una ruta relativa (ej. "/ws", Gravix de sede detras de nginx) se arma con el host desde el que se abrio la web.
+// Abierta por HTTPS, un "ws://" se cambia a wss:// del mismo host (nginx lo pasa a la API).
 const RAW_WS_URL: string = import.meta.env.VITE_WS_URL ?? "ws://localhost:3000/ws";
 const WS_URL = RAW_WS_URL.startsWith("/")
   ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${RAW_WS_URL}`
-  : RAW_WS_URL;
+  : mismoOrigenSiHttps(RAW_WS_URL);
 
 interface DeviceStateMessage {
   type: "device.state";

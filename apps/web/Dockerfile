@@ -23,6 +23,10 @@ RUN npm run build:web
 FROM nginx:1.27-alpine
 
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
+# HTTPS opcional (WEB_HTTPS=1 + certificado montado en /etc/nginx/certs): ver 30-https.sh.
+COPY apps/web/https.conf.tpl /etc/nginx/https.conf.tpl
+COPY apps/web/30-https.sh /docker-entrypoint.d/30-https.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.d/30-https.sh && chmod 755 /docker-entrypoint.d/30-https.sh
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE 80 443

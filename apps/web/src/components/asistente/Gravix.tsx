@@ -18,6 +18,7 @@ export interface GravixEquipo {
   nombre: string;
   inventario: string | null;
   estadoTxt: string;
+  ok: boolean;
 }
 export interface GravixAlarma {
   codigo: string;
@@ -34,6 +35,9 @@ interface Props {
   alarmas: GravixAlarma[];
   esAdmin: boolean;
   sedeActual: string | null;
+  /** Telemetrias (grupos de sedes) y a cual pertenece cada sede. */
+  grupos: { id: string; nombre: string }[];
+  grupoDe: (sedeId: string) => string | null;
   /** Ejecuta la navegacion en el Centro de mando. */
   ejecutar: (a: Accion) => void;
 }
@@ -49,6 +53,8 @@ interface Prefs {
   voz: boolean;
   avisos: boolean;
   continua: boolean;
+  /** Nombre de la voz elegida (null = la recomendada). */
+  vozNombre: string | null;
 }
 
 /* ---------- reconocimiento de voz del navegador (tipos minimos) ---------- */
@@ -81,7 +87,7 @@ const Reconocimiento: ConstructorReconocedor | undefined =
 const IDIOMA = typeof navigator !== "undefined" && navigator.language?.toLowerCase().startsWith("es") ? navigator.language : "es-MX";
 
 const PREFS_KEY = "gravix.prefs";
-const PREFS_INI: Prefs = { voz: true, avisos: true, continua: false };
+const PREFS_INI: Prefs = { voz: true, avisos: true, continua: false, vozNombre: null };
 function leerPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -147,15 +153,34 @@ function pitido(urgente: boolean) {
   }
 }
 
-function vozEspanol(): SpeechSynthesisVoice | null {
-  if (typeof speechSynthesis === "undefined") return null;
-  const voces = speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith("es"));
-  const pref = ["es-mx", "es-us", "es-419", "es-gt", "es-es"];
-  for (const p of pref) {
-    const v = voces.find((x) => x.lang.toLowerCase() === p);
+function vocesEspanol(): SpeechSynthesisVoice[] {
+  if (typeof speechSynthesis === "undefined") return [];
+  return speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith("es"));
+}
+
+/**
+ * Voz recomendada: formal, clara y no muy grave. Primero las voces neuronales ("Natural"/"Online"
+ * de Edge, "Google") en español latino, luego voces conocidas de tono medio, luego cualquier español.
+ */
+const VOCES_PREFERIDAS = ["dalia", "paloma", "sabina", "renata", "elena", "helena", "laura", "elvira", "google español de estados unidos", "google español"];
+const ACENTOS = ["es-mx", "es-us", "es-419", "es-gt", "es-co", "es-es"];
+function puntaje(v: SpeechSynthesisVoice): number {
+  const n = v.name.toLowerCase();
+  let s = 0;
+  if (/natural|online|neural/.test(n)) s += 100;
+  const i = VOCES_PREFERIDAS.findIndex((x) => n.includes(x));
+  if (i >= 0) s += 50 - i;
+  const a = ACENTOS.indexOf(v.lang.toLowerCase());
+  if (a >= 0) s += 20 - a * 2;
+  return s;
+}
+function vozEspanol(nombre: string | null): SpeechSynthesisVoice | null {
+  const voces = vocesEspanol();
+  if (nombre) {
+    const v = voces.find((x) => x.name === nombre);
     if (v) return v;
   }
-  return voces[0] ?? null;
+  return [...voces].sort((a, b) => puntaje(b) - puntaje(a))[0] ?? null;
 }
 
 export default function Gravix(props: Props) {
@@ -193,25 +218,30 @@ export default function Gravix(props: Props) {
   }, [mensajes, parcial]);
 
   // Las voces del sistema cargan tarde en algunos navegadores.
+  const [voces, setVoces] = useState<SpeechSynthesisVoice[]>(vocesEspanol);
   useEffect(() => {
     if (typeof speechSynthesis === "undefined") return;
-    const cargar = () => speechSynthesis.getVoices();
+    const cargar = () => setVoces(vocesEspanol());
+    cargar();
     speechSynthesis.addEventListener?.("voiceschanged", cargar);
     return () => speechSynthesis.removeEventListener?.("voiceschanged", cargar);
   }, []);
+  const vozActual = vozEspanol(prefs.vozNombre);
 
-  const hablar = (t: string) => {
-    if (!prefsRef.current.voz || typeof speechSynthesis === "undefined") return;
+  const hablar = (t: string, forzar = false) => {
+    if ((!prefsRef.current.voz && !forzar) || typeof speechSynthesis === "undefined") return;
     try {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(t.replace(/[«»]/g, ""));
       u.lang = "es-MX";
-      const v = vozEspanol();
+      const v = vozEspanol(prefsRef.current.vozNombre);
       if (v) {
         u.voice = v;
         u.lang = v.lang;
       }
-      u.rate = 1.03;
+      // Tono formal: pausado y con altura normal (ni grave ni aguda).
+      u.rate = 0.95;
+      u.pitch = 1.05;
       u.onstart = () => setHablando(true);
       u.onend = () => setHablando(false);
       u.onerror = () => setHablando(false);
@@ -259,16 +289,49 @@ export default function Gravix(props: Props) {
   };
 
   const responder = (a: Accion) => {
-    const { vista, equipos, alarmas, esAdmin, ejecutar } = p.current;
+    const { vista, equipos, alarmas: todas, esAdmin, ejecutar, grupos, grupoDe } = p.current;
     const nombreSede = (id: string | null) => vista.sedes.find((s) => s.id === id)?.nombre ?? id ?? "";
+    const nombreGrupo = (id: string | null | undefined) => grupos.find((g) => g.id === id)?.nombre ?? "sin grupo";
+    // Con telemetria pedida, todo se limita a las sedes de esa telemetria.
+    const gid = "grupoId" in a ? a.grupoId ?? null : null;
+    const enGrupo = (sedeId: string) => !gid || grupoDe(sedeId) === gid;
+    const alarmas = todas.filter((x) => enGrupo(x.sedeId));
+    const deGrupo = gid ? ` en ${nombreGrupo(gid)}` : "";
+    /** Una telemetria en una frase: sedes, respuesta, medidores y alarmas. */
+    const frasaGrupo = (id: string | null, detalle: boolean) => {
+      const sedes = vista.sedes.filter((s) => grupoDe(s.id) === id);
+      if (!sedes.length) return `${nombreGrupo(id)} todavía no tiene sedes.`;
+      const responden = sedes.filter((s) => !s.sin_respuesta).length;
+      const eqs = sedes.flatMap((s) => equipos.get(s.id) ?? []);
+      const ids = new Set(sedes.map((s) => s.id));
+      const al = todas.filter((x) => ids.has(x.sedeId));
+      const crit = al.filter((x) => x.severidad === "critico").length;
+      let f = `${nombreGrupo(id)}: ${plural(sedes.length, "sede", "sedes")}, ${responden} responden, ${eqs.filter((e) => e.ok).length} de ${eqs.length} medidores en línea, ${plural(crit, "crítica", "críticas")} y ${plural(al.length - crit, "advertencia", "advertencias")}.`;
+      if (detalle) {
+        f += ` Sedes: ${sedes.map((s) => s.nombre).join(", ")}.`;
+        const problemas = sedes.filter((s) => s.sin_respuesta || s.nivel !== "ok");
+        if (problemas.length) f += ` Con novedades: ${problemas.map((s) => `${s.nombre} (${NIVEL_TXT[s.nivel] ?? s.nivel})`).join(", ")}.`;
+      }
+      return f;
+    };
     switch (a.tipo) {
+      case "grupo": {
+        if (a.grupoId) {
+          ejecutar({ tipo: "inicio" });
+          const conAlarmas = alarmas.length;
+          return decir(frasaGrupo(a.grupoId, true), conAlarmas ? { label: "Ver sus alarmas", accion: { tipo: "leer_alarmas", sedeId: null, grupoId: a.grupoId } } : undefined);
+        }
+        const ids = [...grupos.map((g) => g.id as string | null), ...(vista.sedes.some((s) => !grupoDe(s.id)) ? [null] : [])];
+        if (!ids.length) return decir("Todavía no hay telemetrías configuradas.");
+        return decir(`Estado por telemetría. ${ids.map((id) => frasaGrupo(id, false)).join(" ")}`);
+      }
       case "saludo": {
         const e = estadoRed();
         return decir(`Hola, soy Gravix. ${e.texto.endsWith("?") ? e.texto : `${e.texto} ¿Qué necesita hacer en el Centro de mando?`}`, e.boton);
       }
       case "ayuda":
         return decir(
-          "Puedo llevarlo a cualquier parte del Centro de mando y decirle cómo está la red. Diga, por ejemplo: «resumen», «abre Escuintla», «cómo está Cobán», «alarmas de Escuintla», «ranking de sedes», «predicción», «abre el TR 1 en tendencias», «modo sala» o «cerrar». Para que lo escuche sin tocar el botón, active la escucha continua y empiece con «Gravix».",
+          "Puedo llevarlo a cualquier parte del Centro de mando y decirle cómo está la red. Diga, por ejemplo: «resumen», «qué alarmas hay», «qué medidores están fuera de línea», «qué sedes no responden», «abre Escuintla», «cómo está Cobán», «alarmas de Escuintla», «ranking de sedes», «predicción», «abre el TR 1 en tendencias», «modo sala» o «cerrar». Para que lo escuche sin tocar el botón, active la escucha continua y empiece con «Gravix».",
         );
       case "resumen": {
         const e = estadoRed();
@@ -277,11 +340,42 @@ export default function Gravix(props: Props) {
       case "contar_alarmas": {
         const lista = a.sedeId ? alarmas.filter((x) => x.sedeId === a.sedeId) : alarmas;
         const crit = lista.filter((x) => x.severidad === "critico").length;
-        const donde = a.sedeId ? ` en ${nombreSede(a.sedeId)}` : " en la red";
+        const donde = a.sedeId ? ` en ${nombreSede(a.sedeId)}` : deGrupo || " en la red";
         if (!lista.length) return decir(`No hay alarmas activas${donde}.`);
         return decir(`Hay ${plural(lista.length, "alarma activa", "alarmas activas")}${donde}: ${plural(crit, "crítica", "críticas")} y ${plural(lista.length - crit, "advertencia", "advertencias")}. ¿Las abro?`, {
           label: "Abrir alertas",
           accion: { tipo: "alertas", sedeId: a.sedeId },
+        });
+      }
+      case "leer_alarmas": {
+        const lista = a.sedeId ? alarmas.filter((x) => x.sedeId === a.sedeId) : alarmas;
+        const donde = a.sedeId ? ` en ${nombreSede(a.sedeId)}` : deGrupo;
+        if (!lista.length) return decir(`No hay alarmas activas${donde}.`);
+        const top = lista.slice(0, 5).map((x, i) => `${i + 1}. ${x.severidad === "critico" ? "Crítica" : "Advertencia"}: ${x.titulo}${x.dispositivo ? ` en ${x.dispositivo}` : ""}${a.sedeId ? "" : `, ${x.sedeNombre}`}.`);
+        const resto = lista.length > 5 ? ` Y ${plural(lista.length - 5, "más", "más")}.` : "";
+        return decir(`Hay ${plural(lista.length, "alarma activa", "alarmas activas")}${donde}. ${top.join(" ")}${resto} ¿Abro el centro de alertas?`, {
+          label: "Abrir alertas",
+          accion: { tipo: "alertas", sedeId: a.sedeId },
+        });
+      }
+      case "fuera_de_linea": {
+        const lista = (a.sedeId ? equipos.get(a.sedeId) ?? [] : [...equipos.values()].flat().filter((e) => enGrupo(e.sedeId))).filter((e) => !e.ok);
+        const donde = a.sedeId ? ` en ${nombreSede(a.sedeId)}` : deGrupo || " en la red";
+        if (!lista.length) return decir(`Todos los medidores${donde} están en línea.`);
+        const nombres = lista.slice(0, 6).map((e) => `${e.nombre}${a.sedeId ? "" : ` de ${e.sedeNombre}`} (${e.estadoTxt.toLowerCase()})`);
+        const resto = lista.length > 6 ? ` y ${plural(lista.length - 6, "otro", "otros")}` : "";
+        const primero = lista[0];
+        return decir(`Hay ${plural(lista.length, "medidor con problema", "medidores con problema")}${donde}: ${nombres.join(", ")}${resto}. ¿Abro ${primero.nombre}?`, {
+          label: `Abrir ${primero.nombre}`,
+          accion: { tipo: "equipo", equipoKey: primero.key, pestana: "equipo" },
+        });
+      }
+      case "sin_respuesta": {
+        const caidas = vista.sedes.filter((s) => s.sin_respuesta && enGrupo(s.id));
+        if (!caidas.length) return decir(gid ? `Todas las sedes${deGrupo} responden.` : `Todas las sedes responden: ${vista.totales.sedes_responden} de ${vista.totales.sedes}.`);
+        return decir(`${plural(caidas.length, "sede no responde", "sedes no responden")}: ${caidas.map((s) => s.nombre).join(", ")}. ¿Abro ${caidas[0].nombre}?`, {
+          label: `Abrir ${caidas[0].nombre}`,
+          accion: { tipo: "sede", sedeId: caidas[0].id, estado: true },
         });
       }
       case "alertas":
@@ -345,9 +439,10 @@ export default function Gravix(props: Props) {
       pendienteRef.current = null;
       return decir("Entendido. Aquí estoy si me necesita.");
     }
-    const { vista, equipos, sedeActual, esAdmin } = p.current;
+    const { vista, equipos, sedeActual, esAdmin, grupos } = p.current;
     responder(
       interpretar(orden, {
+        grupos,
         sedes: vista.sedes.map((s) => ({ id: s.id, nombre: s.nombre })),
         equipos: [...equipos.values()].flat(),
         sedeActual,
@@ -598,6 +693,26 @@ export default function Gravix(props: Props) {
             <label className="flex items-center gap-1.5" title="Escucha siempre y responde cuando la frase empieza con «Gravix»">
               <input type="checkbox" checked={prefs.continua} disabled={sinVoz} onChange={(e) => setPrefs({ continua: e.target.checked })} /> Escucha continua
             </label>
+            {voces.length > 0 && (
+              <div className="flex w-full items-center gap-2 pt-1">
+                <label htmlFor="gx-voz" className="shrink-0">Voz</label>
+                <select
+                  id="gx-voz"
+                  value={vozActual?.name ?? ""}
+                  onChange={(e) => {
+                    setPrefs({ vozNombre: e.target.value || null });
+                    prefsRef.current = { ...prefsRef.current, vozNombre: e.target.value || null };
+                    hablar("Buenos días. Soy Gravix, asistente del Centro de mando.", true);
+                  }}
+                  className="min-h-[30px] min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 text-[11.5px] text-slate-200"
+                >
+                  {[...voces].sort((x, y) => puntaje(y) - puntaje(x)).map((v) => (
+                    <option key={v.name} value={v.name}>{v.name.replace(/^Microsoft\s+/, "").replace(/\s*-\s*Spanish.*$/i, "")} · {v.lang}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => hablar("Buenos días. Soy Gravix, asistente del Centro de mando.", true)} className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800">Probar</button>
+              </div>
+            )}
           </div>
         </section>
       )}

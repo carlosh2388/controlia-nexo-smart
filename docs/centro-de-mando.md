@@ -171,6 +171,15 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
   - "mapa" / "volver", "incidentes", "ranking", "normas", "predicción", "alarmas y correos" (solo
     administradores; al resto Gravix le explica que no tiene acceso).
   - "modo sala", "salir del modo sala", "cerrar", "silencio", "silenciar/activar avisos", "ayuda".
+  - Consultas que lee en voz alta: "¿qué alarmas hay (en Cobán)?", "¿qué medidores están fuera de
+    línea?", "¿qué sedes no responden?".
+  - Telemetrías (grupos de la red): "estado por telemetría" / "cómo están las tres telemetrías"
+    (una frase por telemetría: sedes, cuántas responden, medidores en línea, críticas y advertencias),
+    "cómo está Telemetría 2" (además nombra sus sedes y las que tienen novedades), y las consultas
+    anteriores limitadas a una telemetría: "alarmas de Telemetría 1", "¿cuántas alarmas hay en
+    Telemetría 3?", "medidores fuera de línea en Telemetría 1", "sedes que no responden en Telemetría 2".
+- Voz: elige sola una voz formal en español latino y de tono medio (primero las voces "Natural"
+  de Edge), algo pausada. En el panel se puede elegir otra voz y probarla; queda guardada.
 - Interruptores (se guardan en el navegador): **Voz de Gravix**, **Avisos con sonido** y **Escucha
   continua** (escucha siempre y solo responde cuando la frase empieza con "Gravix"; decir solo
   "Gravix" lo deja atento 8 s para la siguiente frase).
@@ -179,8 +188,20 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
   primer clic en la página.
 - Limitaciones:
   - El **micrófono solo funciona en HTTPS o en localhost**. En `http://192.168.70.4:5173` el
-    navegador lo bloquea; la voz de Gravix, los avisos y la caja de texto sí funcionan. Para hablarle
-    en el servidor hay que publicar la web con HTTPS.
+    navegador lo bloquea; para hablarle se usa **`https://192.168.70.4:5443`**.
+  - HTTPS de la web: el contenedor `web` activa el puerto 443 (publicado como 5443) si
+    `WEB_HTTPS=1` y existe `config/web-tls/web.crt` + `web.key` (fuera de git). Por ese puerto,
+    nginx pasa `/api` y `/ws` a la API (`apps/web/https.conf.tpl`, `apps/web/30-https.sh`), y la web
+    usa la misma dirección de la página en vez de `http://...:3010` (`mismoOrigenSiHttps` en
+    `apps/web/src/api/client.ts`). En 192.168.70.4 el certificado es autofirmado (825 días):
+    ```
+    openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout config/web-tls/web.key \
+      -out config/web-tls/web.crt -subj '/CN=192.168.70.4' \
+      -addext 'subjectAltName=IP:192.168.70.4,DNS:localhost,IP:127.0.0.1'
+    ```
+    La primera vez el navegador avisa que la conexión no es privada: "Configuración avanzada" →
+    "Continuar a 192.168.70.4". Para quitar el aviso, importar `web.crt` como entidad de confianza en
+    cada PC (lo hace el usuario o TI).
   - El reconocimiento de voz es el de Chrome/Edge y necesita internet (el audio lo procesa el
     servicio del navegador). Firefox no lo trae: queda la caja de texto.
 - Fase 2 (pendiente, requiere licencia de la API de Claude y salida a internet del servidor):

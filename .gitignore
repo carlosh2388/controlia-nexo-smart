@@ -9,6 +9,8 @@ build/
 apps/api/uploads/
 # Centro de mando: API keys de las sedes (solo en el servidor)
 config/centro/
+# Certificado HTTPS de la web (llave privada): se genera en cada servidor
+config/web-tls/
 # Gravix de sede: config.yaml completos de agentes (pueden tener claves)
 deploy/gravix-sede/agentes/*.yaml
 # Configuraciones de Telegraf encendidas en cada servidor (en git solo van los .ejemplo)

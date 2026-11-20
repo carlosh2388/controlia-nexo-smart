@@ -688,7 +688,7 @@ export default function CentroMando({ access }: { access: Access }) {
 
       {abierto && <VentanaEquipo key={`${abierto.key}-${tabEquipo}`} equipo={abierto} equiposSede={equipos.get(abierto.sedeId) ?? []} access={access} tabInicial={tabEquipo} onCerrar={cerrarEquipo} />}
       {sala && <SalaControl vista={v} equipos={equipos} onSalir={() => setSala(false)} />}
-      <Gravix vista={v} equipos={equipos} alarmas={activasRed} esAdmin={esAdmin} sedeActual={sede?.id ?? null} ejecutar={ejecutarGravix} />
+      <Gravix vista={v} equipos={equipos} alarmas={activasRed.map((a) => ({ ...a, titulo: EVENTO_TXT[a.evento] ?? a.titulo }))} esAdmin={esAdmin} sedeActual={sede?.id ?? null} grupos={grupos} grupoDe={(id) => grupoDe(id)?.id ?? null} ejecutar={ejecutarGravix} />
 
     </div>
   );

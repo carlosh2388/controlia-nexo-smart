@@ -81,8 +81,15 @@ services:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3010/api/v1}
         VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:3010/ws}
     restart: unless-stopped
+    environment:
+      # HTTPS en el puerto 5443 si hay certificado en config/web-tls (web.crt + web.key, fuera de git).
+      # Hace falta para el microfono del asistente Gravix (el navegador lo bloquea en HTTP).
+      WEB_HTTPS: ${WEB_HTTPS:-1}
     ports:
       - "5173:80"
+      - "${WEB_HTTPS_PORT:-5443}:443"
+    volumes:
+      - ./config/web-tls:/etc/nginx/certs:ro
     depends_on:
       - api
 
