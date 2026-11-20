@@ -4,7 +4,7 @@
  * Solo navega y lee: ninguna accion envia comandos a los equipos.
  */
 
-export type VistaRed = "mapa" | "incidentes" | "ranking" | "normas" | "prediccion" | "alarmas";
+export type VistaRed = "mapa" | "incidentes" | "ranking" | "normas" | "prediccion" | "analitica" | "alarmas";
 export type PestanaEquipo = "equipo" | "tendencias" | "calidad" | "comparativo" | "alarmas" | "bitacora" | "info";
 
 export interface SedeRef {
@@ -255,11 +255,14 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
   if (!sede && /\b(1|alguna|otra|cierta)\s+sede\b/.test(t)) return { tipo: "pedir_sede" };
   if (!grupo && !todasTelemetrias && /\b(1|alguna|otra)\s+telemetria\b|^(ver |consultar |revisar )?(la )?telemetria$/.test(t)) return { tipo: "pedir_telemetria" };
 
+  // Pantalla de analitica (metricas, indicadores): "abre la analitica", "muestrame las metricas".
+  if (tiene(t, "analitica", "metricas", "metrica", "indicadores", "tablero", "estadisticas")) return { tipo: "vista", vista: "analitica" };
+
   // Analitica predictiva y detalle de un hallazgo ("explicame el segundo", "por que el primero").
   // "como estan las sedes y sus tendencias ... ultimas 24 horas" -> resumen de 24 h + lo que puede ocurrir.
   const horas = /\b(\d{1,3})\s*horas?\b/.exec(t)?.[1];
   const ventana = horas ? Number(horas) : tiene(t, "hoy", "ultimo dia", "ayer", "dia de hoy") ? 24 : undefined;
-  if (tiene(t, "falla", "fallas", "fallar", "fallara", "riesgo", "riesgos", "analisis", "analiza", "analizar", "analitica", "mantenimiento", "preocupa", "predice", "predecir", "prediccion de fallas", "que puede pasar", "puede fallar", "tendencia", "tendencias", "ocurrir", "puede ocurrir", "pueden ocurrir", "que va a pasar"))
+  if (tiene(t, "falla", "fallas", "fallar", "fallara", "riesgo", "riesgos", "analisis", "analiza", "analizar", "mantenimiento", "preocupa", "predice", "predecir", "prediccion de fallas", "que puede pasar", "puede fallar", "tendencia", "tendencias", "ocurrir", "puede ocurrir", "pueden ocurrir", "que va a pasar"))
     return { tipo: "riesgos", sedeId, grupoId, ...(ventana ? { horas: ventana } : {}) };
   if (tiene(t, "que paso", "que ha pasado", "que sucedio", "que ocurrio", "novedades de hoy", "resumen de hoy", "como amanecio", "como amanecieron"))
     return { tipo: "riesgos", sedeId, grupoId, horas: ventana ?? 24 };

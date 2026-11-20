@@ -210,6 +210,30 @@ export class AnaliticaService {
     const hallazgos: Hallazgo[] = [];
     const porSedeHuecos = new Map<string, FilaEpisodios>();
 
+    // Voltaje nominal de cada sede: el nominal mas comun entre sus medidores sanos (a menos de 15 %).
+    const nominalSede = new Map<string, number>();
+    {
+      const cerca = (v: number) => NOMINALES.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a));
+      const porMedidor = new Map<string, number[]>();
+      for (const d of dias) {
+        if (d.v == null) continue;
+        const k = `${d.sede}|${d.medidor}`;
+        if (!porMedidor.has(k)) porMedidor.set(k, []);
+        porMedidor.get(k)!.push(d.v);
+      }
+      const votos = new Map<string, Map<number, number>>();
+      for (const [k, vs] of porMedidor) {
+        const med = [...vs].sort((a, b) => a - b)[Math.floor(vs.length / 2)];
+        const nom = cerca(med);
+        if (Math.abs(med - nom) / nom >= 0.15) continue;
+        const sede = k.split("|")[0];
+        if (!votos.has(sede)) votos.set(sede, new Map());
+        const m = votos.get(sede)!;
+        m.set(nom, (m.get(nom) ?? 0) + 1);
+      }
+      for (const [sede, m] of votos) nominalSede.set(sede, [...m.entries()].sort((a, b) => b[1] - a[1])[0][0]);
+    }
+
     for (const e of episodios) {
       const sede = sedes.get(e.sede);
       const eq = equipo(e.sede, e.medidor);
@@ -259,8 +283,12 @@ export class AnaliticaService {
       if (vDias.length >= 3) {
         const vs = vDias.map((d) => d.v as number);
         const mediana = [...vs].sort((a, b) => a - b)[Math.floor(vs.length / 2)];
-        const nominal = NOMINALES.reduce((a, b) => (Math.abs(b - mediana) < Math.abs(a - mediana) ? b : a));
-        if (Math.abs(mediana - nominal) / nominal < 0.15) {
+        const propio = NOMINALES.reduce((a, b) => (Math.abs(b - mediana) < Math.abs(a - mediana) ? b : a));
+        // Si el medidor esta a mas de 15 % de cualquier nominal, se compara con el nominal de su sede:
+        // es un voltaje anomalo (fase caida, fusible de medicion abierto, TP mal configurado).
+        const anomalo = Math.abs(mediana - propio) / propio >= 0.15;
+        const nominal = anomalo ? nominalSede.get(e.sede) ?? propio : propio;
+        {
           const ultimo = vs[vs.length - 1];
           const desv = ((ultimo - nominal) / nominal) * 100;
           const { pendiente, r2 } = regresion(vs);
@@ -269,7 +297,10 @@ export class AnaliticaService {
           const caidasV = vDias.filter((d) => d.vmin != null && (d.vmin as number) < nominal * 0.9).length;
           let nivel: Nivel | null = null;
           let titulo = "";
-          if (Math.abs(desv) >= 5) {
+          if (anomalo && Math.abs(desv) >= 10) {
+            nivel = "alto";
+            titulo = `Voltaje anómalo en ${eq.nombre}`;
+          } else if (Math.abs(desv) >= 5) {
             nivel = "alto";
             titulo = `Voltaje fuera de rango en ${eq.nombre}`;
           } else if (diasLimite != null && diasLimite > 0 && diasLimite <= 14) {
@@ -296,7 +327,9 @@ export class AnaliticaService {
                 (Math.abs(pendiente) > 0.05 ? ` Tendencia: ${pendiente > 0 ? "sube" : "baja"} ${r1(Math.abs(pendiente))} V por día.` : " Sin tendencia marcada.") +
                 (diasLimite != null && diasLimite > 0 && diasLimite <= 30 ? ` A este ritmo saldría de ±5 % en unos ${Math.round(diasLimite)} días.` : "") +
                 (caidasV ? ` ${caidasV} ${caidasV === 1 ? "día tuvo" : "días tuvieron"} caídas por debajo del 90 %.` : ""),
-              recomendacion: "Verificar el tap del transformador y las conexiones de la acometida; si las caídas coinciden con arranques de cargas grandes, revisar su secuencia de arranque.",
+              recomendacion: titulo.startsWith("Voltaje anómalo")
+                ? "Medir en sitio las tres fases en los bornes del medidor: si una fase está baja o en cero, revisar el fusible de medición y la conexión; si las tres están bien, revisar la configuración de transformadores de potencial (TP) del medidor."
+                : "Verificar el tap del transformador y las conexiones de la acometida; si las caídas coinciden con arranques de cargas grandes, revisar su secuencia de arranque.",
               serie: { etiqueta: "Voltaje promedio por día", dias: vDias.map((d) => etiqueta(d.dia)), valores: vs.map(r1), unidad: "V" },
             });
           }
@@ -436,6 +469,36 @@ export class AnaliticaService {
     const ordenNivel = { critico: 0, advertencia: 1, estable: 2 };
     sedes24h.sort((a, b) => ordenNivel[a.nivel] - ordenNivel[b.nivel]);
 
+    /* ---- metricas diarias por sede (pestaña Analitica) ---- */
+    const diasClave = [...new Set(dias.map((d) => new Date(d.dia).getTime()))].sort((a, b) => a - b);
+    const metricas = {
+      dias: diasClave.map((t) => new Date(t).toISOString()),
+      sedes: [...sedes.values()].map((s) => {
+        const filas = dias.filter((d) => d.sede === s.id && equipo(d.sede, d.medidor));
+        // Consumo: analizadores ION7400 de la sede (si no tiene, todos sus medidores).
+        const esIon = (d: FilaDia) => /ion/i.test(d.medidor) || /ion/i.test(equipo(d.sede, d.medidor)?.nombre ?? "");
+        const base = filas.some(esIon) ? filas.filter(esIon) : filas;
+        const porDia = (t: number, xs: FilaDia[]) => xs.filter((d) => new Date(d.dia).getTime() === t);
+        const suma = (xs: (number | null)[]) => (xs.some((x) => x != null) ? xs.reduce<number>((a, x) => a + (x ?? 0), 0) : null);
+        const prom = (xs: (number | null)[]) => {
+          const v = xs.filter((x): x is number => x != null);
+          return v.length ? v.reduce((a, x) => a + x, 0) / v.length : null;
+        };
+        const red = (x: number | null) => (x == null ? null : r1(x));
+        return {
+          sedeId: s.id,
+          sedeNombre: s.nombre,
+          kwProm: diasClave.map((t) => red(suma(porDia(t, base).map((d) => d.kw)))),
+          kwMax: diasClave.map((t) => red(suma(porDia(t, base).map((d) => d.kwmax)))),
+          vProm: diasClave.map((t) => red(prom(porDia(t, filas).map((d) => d.v)))),
+          minSinDatos: diasClave.map((t) => {
+            const xs = porDia(t, filas);
+            return xs.length ? xs.reduce((a, d) => a + d.min_caido, 0) : null;
+          }),
+        };
+      }),
+    };
+
     const historia = episodios.length ? new Date(Math.min(...episodios.map((e) => new Date(e.desde).getTime()))) : null;
     return {
       generado: new Date(at).toISOString(),
@@ -448,6 +511,7 @@ export class AnaliticaService {
       },
       hallazgos,
       sedes24h,
+      metricas,
     };
   }
 }

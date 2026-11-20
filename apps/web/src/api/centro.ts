@@ -178,6 +178,7 @@ export interface CentroAnalitica {
   resumen: { alto: number; medio: number; bajo: number };
   hallazgos: HallazgoRiesgo[];
   sedes24h: Sede24h[];
+  metricas: { dias: string[]; sedes: MetricasSede[] };
 }
 
 /** Riesgos calculados en el servidor con el historial de centro_lecturas (se recalcula cada 10 min). */
@@ -202,4 +203,17 @@ export interface Sede24h {
   advertencias: number;
   cambioConsumo: number | null;
   riesgo: { titulo: string; nivel: NivelRiesgo; probabilidad: number | null } | null;
+}
+/** Metricas diarias por sede (ultimos 14 dias) para la pestaña Analitica. */
+export interface MetricasSede {
+  sedeId: string;
+  sedeNombre: string;
+  /** Demanda promedio del dia (suma de los analizadores ION7400; sin ION, de sus medidores), kW. */
+  kwProm: (number | null)[];
+  /** Demanda maxima del dia (suma de los maximos de esos medidores), kW. */
+  kwMax: (number | null)[];
+  /** Voltaje promedio L-N del dia, V. */
+  vProm: (number | null)[];
+  /** Minutos sin datos de sus medidores (fuera de linea / voltaje en cero). */
+  minSinDatos: (number | null)[];
 }

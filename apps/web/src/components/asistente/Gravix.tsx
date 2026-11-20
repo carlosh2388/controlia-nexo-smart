@@ -177,6 +177,7 @@ const VISTA_TXT: Record<VistaRed, string> = {
   ranking: "el ranking de sedes",
   normas: "normas y cumplimiento",
   prediccion: "la predicción",
+  analitica: "la analítica: métricas por sede, últimas 24 horas y riesgos",
   alarmas: "alarmas y correos",
 };
 const PESTANA_TXT: Record<PestanaEquipo, string> = {
@@ -1280,7 +1281,7 @@ export default function Gravix(props: Props) {
 }
 
 /** Tarjeta de un riesgo: nivel, probabilidad, mini grafica de los ultimos dias y acciones. */
-function TarjetaRiesgo({ h, n, onAbrir, onDetalle }: { h: HallazgoRiesgo; n: number; onAbrir: () => void; onDetalle: () => void }) {
+export function TarjetaRiesgo({ h, n, onAbrir, onDetalle }: { h: HallazgoRiesgo; n: number; onAbrir: () => void; onDetalle: () => void }) {
   const color = NIVEL_COLOR[h.nivel];
   const vals = h.serie?.valores ?? [];
   const nums = vals.filter((v): v is number => v != null);

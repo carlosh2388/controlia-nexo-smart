@@ -281,7 +281,11 @@ Se restauró la versión con la API de Claude (antes 4207efb, revertida en 6b80e
     últimos 3 días falló más seguido). Con menos de 15 min sin datos en total son "cortes breves" y
     el riesgo no pasa de medio.
   - Voltaje: desviación contra el nominal deducido (120/127/208/220/230/240/277/480 V), tendencia
-    diaria y días estimados para salir de ±5 %; días con caídas por debajo del 90 %.
+    diaria y días estimados para salir de ±5 %; días con caídas por debajo del 90 %. Un medidor a
+    más de 15 % de cualquier nominal se compara con el nominal de su sede (el más común entre sus
+    medidores sanos) y, con 10 % o más de diferencia, es **"Voltaje anómalo"** (riesgo alto: fase
+    caída, fusible de medición abierto o TP mal configurado). El 20/11/2026 marcó PM2130-1 (88 V) y
+    PM2130-2 (97 V) de Amatitlán y PM2130-1 y PM2130-7 de Escuintla (83 V contra 127 V).
   - Carga: demanda máxima diaria, crecimiento entre la primera y la segunda mitad del periodo y pico
     proyectado a 7 días (riesgo alto solo con 8 días o más de datos).
   - Comunicación con la sede (huecos de más de 5 min), lecturas congeladas y arranques de generador.
@@ -290,6 +294,15 @@ Se restauró la versión con la API de Claude (antes 4207efb, revertida en 6b80e
     riesgo; "crítico" solo por lo ocurrido en esas 24 h. Los vigilantes desconectados cuentan como
     advertencia, igual que en la pantalla.
   - Es una estimación estadística con pocos días de historia: orienta el mantenimiento, no lo reemplaza.
+  - `metricas`: por sede y por día (14 días) demanda promedio y máxima (suma de sus ION7400, o de sus
+    medidores si no tiene ION), voltaje promedio y minutos sin datos.
+- **Pestaña "Analítica"** del Centro de mando (`components/centro/Analitica.tsx`), junto a Predicción:
+  filtro por telemetría; indicadores (equipos analizados, riesgos altos/medios/bajos, sedes con
+  novedades en 24 h); **métricas por sede de los últimos 14 días** (demanda promedio, demanda máxima,
+  voltaje promedio, minutos sin datos) en gráficas pequeñas, una por sede con la misma escala de
+  tiempo, valor de hoy y cambio contra el promedio, o en tabla; **últimas 24 horas por sede**; y
+  **riesgos de los próximos 7 días** con filtros de nivel y tipo, detalle y "Ver equipo". Gravix la
+  abre con "abre la analítica", "muéstrame las métricas" o "indicadores".
 - En Gravix: "¿qué puede fallar?", "análisis de Telemetría 1", "¿qué puede fallar en Gineco?",
   "¿cómo están las sedes y sus tendencias en las últimas 24 horas?", "¿qué pasó hoy?"; muestra
   tarjetas de riesgo (nivel, probabilidad, mini gráfica de los últimos días, "¿Por qué?" y "Ver
