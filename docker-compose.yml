@@ -61,6 +61,11 @@ services:
       CENTRAL_URL: ${CENTRAL_URL:-}
       CENTRAL_CLAVE: ${CENTRAL_CLAVE:-}
       CENTRAL_SEDES_FILE: /app/config/centro/sedes.json
+      # Gravix IA (opcional, de pago por uso): preguntas libres de solo lectura con la API de Claude.
+      # Vacio = Gravix solo con su analitica propia. La clave va solo en el .env del servidor.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ASISTENTE_MODELO: ${ASISTENTE_MODELO:-claude-opus-5-5}
+      ASISTENTE_ESFUERZO: ${ASISTENTE_ESFUERZO:-medium}
     ports:
       - "3010:3000"
     extra_hosts:

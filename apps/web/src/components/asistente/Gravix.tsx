@@ -1,7 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import { useCentroAnalitica, type CentroAnalitica, type CentroVista, type HallazgoRiesgo } from "../../api/centro";
-import { buscarEquipo, interpretar, MENU, normalizar, PESTANA_NOMBRE, quitarDespertar, usaContexto, type Accion, type Pestana, type PestanaEquipo, type VistaRed } from "./comandos";
+import { buscarEquipo, buscarSede, interpretar, MENU, normalizar, PESTANA_NOMBRE, quitarDespertar, usaContexto, type Accion, type Pestana, type PestanaEquipo, type VistaRed } from "./comandos";
 import { useAuthStore } from "../../store/auth.store";
+import { apiClient } from "../../api/client";
+
+/** Pantalla que pide Gravix IA (por nombres; la web la resuelve a sus ids). */
+interface AccionIA {
+  destino: "inicio" | "vista" | "sede" | "equipo" | "alertas" | "aplicacion";
+  vista?: string;
+  sede?: string;
+  equipo?: string;
+  pestana?: string;
+  aplicacion?: string;
+}
+const APP_A_PESTANA: Record<string, Pestana> = {
+  centro: "centro",
+  operativa: "classic",
+  edificio: "building",
+  gestion: "automations",
+  sedes: "sedes",
+  equipos: "equipos",
+  piloto: "gravix",
+  usuarios: "usuarios",
+};
+/** Preguntas que la analitica propia no responde (por que, comparaciones, periodos...): con IA activa van a Claude. */
+const COMPLEJA =
+  /\b(por que|porque|compara|comparar|comparacion|comparado|diferencia|cuando|semana pasada|mes pasado|ayer|anoche|promedio|maximo|minimo|pico|historial|historico|evolucion|explica por que|cuanto subio|cuanto bajo|cual fue|cuales fueron|desde)\b/;
+/** Ordenes que siempre se resuelven aqui (rapido y sin costo), aunque la IA este activa. */
+const SIEMPRE_LOCAL = new Set<Accion["tipo"]>(["detalle", "pestana", "sede", "equipo", "alertas", "vista", "inicio", "sala", "cerrar", "callar", "avisos", "gracias", "adios", "menu", "saludo", "pedir_sede", "pedir_telemetria"]);
 import "./gravix-asistente.css";
 
 /**
@@ -94,6 +120,8 @@ interface Prefs {
   continua: boolean;
   /** Nombre de la voz elegida (null = la recomendada). */
   vozNombre: string | null;
+  /** Usar Gravix IA (Claude) cuando el servidor la tiene activada; false = solo analitica propia. */
+  ia: boolean;
 }
 
 /* ---------- reconocimiento de voz del navegador (tipos minimos) ---------- */
@@ -126,7 +154,7 @@ const Reconocimiento: ConstructorReconocedor | undefined =
 const IDIOMA = typeof navigator !== "undefined" && navigator.language?.toLowerCase().startsWith("es") ? navigator.language : "es-MX";
 
 const PREFS_KEY = "gravix.prefs";
-const PREFS_INI: Prefs = { voz: true, avisos: true, continua: false, vozNombre: null };
+const PREFS_INI: Prefs = { voz: true, avisos: true, continua: false, vozNombre: null, ia: true };
 function leerPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -248,6 +276,8 @@ export default function Gravix(props: Props) {
   const conv = useRef<Conversacion>({ sedeId: null, grupoId: null, esperando: null });
   const usuario = useAuthStore((s) => s.user?.username);
 
+  const mensajesRef = useRef(mensajes);
+  mensajesRef.current = mensajes;
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   const idRef = useRef(0);
@@ -775,7 +805,87 @@ export default function Gravix(props: Props) {
       } else if (accion.tipo === "resumen" && c.sedeId) accion = { tipo: "sede", sedeId: c.sedeId, estado: true };
       else if (accion.tipo === "resumen" && c.grupoId) accion = { tipo: "grupo", grupoId: c.grupoId };
     }
+    // Con Gravix IA activa: lo que no entiende, o las preguntas que piden razonar (por que, comparar,
+    // periodos), van a Claude; abrir pantallas y las consultas conocidas siguen aqui, sin costo.
+    if (iaRef.current && prefsRef.current.ia && (accion.tipo === "desconocido" || (COMPLEJA.test(n) && !SIEMPRE_LOCAL.has(accion.tipo)))) {
+      void preguntarIA(orden);
+      return;
+    }
     responder(accion);
+  };
+
+  /* ---------- Gravix IA (opcional: solo con clave en el servidor y el interruptor "Usar IA") ---------- */
+  const [iaDisponible, setIaDisponible] = useState(false);
+  const iaRef = useRef(false);
+  iaRef.current = iaDisponible;
+  const [pensando, setPensando] = useState(false);
+  useEffect(() => {
+    let vivo = true;
+    apiClient
+      .get<{ disponible: boolean }>("/asistente/estado")
+      .then((r) => vivo && setIaDisponible(!!r.data?.disponible))
+      .catch(() => vivo && setIaDisponible(false));
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  /** Convierte la pantalla pedida por Gravix IA (por nombres) en una accion de la web. */
+  const accionDeIA = (a: AccionIA): Accion | null => {
+    const { vista, equipos } = p.current;
+    const sedes = vista.sedes.map((s) => ({ id: s.id, nombre: s.nombre }));
+    const sede = a.sede ? sedes.find((s) => s.id === a.sede) ?? buscarSede(normalizar(a.sede), sedes) : null;
+    switch (a.destino) {
+      case "aplicacion":
+        return a.aplicacion && APP_A_PESTANA[a.aplicacion] ? { tipo: "pestana", pestana: APP_A_PESTANA[a.aplicacion] } : null;
+      case "inicio":
+        return { tipo: "inicio" };
+      case "vista":
+        return a.vista && a.vista !== "mapa" ? { tipo: "vista", vista: a.vista as VistaRed } : { tipo: "inicio" };
+      case "alertas":
+        return { tipo: "alertas", sedeId: sede?.id ?? null };
+      case "sede":
+        return sede ? { tipo: "sede", sedeId: sede.id, estado: false } : null;
+      case "equipo": {
+        if (!a.equipo) return sede ? { tipo: "sede", sedeId: sede.id, estado: false } : null;
+        const lista = sede ? equipos.get(sede.id) ?? [] : [...equipos.values()].flat();
+        const e = buscarEquipo(normalizar(a.equipo), lista);
+        if (!e) return sede ? { tipo: "sede", sedeId: sede.id, estado: false } : null;
+        return { tipo: "equipo", equipoKey: e.key, pestana: (a.pestana as PestanaEquipo) ?? "equipo" };
+      }
+    }
+    return null;
+  };
+
+  const preguntarIA = async (pregunta: string) => {
+    setPensando(true);
+    pendienteRef.current = null;
+    // Turnos anteriores en texto (la pregunta actual va aparte; el estado aun no la incluye).
+    const historial = mensajesRef.current.slice(-8).map((m) => ({ rol: m.de === "yo" ? ("usuario" as const) : ("gravix" as const), texto: m.texto.slice(0, 3900) }));
+    try {
+      const { data } = await apiClient.post<{ respuesta: string; acciones: AccionIA[] }>(
+        "/asistente/preguntar",
+        { pregunta, historial, sedeActual: p.current.sedeActual ?? undefined },
+        { timeout: 180_000 },
+      );
+      for (const a of data.acciones ?? []) {
+        const nav = accionDeIA(a);
+        if (!nav) continue;
+        if (nav.tipo === "pestana") {
+          if (p.current.pestanas.includes(nav.pestana)) p.current.irPestana(nav.pestana);
+        } else p.current.ejecutar(nav);
+        minimizar.current = true;
+      }
+      decir(data.respuesta, undefined, MENU);
+    } catch (e) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      if (status === 503) {
+        setIaDisponible(false);
+        decir("Gravix IA no está activada en el servidor. Sigo con mi análisis propio: pida «menú» para ver lo que puedo hacer.", undefined, MENU);
+      } else decir("No pude completar la consulta con la IA en este momento. Intente de nuevo, o desactive «Usar IA» para trabajar solo con el análisis propio.", undefined, MENU);
+    } finally {
+      setPensando(false);
+    }
   };
   const procesarRef = useRef(procesar);
   procesarRef.current = procesar;
@@ -1029,8 +1139,12 @@ export default function Gravix(props: Props) {
           <header className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
             <span className={`gx-orbe gx-orbe-mini ${estadoOrbe}`} aria-hidden="true" />
             <div className="min-w-0 flex-1">
-              <strong className="block text-sm tracking-wide text-slate-50">GRAVIX</strong>
+              <strong className="flex items-center gap-1.5 text-sm tracking-wide text-slate-50">
+                GRAVIX
+                {iaDisponible && prefs.ia && <span title="Preguntas libres con IA (Claude) activadas" className="rounded bg-sky-900 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-sky-200">IA</span>}
+              </strong>
               <span className="text-[11px] text-slate-400">
+                {pensando && "Consultando los datos… "}
                 {escuchando
                   ? prefs.continua
                     ? "Escucha continua · diga «Gravix…»"
@@ -1069,6 +1183,7 @@ export default function Gravix(props: Props) {
               </div>
             ))}
             {parcial && <div className="gx-msg gx-yo opacity-60"><p>{parcial}…</p></div>}
+            {pensando && <div className="gx-msg gx-el"><p className="gx-pensando">Consultando con la IA<span>.</span><span>.</span><span>.</span></p></div>}
           </div>
 
           {/* Atajos en una sola fila desplazable: la conversacion conserva el espacio. */}
@@ -1120,6 +1235,19 @@ export default function Gravix(props: Props) {
             <label className="flex items-center gap-1.5" title="Escucha siempre y responde cuando la frase empieza con «Gravix»">
               <input type="checkbox" checked={prefs.continua} disabled={sinVoz} onChange={(e) => setPrefs({ continua: e.target.checked })} /> Escucha continua
             </label>
+            {iaDisponible && (
+              <label className="flex items-center gap-1.5" title="Desactivado: Gravix trabaja solo con su análisis propio, sin enviar datos fuera ni costo">
+                <input
+                  type="checkbox"
+                  checked={prefs.ia}
+                  onChange={(e) => {
+                    setPrefs({ ia: e.target.checked });
+                    decir(e.target.checked ? "IA activada: las preguntas libres se responderán con Claude." : "IA desactivada: trabajo solo con mi análisis propio, sin enviar datos fuera.", undefined, MENU);
+                  }}
+                />{" "}
+                Usar IA
+              </label>
+            )}
             {voces.length > 0 && (
               <div className="flex w-full items-center gap-2 pt-1">
                 <label htmlFor="gx-voz" className="shrink-0">Voz</label>

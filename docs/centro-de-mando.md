@@ -211,9 +211,32 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
     (`web.key`) nunca se publica.
   - El reconocimiento de voz es el de Chrome/Edge y necesita internet (el audio lo procesa el
     servicio del navegador). Firefox no lo trae: queda la caja de texto.
-- Sin IA ni licencias (decisión del 20/11/2026): se probó una versión con la API de Claude (commit
-  4207efb) y se revirtió (6b80e5a) porque requiere licencia de pago. Gravix funciona solo con sus
-  reglas y los datos que ya tiene la pantalla.
+- Base sin IA ni licencias: Gravix funciona con sus reglas, la analítica propia y los datos de la
+  pantalla. La IA (Claude) es **opcional** y está apagada mientras el servidor no tenga clave
+  (ver "Gravix IA opcional" más abajo).
+
+### Gravix IA opcional (Claude, de pago por uso) (20/11/2026)
+
+Se restauró la versión con la API de Claude (antes 4207efb, revertida en 6b80e5a), ahora como
+**complemento opcional**: no cambia nada mientras el servidor no tenga clave.
+
+- Encender: agregar `ANTHROPIC_API_KEY=sk-ant-...` al `.env` de `~/siasa-iot-platform` (lo hace el
+  responsable; la clave nunca va en git, en el chat ni en la web) y `docker compose up -d --no-deps api`.
+  Usar una clave solo para Gravix, creada en la consola de Anthropic, con límite de gasto mensual.
+- Apagar para todos: borrar la clave del `.env` y recrear la API. Apagar para un usuario: en el panel,
+  interruptor **"Usar IA"** (se guarda en su navegador); desactivado, Gravix queda como sin IA.
+- Qué va a la IA: solo lo que la analítica propia no responde (frases que no entiende, o que piden
+  "por qué", comparar, periodos como "ayer" / "semana pasada", promedios o máximos). Abrir pantallas,
+  pestañas, sedes, equipos, alarmas, consumo, riesgos y el detalle de un riesgo se siguen
+  resolviendo en el navegador, sin costo.
+- API: `apps/api/src/asistente/` (solo servidor central). `GET /asistente/estado` (`{ disponible }`)
+  y `POST /asistente/preguntar`. Claude (`claude-opus-5-5`, esfuerzo `medium`, respaldo automático del
+  servidor de Anthropic si rechaza) con herramientas de **solo lectura** que llaman a esta misma API
+  **con el token del usuario** (ve solo sus sedes): `red_resumen`, `analitica_riesgos`,
+  `centro_eventos`, `centro_historial_medidor`, `piloto_*`, `normas`, `eventos_sede` y `navegar`
+  (pantallas del centro y pestañas de la aplicación). Máximo 8 vueltas por pregunta.
+- Qué sale del servidor: la pregunta y los datos de energía que las herramientas consultan (sin datos
+  de pacientes, contraseñas ni claves). Confirmar con el IGSS que se permite antes de encenderla.
 
 ### Conversación (20/11/2026)
 
