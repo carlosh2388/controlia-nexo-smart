@@ -1,0 +1,249 @@
+# Tablero "Consumo Gravix de sede" para la web de InfluxDB (datos de Telegraf, bucket "monitoreo").
+# Se instala una vez:  docker compose exec -T influxdb influx apply -o <org> -t <token> --force yes -f - < tablero-consumo.yml
+# Memoria "real" = campo "usage" de Telegraf: uso del contenedor sin la cache de archivos inactiva
+# (la que el sistema libera cuando otro programa la necesita); es la misma cifra que "docker stats".
+apiVersion: influxdata.com/v2alpha1
+kind: Dashboard
+metadata:
+  name: consumo-gravix-sede
+spec:
+  name: Consumo Gravix de sede
+  description: Memoria, CPU y disco de TimescaleDB, InfluxDB y los demas contenedores del Gravix de sede.
+  charts:
+    - kind: Single_Stat
+      name: RAM TimescaleDB ahora
+      xPos: 0
+      yPos: 0
+      width: 3
+      height: 2
+      suffix: " MB"
+      decimalPlaces: 0
+      colors:
+        - name: base
+          type: text
+          hex: "#22ADF6"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: -5m)
+              |> filter(fn: (r) => r._measurement == "docker_container_mem" and r["com.docker.compose.service"] == "db" and r._field == "usage")
+              |> last()
+              |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) / 1048576.0}))
+    - kind: Single_Stat
+      name: RAM InfluxDB ahora
+      xPos: 3
+      yPos: 0
+      width: 3
+      height: 2
+      suffix: " MB"
+      decimalPlaces: 0
+      colors:
+        - name: base
+          type: text
+          hex: "#9394FF"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: -5m)
+              |> filter(fn: (r) => r._measurement == "docker_container_mem" and r["com.docker.compose.service"] == "influxdb" and r._field == "usage")
+              |> last()
+              |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) / 1048576.0}))
+    - kind: Single_Stat
+      name: Disco TimescaleDB
+      xPos: 6
+      yPos: 0
+      width: 3
+      height: 2
+      suffix: " GB"
+      decimalPlaces: 2
+      colors:
+        - name: base
+          type: text
+          hex: "#22ADF6"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: -30m)
+              |> filter(fn: (r) => r._measurement == "timescaledb" and r._field == "base_bytes")
+              |> last()
+              |> map(fn: (r) => ({r with _value: float(v: r._value) / 1073741824.0}))
+    - kind: Single_Stat
+      name: Disco InfluxDB
+      xPos: 9
+      yPos: 0
+      width: 3
+      height: 2
+      suffix: " MB"
+      decimalPlaces: 1
+      colors:
+        - name: base
+          type: text
+          hex: "#9394FF"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: -30m)
+              |> filter(fn: (r) => r._measurement == "influxdb_interno" and r._field == "storage_shard_disk_size")
+              |> last()
+              |> group()
+              |> sum()
+              |> map(fn: (r) => ({r with _value: float(v: r._value) / 1048576.0}))
+    - kind: Xy
+      name: Memoria real (MB) - TimescaleDB vs InfluxDB
+      xPos: 0
+      yPos: 2
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "docker_container_mem" and (r["com.docker.compose.service"] == "db" or r["com.docker.compose.service"] == "influxdb") and r._field == "usage")
+              |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+              |> map(fn: (r) => ({_time: r._time, base: if r["com.docker.compose.service"] == "db" then "TimescaleDB" else "InfluxDB", _value: float(v: r._value) / 1048576.0}))
+              |> group(columns: ["base"])
+    - kind: Xy
+      name: CPU (%) - TimescaleDB vs InfluxDB
+      xPos: 6
+      yPos: 2
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: "% de un nucleo"
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "docker_container_cpu" and r._field == "usage_percent" and r.cpu == "cpu-total" and (r["com.docker.compose.service"] == "db" or r["com.docker.compose.service"] == "influxdb"))
+              |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+              |> map(fn: (r) => ({_time: r._time, _value: r._value, base: if r["com.docker.compose.service"] == "db" then "TimescaleDB" else "InfluxDB"}))
+              |> group(columns: ["base"])
+    - kind: Xy
+      name: Tamano TimescaleDB (GB)
+      xPos: 0
+      yPos: 6
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: GB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#4ED8A0"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "timescaledb" and (r._field == "base_bytes" or r._field == "readings_bytes" or r._field == "sensores_bytes"))
+              |> map(fn: (r) => ({r with _value: float(v: r._value) / 1073741824.0}))
+    - kind: Xy
+      name: Tamano InfluxDB (MB)
+      xPos: 6
+      yPos: 6
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#9394FF"
+        - name: c2
+          type: scale
+          hex: "#22ADF6"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "influxdb_interno" and r._field == "storage_shard_disk_size")
+              |> group(columns: ["_time"])
+              |> sum()
+              |> group()
+              |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) / 1048576.0, _field: "disco"}))
+    - kind: Xy
+      name: Memoria real de todos los contenedores (MB)
+      xPos: 0
+      yPos: 10
+      width: 12
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#31C0F6"
+        - name: c2
+          type: scale
+          hex: "#A500A5"
+        - name: c3
+          type: scale
+          hex: "#FF7E27"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "docker_container_mem" and r._field == "usage")
+              |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+              |> map(fn: (r) => ({_time: r._time, servicio: r["com.docker.compose.service"], _value: float(v: r._value) / 1048576.0}))
+              |> group(columns: ["servicio"])

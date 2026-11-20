@@ -62,5 +62,7 @@ INFLUX_BUCKET=telemetry
 INFLUX_RETENTION=0
 INFLUX_ADMIN_PASSWORD=$(clave | cut -c1-16)
 INFLUX_TOKEN=$(clave)$(clave)
+# Grupo del socket de Docker (lo usa Telegraf para medir el consumo de los contenedores).
+DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 999)
 EOF
 echo ".env creado para ${1}. Web de Gravix e InfluxDB: usuario admin (claves en ADMIN_PASSWORD e INFLUX_ADMIN_PASSWORD del .env)."

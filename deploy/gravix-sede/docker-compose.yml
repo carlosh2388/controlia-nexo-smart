@@ -149,6 +149,24 @@ services:
       - gravix
     logging: *logging
 
+  # Consumo de la sede (memoria, CPU y disco de cada contenedor, tamano de TimescaleDB e InfluxDB) en el
+  # bucket "monitoreo" del InfluxDB de la sede. Tablero: web de InfluxDB -> Dashboards -> "Consumo Gravix de sede".
+  telegraf:
+    image: telegraf:1.32
+    restart: unless-stopped
+    user: "telegraf:${DOCKER_GID:-999}"
+    environment:
+      INFLUX_TOKEN: ${INFLUX_TOKEN}
+      INFLUX_ORG: ${INFLUX_ORG}
+      DB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - influxdb
+      - db
+    logging: *logging
+
   # Segundo agente (opcional, COMPOSE_PROFILES=agente2 en el .env). La meta es UN solo recolector por
   # sede; esto es para la transicion de una sede que ya tenia dos agentes (ej. Escuintla: general + directo).
   agente2:

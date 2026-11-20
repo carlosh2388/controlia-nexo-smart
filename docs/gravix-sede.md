@@ -361,6 +361,44 @@ Probado el 19/11 con un simulador de 23 casos:
 - formato de los eventos;
 - ningún correo enviado.
 
+## 7c. Consumo de la sede: TimescaleDB e InfluxDB (20/11)
+
+**Cómo verlo siempre:**
+- Abrir la **web del InfluxDB de la sede** → *Dashboards* → **"Consumo Gravix de sede"**. En prueba es
+  `http://192.168.70.4:8186`, usuario `admin`, con la clave `INFLUX_ADMIN_PASSWORD` del `.env`.
+- Arriba a la derecha se elige el periodo (1 h, 24 h, 7 días…) y la actualización automática.
+
+**Cómo funciona:**
+- El servicio `telegraf` del compose (`telegraf.conf`) guarda cada 10 s la memoria, CPU, red y disco
+  de cada contenedor. Cada 5 min guarda también el tamaño de TimescaleDB (total, lecturas de energía,
+  historial de sensores, chunks comprimidos, conexiones, caché) y el de InfluxDB.
+- Todo va al bucket **`monitoreo`**, que se conserva 30 días.
+- Telegraf solo lee: el socket de Docker va en solo lectura y a Postgres entra con su usuario. Consume unos 30 MB de RAM.
+
+**Gráficas del tablero** (`tablero-consumo.yml`, se instala con `influx apply`):
+- RAM y disco actuales de cada base;
+- memoria real y CPU de TimescaleDB contra InfluxDB;
+- tamaño de TimescaleDB (total, energía, sensores);
+- tamaño de InfluxDB;
+- memoria de todos los contenedores.
+
+**Medición del 20/11** (Escuintla, 28 medidores + 122 sensores, muestreo de 60 s):
+
+| | TimescaleDB | InfluxDB |
+| --- | --- | --- |
+| RAM real (la de `docker stats`) | **~390 MB** (máx. 398) | **~90–105 MB** |
+| De esa RAM, memoria del proceso | 51 MB (más la caché activa de Postgres) | 84 MB |
+| Caché de archivos del sistema (se libera si otro programa la necesita) | 5.5 GB | 29 MB |
+| CPU (de un núcleo) | promedio 1.8 %, máximo 5.3 % | promedio 0.07 %, máximo 0.4 % |
+| Disco | **13.0 GB**: 7.2 GB de energía (10 de 18 chunks ya comprimidos) y 5.8 GB del historial de sensores | **34 MB** (unas 21 h de copia, solo energía) |
+| Escritura | ~2 360 lecturas de energía por minuto | ~73 000 puntos por día |
+| Configuración de memoria | `shared_buffers` 128 MB (el valor de fábrica), `work_mem` 4 MB, 11 conexiones, caché 97.4 % | Sin límite |
+
+**Notas:**
+- Ningún contenedor tiene límite de memoria. En una VM de 4 GB conviene poner límites, por ejemplo
+  TimescaleDB 1.5 GB e InfluxDB 512 MB, y subir `shared_buffers` a unos 512 MB.
+- La caché de 5.5 GB no es consumo real: es memoria libre que Linux usa como caché de disco.
+
 ## 8. Control de claves desde el Centro de mando
 
 Cada sede tiene sus propias claves y **el inventario completo se lleva en el Centro de mando**:
