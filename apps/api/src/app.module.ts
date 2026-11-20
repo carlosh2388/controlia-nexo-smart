@@ -22,6 +22,7 @@ import { AgentsModule } from "./agents/agents.module";
 import { AccessModule } from "./access/access.module";
 import { CentroModule } from "./centro/centro.module";
 import { RedModule } from "./red/red.module";
+import { AsistenteModule } from "./asistente/asistente.module";
 import { SedeModule } from "./sede/sede.module";
 
 /**
@@ -30,7 +31,7 @@ import { SedeModule } from "./sede/sede.module";
  * alarmas y la API /sede que consulta el Centro de mando. Ver docs/gravix-sede.md.
  */
 const MODO_SEDE = process.env.GRAVIX_MODO === "sede";
-const SOLO_CENTRAL = [EwelinkModule, BacnetModule, AutomationsModule, AreasModule, CentroModule, RedModule];
+const SOLO_CENTRAL = [EwelinkModule, BacnetModule, AutomationsModule, AreasModule, CentroModule, RedModule, AsistenteModule];
 
 @Module({
   imports: [

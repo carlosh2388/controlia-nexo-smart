@@ -1,6 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import type { CentroVista } from "../../api/centro";
-import { interpretar, normalizar, quitarDespertar, SUGERENCIAS, type Accion, type PestanaEquipo, type VistaRed } from "./comandos";
+import { buscarEquipo, buscarSede, interpretar, normalizar, quitarDespertar, SUGERENCIAS, type Accion, type PestanaEquipo, type VistaRed } from "./comandos";
+import { apiClient } from "../../api/client";
+
+/** Pantalla que pide Gravix IA (por nombres; la web la resuelve a sus ids). */
+interface AccionIA {
+  destino: "inicio" | "vista" | "sede" | "equipo" | "alertas";
+  vista?: string;
+  sede?: string;
+  equipo?: string;
+  pestana?: string;
+}
+
+/** Preguntas de analisis (consumo, historial, comparaciones, por que...): con IA activada van a Gravix IA. */
+const ANALITICA =
+  /\b(mes|semana|semanas|ayer|anoche|hoy|horas?|dias?|historial|historico|consumo|consumio|consume|kw|kwh|potencia|voltaje|tension|corriente|promedio|maximo|minimo|pico|compara|comparar|comparacion|por que|porque|cuando|tendencia|energia|factor|thd|armonicos|frecuencia|explica|explicame|analiza|analisis|cuanto|cuanta|mayor|menor|peor|mejor|mas|menos|ultimo|ultima|ultimos|ultimas)\b/;
+const esAnalitica = (n: string) => ANALITICA.test(n);
 import "./gravix-asistente.css";
 
 /**
@@ -197,6 +212,8 @@ export default function Gravix(props: Props) {
   const [errorMic, setErrorMic] = useState<string | null>(null);
   const [globo, setGlobo] = useState<{ texto: string; accion: Accion } | null>(null);
 
+  const mensajesRef = useRef(mensajes);
+  mensajesRef.current = mensajes;
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   const idRef = useRef(0);
@@ -440,15 +457,86 @@ export default function Gravix(props: Props) {
       return decir("Entendido. Aquí estoy si me necesita.");
     }
     const { vista, equipos, sedeActual, esAdmin, grupos } = p.current;
-    responder(
-      interpretar(orden, {
-        grupos,
-        sedes: vista.sedes.map((s) => ({ id: s.id, nombre: s.nombre })),
-        equipos: [...equipos.values()].flat(),
-        sedeActual,
-        esAdmin,
-      }),
-    );
+    const accion = interpretar(orden, {
+      grupos,
+      sedes: vista.sedes.map((s) => ({ id: s.id, nombre: s.nombre })),
+      equipos: [...equipos.values()].flat(),
+      sedeActual,
+      esAdmin,
+    });
+    // Preguntas libres o de analisis van a Gravix IA (si esta activada); las ordenes fijas se resuelven aqui.
+    if (iaRef.current && (accion.tipo === "desconocido" || esAnalitica(n))) return void preguntarIA(orden);
+    responder(accion);
+  };
+
+  /* ---------- Gravix IA (fase 2: preguntas libres, solo lectura) ---------- */
+  const [ia, setIa] = useState(false);
+  const iaRef = useRef(false);
+  iaRef.current = ia;
+  const [pensando, setPensando] = useState(false);
+  useEffect(() => {
+    let vivo = true;
+    apiClient
+      .get<{ disponible: boolean }>("/asistente/estado")
+      .then((r) => vivo && setIa(!!r.data?.disponible))
+      .catch(() => vivo && setIa(false));
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  const preguntarIA = async (pregunta: string) => {
+    setPensando(true);
+    pendienteRef.current = null;
+    // Turnos anteriores (la pregunta actual va aparte; el estado aun no la incluye).
+    const historial = mensajesRef.current
+      .slice(-8)
+      .map((m) => ({ rol: m.de === "yo" ? ("usuario" as const) : ("gravix" as const), texto: m.texto.slice(0, 3900) }));
+    try {
+      const { data } = await apiClient.post<{ respuesta: string; acciones: AccionIA[] }>(
+        "/asistente/preguntar",
+        { pregunta, historial, sedeActual: p.current.sedeActual ?? undefined },
+        { timeout: 180_000 },
+      );
+      for (const a of data.acciones ?? []) {
+        const nav = accionDeIA(a);
+        if (nav) p.current.ejecutar(nav);
+      }
+      decir(data.respuesta);
+    } catch (e) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      if (status === 503) {
+        setIa(false);
+        decir("Gravix IA no está activado en este servidor. Puedo ayudarle con las órdenes del Centro de mando: pida «ayuda» para verlas.");
+      } else decir("No pude completar la consulta en este momento. Intente de nuevo en unos segundos.");
+    } finally {
+      setPensando(false);
+    }
+  };
+
+  /** Convierte la pantalla pedida por Gravix IA (por nombres) en una accion de la web. */
+  const accionDeIA = (a: AccionIA): Accion | null => {
+    const { vista, equipos } = p.current;
+    const sedes = vista.sedes.map((s) => ({ id: s.id, nombre: s.nombre }));
+    const sede = a.sede ? sedes.find((s) => s.id === a.sede) ?? buscarSede(normalizar(a.sede), sedes) : null;
+    switch (a.destino) {
+      case "inicio":
+        return { tipo: "inicio" };
+      case "vista":
+        return a.vista && a.vista !== "mapa" ? { tipo: "vista", vista: a.vista as VistaRed } : { tipo: "inicio" };
+      case "alertas":
+        return { tipo: "alertas", sedeId: sede?.id ?? null };
+      case "sede":
+        return sede ? { tipo: "sede", sedeId: sede.id, estado: false } : null;
+      case "equipo": {
+        if (!a.equipo) return sede ? { tipo: "sede", sedeId: sede.id, estado: false } : null;
+        const lista = sede ? equipos.get(sede.id) ?? [] : [...equipos.values()].flat();
+        const e = buscarEquipo(normalizar(a.equipo), lista);
+        if (!e) return sede ? { tipo: "sede", sedeId: sede.id, estado: false } : null;
+        return { tipo: "equipo", equipoKey: e.key, pestana: (a.pestana as PestanaEquipo) ?? "equipo" };
+      }
+    }
+    return null;
   };
   const procesarRef = useRef(procesar);
   procesarRef.current = procesar;
@@ -629,9 +717,12 @@ export default function Gravix(props: Props) {
           <header className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
             <span className={`gx-orbe gx-orbe-mini ${estadoOrbe}`} aria-hidden="true" />
             <div className="min-w-0 flex-1">
-              <strong className="block text-sm tracking-wide text-slate-50">GRAVIX</strong>
+              <strong className="flex items-center gap-1.5 text-sm tracking-wide text-slate-50">
+                GRAVIX
+                {ia && <span title="Preguntas libres con IA activadas" className="rounded bg-sky-900 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-sky-200">IA</span>}
+              </strong>
               <span className="text-[11px] text-slate-400">
-                {escuchando ? (prefs.continua ? "Escucha continua · diga «Gravix…»" : "Escuchando…") : hablando ? "Hablando…" : "Asistente del Centro de mando"}
+                {pensando ? "Consultando los datos…" : escuchando ? (prefs.continua ? "Escucha continua · diga «Gravix…»" : "Escuchando…") : hablando ? "Hablando…" : ia ? "Pregúnteme lo que necesite" : "Asistente del Centro de mando"}
               </span>
             </div>
             {hablando && (
@@ -652,6 +743,7 @@ export default function Gravix(props: Props) {
               </div>
             ))}
             {parcial && <div className="gx-msg gx-yo opacity-60"><p>{parcial}…</p></div>}
+            {pensando && <div className="gx-msg gx-el"><p className="gx-pensando">Consultando los datos de las sedes<span>.</span><span>.</span><span>.</span></p></div>}
           </div>
 
           <div className="flex flex-wrap gap-1.5 px-4 pb-2">
@@ -680,11 +772,11 @@ export default function Gravix(props: Props) {
             <input
               value={texto}
               onChange={(e) => setTexto(e.target.value)}
-              placeholder="Escriba o hable: «abre Escuintla»"
+              placeholder={ia ? "Pregunte: «¿qué sede consumió más hoy?»" : "Escriba o hable: «abre Escuintla»"}
               aria-label="Orden para Gravix"
               className="min-h-[44px] min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
             />
-            <button type="submit" className="min-h-[44px] rounded-xl bg-sky-600 px-3 text-sm font-bold text-white hover:bg-sky-500">Ir</button>
+            <button type="submit" disabled={pensando} className="min-h-[44px] rounded-xl bg-sky-600 px-3 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50">Ir</button>
           </form>
 
           <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-800 px-4 py-2 text-[11.5px] text-slate-400">
