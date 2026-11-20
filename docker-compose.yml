@@ -64,6 +64,10 @@ services:
       # Gravix IA (opcional, de pago por uso): preguntas libres de solo lectura con la API de Claude.
       # Vacio = Gravix solo con su analitica propia. La clave va solo en el .env del servidor.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # IA local (Ollama en la red, sin licencia): si OLLAMA_URL tiene valor, Gravix usa este modelo.
+      OLLAMA_URL: ${OLLAMA_URL:-}
+      OLLAMA_MODELO: ${OLLAMA_MODELO:-qwen3.5:4b}
+      ASISTENTE_PROVEEDOR: ${ASISTENTE_PROVEEDOR:-}
       ASISTENTE_MODELO: ${ASISTENTE_MODELO:-claude-opus-5-5}
       ASISTENTE_ESFUERZO: ${ASISTENTE_ESFUERZO:-medium}
     ports:

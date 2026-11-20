@@ -120,7 +120,7 @@ interface Prefs {
   continua: boolean;
   /** Nombre de la voz elegida (null = la recomendada). */
   vozNombre: string | null;
-  /** Usar Gravix IA (Claude) cuando el servidor la tiene activada; false = solo analitica propia. */
+  /** Usar Gravix IA (modelo local o Claude, segun el servidor) cuando el servidor la tiene activada; false = solo analitica propia. */
   ia: boolean;
 }
 
@@ -1142,7 +1142,7 @@ export default function Gravix(props: Props) {
             <div className="min-w-0 flex-1">
               <strong className="flex items-center gap-1.5 text-sm tracking-wide text-slate-50">
                 GRAVIX
-                {iaDisponible && prefs.ia && <span title="Preguntas libres con IA (Claude) activadas" className="rounded bg-sky-900 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-sky-200">IA</span>}
+                {iaDisponible && prefs.ia && <span title="Preguntas libres con IA activadas" className="rounded bg-sky-900 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-sky-200">IA</span>}
               </strong>
               <span className="text-[11px] text-slate-400">
                 {pensando && "Consultando los datos… "}
@@ -1237,13 +1237,13 @@ export default function Gravix(props: Props) {
               <input type="checkbox" checked={prefs.continua} disabled={sinVoz} onChange={(e) => setPrefs({ continua: e.target.checked })} /> Escucha continua
             </label>
             {iaDisponible && (
-              <label className="flex items-center gap-1.5" title="Desactivado: Gravix trabaja solo con su análisis propio, sin enviar datos fuera ni costo">
+              <label className="flex items-center gap-1.5" title="Desactivado: Gravix trabaja solo con su análisis propio, sin usar la IA">
                 <input
                   type="checkbox"
                   checked={prefs.ia}
                   onChange={(e) => {
                     setPrefs({ ia: e.target.checked });
-                    decir(e.target.checked ? "IA activada: las preguntas libres se responderán con Claude." : "IA desactivada: trabajo solo con mi análisis propio, sin enviar datos fuera.", undefined, MENU);
+                    decir(e.target.checked ? "IA activada: las preguntas libres las respondo con la inteligencia artificial." : "IA desactivada: trabajo solo con mi análisis propio.", undefined, MENU);
                   }}
                 />{" "}
                 Usar IA

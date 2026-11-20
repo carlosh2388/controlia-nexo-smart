@@ -25,7 +25,9 @@ export class AsistenteController {
   @Version("1")
   @Roles(...HUMANS)
   @Post("preguntar")
-  preguntar(@Body() dto: PreguntaDto, @Headers("authorization") autorizacion: string) {
-    return this.asistente.preguntar(dto, autorizacion);
+  preguntar(@Body() dto: PreguntaDto, @Headers("authorization") autorizacion?: string, @Headers("x-api-key") apiKey?: string) {
+    // Se reenvia la misma credencial con la que preguntaron (sesion de la web o API key).
+    const cred: Record<string, string> = autorizacion ? { Authorization: autorizacion } : apiKey ? { "x-api-key": apiKey } : {};
+    return this.asistente.preguntar(dto, cred);
   }
 }

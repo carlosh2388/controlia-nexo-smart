@@ -215,6 +215,33 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
   pantalla. La IA (Claude) es **opcional** y está apagada mientras el servidor no tenga clave
   (ver "Gravix IA opcional" más abajo).
 
+### Gravix IA con modelo local (Ollama, sin licencia) (20/11/2026) — EN USO
+
+Gravix IA usa el modelo **qwen3.5:4b** del servidor Ollama de la red (`http://192.168.71.201:11434`,
+Ollama 0.40.14, con tarjeta gráfica: responde en 2 a 8 s). Sin licencia y sin que los datos salgan de
+la red. Si `OLLAMA_URL` tiene valor, tiene prioridad sobre Claude (`ASISTENTE_PROVEEDOR=claude|ollama`
+lo fuerza).
+
+- Configuración en el `.env` del servidor (192.168.70.4 ya la tiene; respaldo del `.env` anterior en
+  `~/backups/ollama-202611201726/`):
+  ```
+  OLLAMA_URL=http://192.168.71.201:11434
+  OLLAMA_MODELO=qwen3.5:4b
+  ```
+  Luego `docker compose up -d --no-deps api`. Para apagarla, vaciar `OLLAMA_URL` y recrear la API.
+- Cómo responde (`preguntarLocal` en `asistente.service.ts`): el modelo es pequeño, así que **no usa
+  herramientas**. La API arma un resumen verificado de unos 15 000 caracteres con la credencial de quien
+  pregunta (`contextoCompacto`): puntos clave ya calculados (sedes de más a menos riesgo, lo más
+  importante de las 4 peores, equipos con voltaje anómalo), estado actual por sede y por equipo (con su
+  riesgo), últimas 24 h, los 15 riesgos principales y las métricas diarias de 14 días. El modelo responde
+  solo con eso (`think: false`, temperatura 0.1, `num_ctx` 16384), con un glosario (voltios, vigilantes
+  desconectados) para evitar errores. No navega: abrir pantallas lo hace Gravix en el navegador.
+- Probado con datos reales: voltaje anómalo de Amatitlán (causa y qué revisar), sede con más riesgo,
+  significado de vigilantes desconectados, comparación de consumo entre sedes, demanda máxima de un día.
+- Límite: las sedes nuevas leídas por Agentes Go no van en el resumen; el detalle por hora no está
+  (el modelo remite a Tendencias del equipo). Es un modelo de 4B: para hipótesis de causa, las
+  presenta como hipótesis.
+
 ### Gravix IA opcional (Claude, de pago por uso) (20/11/2026)
 
 Se restauró la versión con la API de Claude (antes 4207efb, revertida en 6b80e5a), ahora como
