@@ -24,6 +24,8 @@ import { ArmonicosPanel } from "../components/gravix/Armonicos";
 import { GRUPO_INICIAL, conAgentes, usePilotDevicesMany, useRed, webDeSede, type RedGrupo, type RedSede } from "../api/red";
 import { BotonJsonV1, EditarSede, GestionGrupos, NuevaSede } from "../components/red/RedAdmin";
 import { AlarmasCorreos as ModuloAlarmasCorreos } from "../components/red/AlarmasCorreos";
+import Gravix from "../components/asistente/Gravix";
+import type { Accion as AccionGravix } from "../components/asistente/comandos";
 
 /**
  * Centro de mando (mockup aprobado "Diseño final"): las 10 sedes del IGSS en una sola pantalla.
@@ -364,6 +366,8 @@ export default function CentroMando({ access }: { access: Access }) {
   const [sedeId, setSedeId] = useState<string | null>(null);
   const [sobre, setSobre] = useState<string | null>(null);
   const [abierto, setAbierto] = useState<Equipo | null>(null);
+  /** Pestaña con la que abre la ventana del equipo (Gravix puede pedir una; el clic normal abre "Equipo"). */
+  const [tabEquipo, setTabEquipo] = useState<Pestana>("equipo");
   const [filtro, setFiltro] = useState<"todos" | DeviceKind>("todos");
   const [arbolMovil, setArbolMovil] = useState(false);
   /** Sede cuyos equipos estan desplegados en el arbol (clic en la misma sede = abrir / cerrar). */
@@ -414,6 +418,59 @@ export default function CentroMando({ access }: { access: Access }) {
     const e = ref ? lista.find((x) => x.inventario === ref || x.nombre === ref || x.central?.nombre === ref) : null;
     abrirSede(sedeIdEq);
     if (e) setAbierto(e);
+  };
+  /** Gravix (asistente de voz): solo navega por el Centro de mando, no envia nada a los equipos. */
+  const ejecutarGravix = (a: AccionGravix) => {
+    switch (a.tipo) {
+      case "alertas":
+        setAbierto(null);
+        setAlertas({ sede: a.sedeId, sel: null });
+        break;
+      case "vista":
+        if (a.vista === "alarmas" && !esAdmin) break;
+        setAlertas(null);
+        setAbierto(null);
+        setSedeId(null);
+        setVistaRed(a.vista);
+        break;
+      case "inicio":
+        setAlertas(null);
+        setAbierto(null);
+        setSala(false);
+        setSedeId(null);
+        setVistaRed("mapa");
+        break;
+      case "sede":
+        setAlertas(null);
+        setAbierto(null);
+        setSala(false);
+        abrirSede(a.sedeId);
+        break;
+      case "equipo": {
+        const e = [...equipos.values()].flat().find((x) => x.key === a.equipoKey);
+        if (!e) break;
+        setAlertas(null);
+        setSala(false);
+        abrirSede(e.sedeId);
+        setTabEquipo(a.pestana);
+        setAbierto(e);
+        break;
+      }
+      case "sala":
+        setAlertas(null);
+        setAbierto(null);
+        setSala(a.activar);
+        break;
+      case "cerrar":
+        setAlertas(null);
+        setAbierto(null);
+        setSala(false);
+        break;
+    }
+  };
+  const cerrarEquipo = () => {
+    setAbierto(null);
+    setTabEquipo("equipo");
   };
 
   return (
@@ -629,8 +686,10 @@ export default function CentroMando({ access }: { access: Access }) {
         />
       )}
 
-      {abierto && <VentanaEquipo equipo={abierto} equiposSede={equipos.get(abierto.sedeId) ?? []} access={access} onCerrar={() => setAbierto(null)} />}
+      {abierto && <VentanaEquipo key={`${abierto.key}-${tabEquipo}`} equipo={abierto} equiposSede={equipos.get(abierto.sedeId) ?? []} access={access} tabInicial={tabEquipo} onCerrar={cerrarEquipo} />}
       {sala && <SalaControl vista={v} equipos={equipos} onSalir={() => setSala(false)} />}
+      <Gravix vista={v} equipos={equipos} alarmas={activasRed} esAdmin={esAdmin} sedeActual={sede?.id ?? null} ejecutar={ejecutarGravix} />
+
     </div>
   );
 }
@@ -1481,13 +1540,16 @@ function SedeVista({ sede, equipos, alarmas, filtro, setFiltro, onAbrir, onAlert
 /* ---------------- ventana del equipo ---------------- */
 type Pestana = "equipo" | "tendencias" | "calidad" | "comparativo" | "alarmas" | "bitacora" | "info";
 
-function VentanaEquipo({ equipo, equiposSede, access, onCerrar }: { equipo: Equipo; equiposSede: Equipo[]; access: Access; onCerrar: () => void }) {
+function VentanaEquipo({ equipo, equiposSede, access, tabInicial = "equipo", onCerrar }: { equipo: Equipo; equiposSede: Equipo[]; access: Access; tabInicial?: Pestana; onCerrar: () => void }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === "Escape" && onCerrar();
     document.addEventListener("keydown", k);
     return () => document.removeEventListener("keydown", k);
   }, [onCerrar]);
-  const [tab, setTab] = useState<Pestana>("equipo");
+  // Pestaña pedida por Gravix; si el equipo no la tiene (p. ej. calidad sin Gravix), abre "Equipo".
+  const [tab, setTab] = useState<Pestana>(() =>
+    (tabInicial === "calidad" && !(equipo.pilot && equipo.kind !== "gen")) || (tabInicial === "comparativo" && !equipo.pilotDirect) ? "equipo" : tabInicial,
+  );
   const [screen, setScreen] = useState<ScreenState>(initialScreen());
   const dev = equipo.art;
   const kind = kindOf(dev);

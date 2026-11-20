@@ -152,6 +152,40 @@ Mockup aprobado: https://claude.ai/artifact/AvVEMWJ1BVjJFoHvqdz5P1 (tablero "Pla
   17/11/2026 (respaldo `agente-go.bak-202611170038`). Falta confirmar en sitio en qué registro dan su
   modelo los "Power Meter" de la red 10.0.2.x.
 
+## Asistente Gravix (20/11/2026)
+
+Orbe flotante "G" abajo a la derecha del Centro de mando. Entiende órdenes habladas o escritas en
+español, lleva a la pantalla pedida y responde con voz. **Solo lee y navega**: no envía comandos a
+ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo corre en el navegador.
+
+- Código: `apps/web/src/components/asistente/` (`comandos.ts` interpreta la frase, `Gravix.tsx` es el
+  panel, la voz y los avisos). En `CentroMando.tsx`, `ejecutarGravix` traduce cada acción a la
+  navegación existente; `VentanaEquipo` recibe `tabInicial` para abrir una pestaña concreta.
+- Órdenes (con o sin "Gravix" al inicio):
+  - "resumen", "¿cómo está la red?", "¿qué necesito hacer?": sedes que responden, medidores en línea,
+    críticas, advertencias y sede más afectada; ofrece abrir las alertas ("sí" las abre).
+  - "¿cuántas alarmas hay (en Cobán)?", "alarmas de Escuintla" (centro de alertas).
+  - "abre Escuintla", "¿cómo está La Gomera?" (abre la sede y dice su estado).
+  - "abre el TR 1 de Escuintla en tendencias" (equipo + pestaña: tendencias, calidad, comparativo,
+    alarmas, bitácora, información). Sin sede, busca primero en la sede abierta.
+  - "mapa" / "volver", "incidentes", "ranking", "normas", "predicción", "alarmas y correos" (solo
+    administradores; al resto Gravix le explica que no tiene acceso).
+  - "modo sala", "salir del modo sala", "cerrar", "silencio", "silenciar/activar avisos", "ayuda".
+- Interruptores (se guardan en el navegador): **Voz de Gravix**, **Avisos con sonido** y **Escucha
+  continua** (escucha siempre y solo responde cuando la frase empieza con "Gravix"; decir solo
+  "Gravix" lo deja atento 8 s para la siguiente frase).
+- Avisos: cuando aparece una alarma **crítica nueva** (no las que ya estaban al abrir la pantalla),
+  pitido, aviso hablado y globo con "Ver". Los navegadores no dejan sonar audio ni voz hasta el
+  primer clic en la página.
+- Limitaciones:
+  - El **micrófono solo funciona en HTTPS o en localhost**. En `http://192.168.70.4:5173` el
+    navegador lo bloquea; la voz de Gravix, los avisos y la caja de texto sí funcionan. Para hablarle
+    en el servidor hay que publicar la web con HTTPS.
+  - El reconocimiento de voz es el de Chrome/Edge y necesita internet (el audio lo procesa el
+    servicio del navegador). Firefox no lo trae: queda la caja de texto.
+- Fase 2 (pendiente, requiere licencia de la API de Claude y salida a internet del servidor):
+  preguntas libres de analítica usando las mismas consultas del servidor MCP (`apps/mcp`).
+
 ## Pendiente
 
 - "Reconocer alarma" desde Nodivo (hoy las alarmas se cierran solas en la sede al normalizarse).

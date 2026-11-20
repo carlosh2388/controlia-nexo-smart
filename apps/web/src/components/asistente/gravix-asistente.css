@@ -1,0 +1,138 @@
+/* Gravix: asistente de voz del Centro de mando */
+.gravix-asistente {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+.gravix-asistente > * {
+  pointer-events: auto;
+}
+
+.gx-orbe {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  border-radius: 9999px;
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  background: radial-gradient(circle at 35% 30%, #7dd3fc 0%, #0ea5e9 30%, #0f3b5a 68%, #07111f 100%);
+  box-shadow: 0 0 18px rgba(14, 165, 233, 0.55), inset 0 0 14px rgba(125, 211, 252, 0.35);
+  transition: transform 0.15s ease;
+}
+.gx-orbe:hover {
+  transform: scale(1.05);
+}
+.gx-orbe::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 9999px;
+  border: 2px solid rgba(56, 189, 248, 0.35);
+  animation: gx-anillo 3.2s ease-in-out infinite;
+}
+.gx-orbe.escuchando {
+  background: radial-gradient(circle at 35% 30%, #fecaca 0%, #f43f5e 32%, #5a0f22 70%, #12070b 100%);
+  border-color: rgba(244, 63, 94, 0.7);
+  box-shadow: 0 0 24px rgba(244, 63, 94, 0.65);
+}
+.gx-orbe.escuchando::after {
+  border-color: rgba(244, 63, 94, 0.5);
+  animation-duration: 1s;
+}
+.gx-orbe.hablando::after {
+  border-color: rgba(52, 211, 153, 0.6);
+  animation-duration: 0.7s;
+}
+.gx-orbe.alerta:not(.escuchando) {
+  box-shadow: 0 0 18px rgba(14, 165, 233, 0.55), 0 0 0 3px rgba(239, 68, 68, 0.55);
+}
+.gx-letra {
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: #e0f2fe;
+  text-shadow: 0 0 8px rgba(125, 211, 252, 0.9);
+}
+.gx-orbe-mini {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+.gx-orbe-mini::after {
+  inset: -4px;
+}
+
+@keyframes gx-anillo {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.14);
+    opacity: 0.25;
+  }
+}
+.gx-pulso {
+  animation: gx-pulso 1s ease-in-out infinite;
+}
+@keyframes gx-pulso {
+  50% {
+    box-shadow: 0 0 0 6px rgba(244, 63, 94, 0.25);
+  }
+}
+
+.gx-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(390px, calc(100vw - 32px));
+  height: min(580px, calc(100vh - 110px));
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(8, 15, 28, 0.97);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55), 0 0 30px rgba(14, 165, 233, 0.15);
+  backdrop-filter: blur(8px);
+}
+
+.gx-msg {
+  max-width: 88%;
+  border-radius: 14px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.gx-el {
+  align-self: flex-start;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  background: rgba(14, 40, 64, 0.65);
+  color: #e2e8f0;
+}
+.gx-yo {
+  align-self: flex-end;
+  background: #1e293b;
+  color: #f1f5f9;
+}
+
+.gx-globo {
+  max-width: min(330px, calc(100vw - 32px));
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  background: rgba(30, 10, 16, 0.97);
+  padding: 12px 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gx-orbe::after,
+  .gx-pulso {
+    animation: none;
+  }
+}
