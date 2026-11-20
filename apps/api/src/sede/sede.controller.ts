@@ -1,5 +1,7 @@
-import { Controller, Get, Header, NotFoundException, Param, Query, UseGuards, Version } from "@nestjs/common";
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Header, NotFoundException, Param, Post, Put, Query, Req, UseGuards, Version } from "@nestjs/common";
 import { Role } from "@prisma/client";
+import type { FastifyRequest } from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -75,6 +77,52 @@ export class SedeController {
     const html = await this.alarmas.correoHtml(id);
     if (!html) throw new NotFoundException("Correo no encontrado");
     return html;
+  }
+
+  /** Configuracion de alarmas y correos (modulo "Alarmas y correos" del Centro de mando). */
+  @Version("1")
+  @Roles(...HUMANS)
+  @Get("alarmas/config")
+  config() {
+    return this.alarmas.configuracion();
+  }
+
+  /** Guarda cambios de la configuracion. Solo un admin de la sede o la clave del Centro de mando. */
+  @Version("1")
+  @Roles(...HUMANS)
+  @Put("alarmas/config")
+  async guardarConfig(@Req() req: FastifyRequest, @Body() body: { cambios?: Record<string, unknown>; por?: string }) {
+    const por = this.autorizarCentro(req, body.por);
+    try {
+      return await this.alarmas.guardarConfig(body.cambios ?? {}, por);
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
+  }
+
+  /** Correo de prueba (evento simulado con datos reales). Solo si el envio esta activo. */
+  @Version("1")
+  @Roles(...HUMANS)
+  @Post("alarmas/prueba")
+  async prueba(@Req() req: FastifyRequest, @Body() body: { dispositivo?: string; por?: string }) {
+    this.autorizarCentro(req, body.por);
+    try {
+      return await this.alarmas.enviarCorreoPrueba(body.dispositivo);
+    } catch (e) {
+      throw new BadRequestException(`No se pudo enviar el correo de prueba: ${(e as Error).message}`);
+    }
+  }
+
+  /** Admin de la sede (usuario) o la clave del Centro de mando (SEDE_CENTRO_KEY). Devuelve quien hizo el cambio. */
+  private autorizarCentro(req: FastifyRequest, por?: string) {
+    const user = (req as FastifyRequest & { user?: { role?: string; username?: string; authType?: string } }).user;
+    if (user?.authType === "user" && user.role === Role.admin) return user.username ?? "admin de la sede";
+    const raw = req.headers["x-api-key"];
+    const centro = process.env.SEDE_CENTRO_KEY;
+    if (centro && typeof raw === "string" && raw.length === centro.length && timingSafeEqual(Buffer.from(raw), Buffer.from(centro))) {
+      return `Centro de mando${por ? ` (${String(por).slice(0, 60)})` : ""}`;
+    }
+    throw new ForbiddenException("Solo un administrador o el Centro de mando pueden cambiar la configuración de alarmas");
   }
 
   /** Vista previa del correo con los datos reales de un medidor (evento simulado, no se envia). */

@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { ArrayMaxSize, IsArray, IsIn, IsInt, IsLatitude, IsLongitude, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from "class-validator";
+import { ArrayMaxSize, IsArray, IsIn, IsInt, IsLatitude, IsLongitude, IsObject, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from "class-validator";
 
 /** POST /red/grupos y PATCH /red/grupos/:id */
 export class GrupoDto {
@@ -54,6 +54,16 @@ export class SedeDto {
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(0)
   orden?: number;
+}
+
+/** PUT /red/sedes/:id/alarmas: fuente de las alarmas y/o cambios a la configuracion del motor de la sede. */
+export class AlarmasDto {
+  @IsOptional() @IsIn(["api-siasa", "gravix"])
+  fuente?: "api-siasa" | "gravix";
+
+  /** Variables del motor (ALERTAS_CORREO_ACTIVO, SMTP_*, ALERTA_*...). Las valida la sede. */
+  @IsOptional() @IsObject()
+  cambios?: Record<string, unknown>;
 }
 
 /** POST /red/gravix/probar: prueba la conexion con un Gravix de sede antes de guardarlo. */

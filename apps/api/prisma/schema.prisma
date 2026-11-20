@@ -474,6 +474,18 @@ model AlarmaEvento {
   @@map("alarma_eventos")
 }
 
+/// Configuracion de alarmas y correos del Gravix de sede editada desde el Centro de mando (modulo
+/// "Alarmas y correos"). Mismas claves que las variables del .env (ALERTA_*, ALERTAS_*, SMTP_*...);
+/// lo guardado aqui tiene prioridad sobre el .env. Una sola fila (id "unica").
+model AlarmaConfig {
+  id             String   @id @default("unica")
+  datos          Json
+  actualizadoPor String?
+  actualizado    DateTime @updatedAt @db.Timestamptz(3)
+
+  @@map("alarma_config")
+}
+
 /// Correos de alarma que preparo el Gravix de sede: enviados, o solo preparados (modo paralelo,
 /// mientras los envia api-SIASA) para compararlos.
 model AlarmaCorreo {

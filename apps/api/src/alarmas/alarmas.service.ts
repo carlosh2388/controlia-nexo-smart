@@ -6,7 +6,7 @@ import type { Transporter } from "nodemailer";
 import * as nodemailer from "nodemailer";
 import { PrismaService } from "../prisma/prisma.service";
 import { tipoDe, type DeviceMeta } from "../red/telemetria";
-import { GUIA, SEVERIDAD_TEXTO, leerConfig, type ConfigAlarmas } from "./alarmas.config";
+import { EDITABLES, GUIA, SEVERIDAD_TEXTO, leerConfig, validarCambios, type ConfigAlarmas } from "./alarmas.config";
 import * as plantilla from "./plantilla-correo";
 
 /**
@@ -86,9 +86,13 @@ const MIN_PARA_AGRUPAR = 3;
 @Injectable()
 export class AlarmasService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger("Alarmas");
-  readonly cfg: ConfigAlarmas = leerConfig();
+  /** Configuracion efectiva: .env de la sede + lo guardado desde el Centro de mando (alarma_config). */
+  cfg: ConfigAlarmas = leerConfig();
+  private override: Record<string, string> = {};
+  private overrideInfo: { actualizado: Date | null; por: string | null } = { actualizado: null, por: null };
   private readonly inicioProceso = Date.now();
   private timers: NodeJS.Timeout[] = [];
+  private arrancado = false;
 
   // ---- estado en memoria (igual que st y abiertos de api-SIASA) ----
   private ultimaOk: number | null = null;
@@ -108,16 +112,36 @@ export class AlarmasService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly prisma: PrismaService) {}
 
   async onModuleInit() {
+    try {
+      const fila = await this.prisma.alarmaConfig.findUnique({ where: { id: "unica" } });
+      if (fila) {
+        this.override = (fila.datos as Record<string, string>) ?? {};
+        this.overrideInfo = { actualizado: fila.actualizado, por: fila.actualizadoPor };
+        this.cfg = leerConfig({ ...process.env, ...this.override });
+      }
+    } catch (e) {
+      this.log.warn(`No se pudo leer alarma_config: ${(e as Error).message}`);
+    }
+    await this.programar();
+  }
+
+  /** Arranca o detiene el motor segun ALARMAS_ACTIVAS (se llama al iniciar y al cambiar la configuracion). */
+  private async programar() {
+    this.timers.forEach((t) => clearInterval(t));
+    this.timers = [];
     if (!this.cfg.activas) {
       this.log.warn("Motor de alarmas apagado (ALARMAS_ACTIVAS=false)");
       return;
     }
-    try {
-      await this.restaurarAbiertos();
-    } catch (e) {
-      this.log.warn(`No se pudieron recuperar los eventos abiertos: ${(e as Error).message}`);
+    if (!this.arrancado) {
+      this.arrancado = true;
+      try {
+        await this.restaurarAbiertos();
+      } catch (e) {
+        this.log.warn(`No se pudieron recuperar los eventos abiertos: ${(e as Error).message}`);
+      }
+      this.registrarPuntual("API_REINICIADA", "info", { mensaje: "Gravix arrancó." });
     }
-    this.registrarPuntual("API_REINICIADA", "info", { mensaje: "Gravix arrancó." });
     this.timers.push(setInterval(() => void this.tick(), 5000));
     this.timers.push(setInterval(() => this.agruparAdvertencias(), this.cfg.agruparAdvertenciasMs));
     this.timers.push(setInterval(() => void this.procesarCorreos(), 15000));
@@ -131,6 +155,7 @@ export class AlarmasService implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy() {
     this.timers.forEach((t) => clearInterval(t));
+    this.timers = [];
   }
 
   // ------------------------------------------------------
@@ -1006,6 +1031,66 @@ export class AlarmasService implements OnModuleInit, OnModuleDestroy {
   async correoHtml(id: string) {
     const c = await this.prisma.alarmaCorreo.findUnique({ where: { id }, select: { html: true, texto: true } });
     return c?.html ?? (c?.texto ? `<pre>${c.texto.replace(/</g, "&lt;")}</pre>` : null);
+  }
+
+  // ------------------------------------------------------
+  //  Configuracion desde el Centro de mando (modulo "Alarmas y correos")
+  // ------------------------------------------------------
+  /** Valores efectivos de las variables editables y de donde salen (centro o .env). La clave SMTP no se devuelve. */
+  configuracion() {
+    const efectivo = { ...process.env, ...this.override } as Record<string, string | undefined>;
+    const valores: Record<string, string> = {};
+    const desde: Record<string, "centro" | "env"> = {};
+    for (const k of Object.keys(EDITABLES)) {
+      if (k === "SMTP_CLAVE") continue;
+      valores[k] = efectivo[k] ?? "";
+      desde[k] = k in this.override ? "centro" : "env";
+    }
+    return {
+      valores,
+      desde,
+      claveSmtpGuardada: Boolean(efectivo.SMTP_CLAVE),
+      sede: this.cfg.sede,
+      actualizado: this.overrideInfo.actualizado?.toISOString() ?? null,
+      actualizadoPor: this.overrideInfo.por,
+      correo: this.prepararTransporte() ? "activo" : `desactivado: ${this.correoMotivoInactivo}`,
+    };
+  }
+
+  /** Guarda cambios hechos desde el Centro de mando y los aplica al momento (sin reiniciar Gravix). */
+  async guardarConfig(entrada: Record<string, unknown>, por: string) {
+    const cambios = validarCambios(entrada);
+    if ("SMTP_CLAVE" in cambios && cambios.SMTP_CLAVE === "") delete cambios.SMTP_CLAVE; // vacio = conservar la guardada
+    const nuevo = { ...this.override, ...cambios };
+    const fila = await this.prisma.alarmaConfig.upsert({
+      where: { id: "unica" },
+      update: { datos: nuevo, actualizadoPor: por },
+      create: { id: "unica", datos: nuevo, actualizadoPor: por },
+    });
+    const antes = { correo: this.cfg.correo.activo, activas: this.cfg.activas };
+    this.override = nuevo;
+    this.overrideInfo = { actualizado: fila.actualizado, por };
+    this.cfg = leerConfig({ ...process.env, ...nuevo });
+    this.transporte = null;
+    this.prepararTransporte();
+    await this.programar();
+    this.logEvento({
+      evento: "CONFIGURACION_CAMBIADA", por, cambios: Object.keys(cambios),
+      correo: `${antes.correo} -> ${this.cfg.correo.activo}`, motor: `${antes.activas} -> ${this.cfg.activas}`,
+    });
+    return this.configuracion();
+  }
+
+  /** Correo de prueba con los datos reales de un medidor (evento simulado). Solo si el envio esta activo. */
+  async enviarCorreoPrueba(dispositivo?: string) {
+    const t = this.prepararTransporte();
+    if (!t) return { enviado: false, motivo: this.correoMotivoInactivo };
+    const html = this.vistaPrevia(dispositivo);
+    const asunto = `[PRUEBA] SIASA ${this.cfg.sede} - correo de prueba de Gravix`;
+    const info = await t.sendMail({ from: this.cfg.correo.de, to: this.cfg.correo.para, cc: this.cfg.correo.cc || undefined, subject: asunto, text: "Correo de prueba de Gravix (evento simulado, datos reales del dispositivo).", html });
+    await this.prisma.alarmaCorreo.create({ data: { tipo: "prueba", asunto, para: this.cfg.correo.para, enviado: true, html } }).catch(() => undefined);
+    this.logEvento({ evento: "CORREO_PRUEBA", asunto, para: this.cfg.correo.para });
+    return { enviado: true, para: this.cfg.correo.para, cc: this.cfg.correo.cc || null, asunto, id_mensaje: (info as { messageId?: string })?.messageId ?? null };
   }
 
   /** Vista previa del correo con los datos reales de un medidor (evento simulado). */

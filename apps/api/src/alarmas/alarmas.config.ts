@@ -69,6 +69,53 @@ export function leerConfig(env: NodeJS.ProcessEnv = process.env) {
 
 export type ConfigAlarmas = ReturnType<typeof leerConfig>;
 
+/**
+ * Variables que se pueden cambiar desde el Centro de mando (modulo "Alarmas y correos"), con su tipo.
+ * Lo guardado en alarma_config tiene prioridad sobre el .env de la sede.
+ */
+export const EDITABLES: Record<string, "bool" | "num" | "texto" | "hora" | "clave"> = {
+  ALARMAS_ACTIVAS: "bool",
+  ALERTAS_CORREO_ACTIVO: "bool",
+  ALERTAS_CORREO_PARA: "texto",
+  ALERTAS_CORREO_CC: "texto",
+  ALERTAS_CORREO_DE: "texto",
+  SMTP_HOST: "texto",
+  SMTP_PORT: "num",
+  SMTP_SEGURO: "bool",
+  SMTP_USUARIO: "texto",
+  SMTP_CLAVE: "clave",
+  ALERTA_FUERA_DE_LINEA_MIN: "num",
+  ALERTA_OFFLINE_SIN_CAMBIO_MIN: "num",
+  ALERTA_EN_CERO_MIN: "num",
+  ALERTA_SIN_CAMBIO_MIN: "num",
+  ALERTA_CONGELADO_MIN: "num",
+  ALERTA_TRANSFERENCIA_CONFIRMACION_S: "num",
+  ALERTA_RECORDATORIO_HORAS: "num",
+  ALERTA_MAX_CORREOS_POR_HORA: "num",
+  ALERTA_RESUMEN_DIARIO_CORREO: "bool",
+  ALERTA_RESUMEN_DIARIO_HORA: "hora",
+  MEDIDORES_GENERADOR: "texto",
+};
+
+/** Valida y normaliza un cambio de configuracion. Devuelve el mapa limpio o lanza un mensaje de error. */
+export function validarCambios(entrada: Record<string, unknown>) {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(entrada ?? {})) {
+    const tipo = EDITABLES[k];
+    if (!tipo) throw new Error(`No se puede cambiar ${k} desde el Centro de mando`);
+    const s = v == null ? "" : String(v).trim();
+    if (tipo === "bool" && !/^(true|false)$/.test(s)) throw new Error(`${k} debe ser true o false`);
+    if (tipo === "num" && (s === "" || !Number.isFinite(Number(s)) || Number(s) < 0 || Number(s) > 100000)) throw new Error(`${k} debe ser un número mayor o igual a 0`);
+    if (tipo === "hora" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) throw new Error(`${k} debe tener formato HH:MM`);
+    if (s.length > 1000) throw new Error(`${k} es demasiado largo`);
+    if ((k === "ALERTAS_CORREO_PARA" || k === "ALERTAS_CORREO_CC") && s && !s.split(",").every((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x.trim()))) {
+      throw new Error(`${k}: escriba correos válidos separados por coma`);
+    }
+    out[k] = s;
+  }
+  return out;
+}
+
 export const SEVERIDAD_TEXTO: Record<string, string> = { critico: "CRÍTICO", advertencia: "ADVERTENCIA", info: "INFORMATIVO" };
 
 export interface Guia {

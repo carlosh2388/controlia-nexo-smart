@@ -3,7 +3,7 @@ import { apiClient, API_BASE_URL } from "../../api/client";
 import { useAgents } from "../../api/agents";
 import { extractErrorMessage } from "../../api/errors";
 import type { CentroSede } from "../../api/centro";
-import { useBorrarGrupo, useBorrarSede, useCrearGrupo, useEditarGrupo, useGuardarSede, useProbarGravix, useTelemetriaV1, type FuenteAlarmas, type RedGrupo, type RedSede } from "../../api/red";
+import { useBorrarGrupo, useBorrarSede, useCrearGrupo, useEditarGrupo, useGuardarSede, useProbarGravix, useTelemetriaV1, type RedGrupo, type RedSede } from "../../api/red";
 import { Descubrir } from "../../routes/Equipos";
 
 /**
@@ -373,7 +373,6 @@ export function EditarSede({ sede, fila, nueva, grupos, grupoActual, agentesEnUs
   const esGravix = fila?.origen === "gravix";
   const [url, setUrl] = useState(fila?.url ?? "");
   const [claveNueva, setClaveNueva] = useState("");
-  const [fuenteAlarmas, setFuenteAlarmas] = useState<FuenteAlarmas>(fila?.alarmasFuente ?? "api-siasa");
   if (!sede) return null;
 
   function guardarCambios() {
@@ -381,7 +380,7 @@ export function EditarSede({ sede, fila, nueva, grupos, grupoActual, agentesEnUs
     if (esGravix) {
       const nLatG = lat.trim() === "" ? null : Number(lat), nLonG = lon.trim() === "" ? null : Number(lon);
       guardar.mutate(
-        { id: sede!.id, nombre: nombre.trim(), origen: "gravix", grupoId, agentes: fila!.agentes, lat: nLatG, lon: nLonG, plantilla: fila?.plantilla ?? null, url: url.trim(), alarmasFuente: fuenteAlarmas, ...(claveNueva.trim() ? { apiKey: claveNueva.trim() } : {}) },
+        { id: sede!.id, nombre: nombre.trim(), origen: "gravix", grupoId, agentes: fila!.agentes, lat: nLatG, lon: nLonG, plantilla: fila?.plantilla ?? null, url: url.trim(), ...(claveNueva.trim() ? { apiKey: claveNueva.trim() } : {}) },
         { onSuccess: onCerrar, onError: (e) => setMsg(extractErrorMessage(e, "No se pudo guardar")) },
       );
       return;
@@ -438,27 +437,11 @@ export function EditarSede({ sede, fila, nueva, grupos, grupoActual, agentesEnUs
                   <input className={`${campo} mono`} type="password" autoComplete="off" value={claveNueva} onChange={(e) => setClaveNueva(e.target.value)} placeholder={fila?.claveFinal ? `Guardada: ••••${fila.claveFinal}. Déjela vacía para conservarla` : "Pegue la clave de la sede"} />
                 </label>
                 <p className="text-xs text-slate-500">Agentes de la sede (los informa la propia sede): <span className="mono text-slate-300">{fila?.agentes.join(", ") || "ninguno"}</span></p>
-                <fieldset className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
-                  <legend className="px-1 text-xs font-semibold text-slate-300">Alarmas y correos de la sede: ¿de dónde los lee el Centro de mando?</legend>
-                  {([
-                    ["api-siasa", "api-SIASA de la sede (actual)", "La que envía hoy los correos de alarma, con los datos del AS-P / EBO."],
-                    ["gravix", "Gravix de la sede", "Motor de alarmas de Gravix, con las mismas reglas, leyendo directo cada medidor. Deja de leer las alarmas de api-SIASA."],
-                  ] as const).map(([k, t, d]) => (
-                    <label key={k} className={`flex cursor-pointer gap-2.5 rounded-lg border p-2.5 ${fuenteAlarmas === k ? "border-sky-600 bg-sky-950/40" : "border-slate-800 hover:border-slate-600"}`}>
-                      <input type="radio" name="fuente-alarmas" checked={fuenteAlarmas === k} onChange={() => setFuenteAlarmas(k)} className="mt-1" />
-                      <span className="text-sm"><b className="text-slate-100">{t}</b><span className="block text-xs text-slate-400">{d}</span></span>
-                    </label>
-                  ))}
-                  {fila?.estado?.alarmas && (
-                    <p className="text-xs text-slate-400">
-                      Motor de Gravix: <b className="text-slate-200">{fila.estado.alarmas.motor}</b> · {fila.estado.alarmas.abiertos} alarma(s) abierta(s) · correo:{" "}
-                      <b className={fila.estado.alarmas.correoActivo ? "text-emerald-300" : "text-amber-200"}>{fila.estado.alarmas.correoActivo ? "envía" : "no envía (modo paralelo)"}</b>
-                    </p>
-                  )}
-                  <p className="text-[11px] leading-snug text-slate-500">
-                    Esta opción solo cambia lo que <b>muestra</b> el Centro de mando. Quién <b>envía</b> los correos se decide en cada sistema: hoy los envía api-SIASA; Gravix los prepara sin enviarlos (ALERTAS_CORREO_ACTIVO=false en el .env de la sede) para no duplicarlos.
-                  </p>
-                </fieldset>
+                <p className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400">
+                  Alarmas y correos (de dónde se leen, envío, destinatarios, servidor de correo y reglas): <b className="text-slate-200">Centro de mando → pestaña «Alarmas y correos»</b>.
+                  Hoy se leen de <b className="text-slate-200">{fila?.alarmasFuente === "gravix" ? "Gravix" : "api-SIASA"}</b>
+                  {fila?.estado?.alarmas ? <> · Gravix {fila.estado.alarmas.correoActivo ? "envía correos" : "no envía (modo paralelo)"}</> : null}.
+                </p>
               </>
             ) : (
               <label className={etiqueta}>Agentes Go de la sede (códigos separados por coma)<input className={`${campo} mono`} value={agentes} onChange={(e) => setAgentes(e.target.value)} /></label>

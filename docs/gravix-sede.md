@@ -302,9 +302,44 @@ Hoy los correos de alarma los envía la **api-SIASA de cada sede**, con los dato
 - `ALARMAS_AGENTES` dice qué agente vigila el motor. En Escuintla será el directo, porque el de EBO
   tiene los mismos medidores.
 
-**Opción en el Centro de mando:** en *Editar sede*, para las sedes con su propio Gravix, la opción
-**"Alarmas y correos de la sede: ¿de dónde los lee el Centro de mando?"** se guarda en
-`red_sedes.alarmasFuente`:
+**Módulo "Alarmas y correos" en el Centro de mando** (20/11). Es una pestaña nueva, solo para
+administradores, junto a Mapa, Normas y Predicción. Todo se maneja desde la web, sin entrar al servidor
+ni al código. Por cada sede:
+
+1. **¿De dónde lee el Centro de mando las alarmas?** Puede ser **api-SIASA (actual)** o **Gravix**. Elegir
+   Gravix hace que el Centro de mando deje de consumir las alarmas de la api-SIASA de esa sede. Las sedes
+   sin Gravix aparecen como "solo api-SIASA".
+2. **Envío de correos desde Gravix.** Interruptor de encendido/apagado, más los destinatarios
+   (Para, CC) y el remitente. Si se enciende mientras la api-SIASA sigue enviando, la pantalla advierte
+   que se duplicarán los correos.
+3. **Servidor de correo (SMTP):** servidor, puerto, SSL, usuario y clave. La clave nunca vuelve a la
+   web: se escribe solo para cambiarla.
+4. **Reglas:** minutos para fuera de línea, valores repetidos, voltaje en cero, sin cambio y datos
+   congelados; confirmación de transferencia; recordatorios; máximo de correos por hora; medidores de
+   generador; resumen diario; y encender o apagar el motor.
+5. **Estado del motor y alarmas abiertas**, más los **correos de los últimos 7 días** (enviados o
+   preparados), que se abren con "Ver". Botones **Vista previa del correo** y **Enviar correo de
+   prueba** (este solo funciona con el envío encendido).
+
+Cómo funciona por dentro:
+- El central llama a `GET/PUT /red/sedes/:id/alarmas`, `POST /red/sedes/:id/alarmas/prueba` y
+  `GET /red/sedes/:id/alarmas/correos/:id` (solo admin).
+- El central se lo pasa a la sede (`GET/PUT /sede/alarmas/config`, `POST /sede/alarmas/prueba`).
+- La sede **solo acepta cambios** de un administrador local o de la clave del Centro de mando
+  (`SEDE_CENTRO_KEY`). Para todo lo demás, esa clave sigue siendo de solo lectura. La clave del agente recibe 403.
+- Los valores se validan: correos con formato correcto, números, hora HH:MM y solo las variables permitidas.
+- Lo guardado va a la tabla `alarma_config` de la sede, **tiene prioridad sobre el `.env`** y se aplica
+  **al momento, sin reiniciar**. Se registra quién hizo el cambio y cuándo.
+
+Probado el 20/11:
+- leer la configuración;
+- guardar un cambio;
+- rechazar un correo inválido y una variable no permitida;
+- correo de prueba bloqueado con el envío apagado;
+- vista previa;
+- 403 para el agente y 401 sin sesión.
+
+Sigue registrada la opción anterior: `red_sedes.alarmasFuente`. Puede valer:
 - **api-SIASA (actual)**, que es la opción por defecto: alarmas, campana y "hora de los correos" salen de la api-SIASA de la sede.
 - **Gravix:** salen del motor de Gravix y el Centro de mando deja de leer las alarmas de api-SIASA.
 

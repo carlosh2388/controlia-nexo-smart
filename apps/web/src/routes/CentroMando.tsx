@@ -23,6 +23,7 @@ import { NormasCumplimiento, Prediccion } from "../components/centro/Calidad";
 import { ArmonicosPanel } from "../components/gravix/Armonicos";
 import { GRUPO_INICIAL, conAgentes, usePilotDevicesMany, useRed, webDeSede, type RedGrupo, type RedSede } from "../api/red";
 import { BotonJsonV1, EditarSede, GestionGrupos, NuevaSede } from "../components/red/RedAdmin";
+import { AlarmasCorreos as ModuloAlarmasCorreos } from "../components/red/AlarmasCorreos";
 
 /**
  * Centro de mando (mockup aprobado "Diseño final"): las 10 sedes del IGSS en una sola pantalla.
@@ -367,7 +368,7 @@ export default function CentroMando({ access }: { access: Access }) {
   const [arbolMovil, setArbolMovil] = useState(false);
   /** Sede cuyos equipos estan desplegados en el arbol (clic en la misma sede = abrir / cerrar). */
   const [desplegada, setDesplegada] = useState<string | null>(null);
-  const [vistaRed, setVistaRed] = useState<"mapa" | "incidentes" | "ranking" | "normas" | "prediccion">("mapa");
+  const [vistaRed, setVistaRed] = useState<"mapa" | "incidentes" | "ranking" | "normas" | "prediccion" | "alarmas">("mapa");
   const [sala, setSala] = useState(false);
   /** Centro de alertas (modal de la campana): de toda la red o de una sede, con una alerta elegida. */
   const [alertas, setAlertas] = useState<{ sede: string | null; sel: string | null } | null>(null);
@@ -544,7 +545,7 @@ export default function CentroMando({ access }: { access: Access }) {
           {!sede ? (
             <>
               <div role="tablist" aria-label="Vista de la red" className="flex w-fit flex-wrap gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1">
-                {([["mapa", "Mapa en vivo"], ["incidentes", "Línea de tiempo de incidentes"], ["ranking", "Ranking de sedes"], ["normas", "Normas y cumplimiento"], ["prediccion", "Predicción"]] as const).map(([k, t]) => (
+                {([["mapa", "Mapa en vivo"], ["incidentes", "Línea de tiempo de incidentes"], ["ranking", "Ranking de sedes"], ["normas", "Normas y cumplimiento"], ["prediccion", "Predicción"], ...(esAdmin ? ([["alarmas", "Alarmas y correos"]] as const) : [])] as const).map(([k, t]) => (
                   <button key={k} type="button" role="tab" aria-selected={vistaRed === k} onClick={() => setVistaRed(k)} className={`min-h-[36px] rounded-lg px-3.5 text-[13px] font-bold ${vistaRed === k ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>{t}</button>
                 ))}
               </div>
@@ -561,6 +562,9 @@ export default function CentroMando({ access }: { access: Access }) {
               {vistaRed === "ranking" && <Ranking vista={v} equipos={equipos} onIr={abrirSede} />}
               {vistaRed === "normas" && <NormasCumplimiento />}
               {vistaRed === "prediccion" && <Prediccion />}
+              {vistaRed === "alarmas" && esAdmin && (
+                <ModuloAlarmasCorreos sedes={v.sedes.map((s) => ({ id: s.id, nombre: s.nombre, grupo: grupoDe(s.id), gravix: filasRed.some((f) => f.id === s.id && f.origen === "gravix") }))} />
+              )}
             </>
           ) : (
             <SedeVista

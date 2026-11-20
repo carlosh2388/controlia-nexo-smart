@@ -186,6 +186,41 @@ export class GravixService implements OnModuleInit, OnModuleDestroy {
     return salud;
   }
 
+  /**
+   * Escritura a la sede con la clave del centro (solo las rutas que la sede acepta de el:
+   * PUT /sede/alarmas/config y POST /sede/alarmas/prueba). Devuelve el JSON o lanza el error de la sede.
+   */
+  async escribir(sedeId: string, metodo: "PUT" | "POST", ruta: string, body: unknown) {
+    const s = this.sedes.find((x) => x.id === sedeId);
+    if (!s) throw new BadRequestException("La sede no tiene un Gravix registrado");
+    let r: Response;
+    try {
+      r = await fetch(`${s.url}${ruta}`, {
+        method: metodo,
+        headers: { "x-api-key": s.key, "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (e) {
+      throw new BadRequestException(`La sede ${sedeId} no responde: ${(e as Error).message}`);
+    }
+    const texto = await r.text();
+    let json: unknown = null;
+    try {
+      json = texto ? JSON.parse(texto) : null;
+    } catch {
+      json = texto;
+    }
+    if (!r.ok) {
+      // El filtro de errores de la API envuelve el mensaje: { message: { message: "..." } }.
+      let m: unknown = (json as { message?: unknown } | null)?.message;
+      if (m && typeof m === "object") m = (m as { message?: unknown }).message;
+      if (Array.isArray(m)) m = m.join("; ");
+      throw new BadRequestException(typeof m === "string" ? m : `La sede respondió HTTP ${r.status}`);
+    }
+    return json;
+  }
+
   /** Pasa una consulta GET a la sede tal cual (ruta con /api/v1/... y su query). */
   async reenviar(sedeId: string, ruta: string): Promise<Reenvio> {
     const s = this.sedes.find((x) => x.id === sedeId);

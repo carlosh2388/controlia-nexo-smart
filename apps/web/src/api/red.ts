@@ -72,6 +72,85 @@ export interface SaludGravix {
   equipos: number;
 }
 
+/* ---------------- modulo "Alarmas y correos" ---------------- */
+
+export interface CorreoGravix {
+  id: string;
+  tipo: string;
+  asunto: string;
+  codigos: string[];
+  enviado: boolean;
+  motivo: string | null;
+  creadoEn: string;
+}
+
+export interface AlarmasSede {
+  id: string;
+  fuente: FuenteAlarmas;
+  tieneGravix: boolean;
+  gravix: {
+    conectado: boolean;
+    config: {
+      valores: Record<string, string>;
+      desde: Record<string, "centro" | "env">;
+      claveSmtpGuardada: boolean;
+      sede: string;
+      actualizado: string | null;
+      actualizadoPor: string | null;
+      correo: string;
+    } | null;
+    estado: {
+      motor: string;
+      estado: string;
+      motivo: string | null;
+      ultima_lectura_ok: string | null;
+      eventos_abiertos: { codigo: string; evento: string; titulo: string; severidad: string; dispositivo: string | null; inventario: string | null; desde: string }[];
+      dispositivos: { nombre: string; inventario: string | null; estado: string }[];
+      correo: string;
+      correo_activo: boolean;
+    } | null;
+    correos: { modo: string; correos: CorreoGravix[] } | null;
+  } | null;
+}
+
+export function useAlarmasSede(id: string | null) {
+  return useQuery({
+    queryKey: ["red", "alarmas", id],
+    queryFn: async () => (await apiClient.get<AlarmasSede>(`/red/sedes/${encodeURIComponent(id!)}/alarmas`)).data,
+    enabled: !!id,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useGuardarAlarmas() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...body }: { id: string; fuente?: FuenteAlarmas; cambios?: Record<string, string> }) =>
+      (await apiClient.put<AlarmasSede>(`/red/sedes/${encodeURIComponent(id)}/alarmas`, body)).data,
+    onSuccess: (data) => {
+      qc.setQueryData(["red", "alarmas", data.id], data);
+      void qc.invalidateQueries({ queryKey: ["red"] });
+    },
+  });
+}
+
+export function useCorreoPrueba() {
+  return useMutation({
+    mutationFn: async ({ id, dispositivo }: { id: string; dispositivo?: string }) =>
+      (await apiClient.post<{ enviado: boolean; motivo?: string; para?: string; asunto?: string }>(`/red/sedes/${encodeURIComponent(id)}/alarmas/prueba`, { dispositivo })).data,
+  });
+}
+
+/** Abre en otra pestaña el HTML de un correo de la sede ("vista-previa" = correo simulado con datos reales). */
+export async function abrirCorreo(sedeId: string, correoId: string) {
+  const ventana = window.open("", "_blank");
+  const { data } = await apiClient.get<string>(`/red/sedes/${encodeURIComponent(sedeId)}/alarmas/correos/${encodeURIComponent(correoId)}`, { responseType: "text" });
+  const url = URL.createObjectURL(new Blob([data], { type: "text/html" }));
+  if (ventana) ventana.location.href = url;
+  else window.location.href = url;
+}
+
 /** Prueba la conexion con un Gravix de sede antes de guardarlo. */
 export function useProbarGravix() {
   return useMutation({

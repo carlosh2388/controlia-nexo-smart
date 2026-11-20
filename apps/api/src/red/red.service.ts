@@ -95,6 +95,48 @@ export class RedService {
     return { ok: true };
   }
 
+  // ------------------------------------------------------
+  //  Modulo "Alarmas y correos" del Centro de mando
+  // ------------------------------------------------------
+  /** Estado y configuracion de alarmas de una sede: de donde las lee el centro y, si tiene Gravix, su motor. */
+  async alarmas(id: string) {
+    const fila = await this.prisma.redSede.findUnique({ where: { id } });
+    const fuente = fila?.alarmasFuente ?? "api-siasa";
+    if (fila?.origen !== "gravix") return { id, fuente, tieneGravix: false, gravix: null };
+    const leer = async (ruta: string) => {
+      const r = await this.gravix.reenviar(id, ruta);
+      return r.status === 200 ? JSON.parse(r.body.toString("utf8")) : null;
+    };
+    const [config, estado, correos] = await Promise.all([leer("/api/v1/sede/alarmas/config"), leer("/api/v1/sede/alarmas/estado"), leer("/api/v1/sede/alarmas/correos?dias=7")]);
+    return { id, fuente, tieneGravix: true, gravix: { conectado: !!config, config, estado, correos } };
+  }
+
+  /** Cambia de donde lee el centro las alarmas y/o la configuracion del motor de alarmas de la sede. */
+  async guardarAlarmas(id: string, dto: { fuente?: "api-siasa" | "gravix"; cambios?: Record<string, unknown> }, usuario: string) {
+    const fila = await this.prisma.redSede.findUnique({ where: { id } });
+    if (dto.fuente) {
+      if (dto.fuente === "gravix" && fila?.origen !== "gravix") throw new BadRequestException("Esta sede no tiene su propio Gravix: sus alarmas solo se pueden leer de api-SIASA");
+      if (fila) await this.prisma.redSede.update({ where: { id }, data: { alarmasFuente: dto.fuente } });
+    }
+    if (dto.cambios && Object.keys(dto.cambios).length) {
+      if (fila?.origen !== "gravix") throw new BadRequestException("Esta sede no tiene su propio Gravix");
+      await this.gravix.escribir(id, "PUT", "/api/v1/sede/alarmas/config", { cambios: dto.cambios, por: usuario });
+    }
+    return this.alarmas(id);
+  }
+
+  async correoPrueba(id: string, usuario: string, dispositivo?: string) {
+    return this.gravix.escribir(id, "POST", "/api/v1/sede/alarmas/prueba", { dispositivo, por: usuario });
+  }
+
+  /** HTML de un correo preparado o enviado por el Gravix de la sede (o la vista previa si id = "vista-previa"). */
+  async correoHtml(id: string, correoId: string) {
+    const ruta = correoId === "vista-previa" ? "/api/v1/sede/alarmas/vista-previa" : `/api/v1/sede/alarmas/correos/${encodeURIComponent(correoId)}`;
+    const r = await this.gravix.reenviar(id, ruta);
+    if (r.status !== 200) throw new NotFoundException("Correo no encontrado en la sede");
+    return r.body.toString("utf8");
+  }
+
   async probarGravix(dto: ProbarGravixDto) {
     let key = dto.apiKey;
     if (!key && dto.sedeId) {

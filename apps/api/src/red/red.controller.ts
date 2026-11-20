@@ -1,10 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards, Version } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Put, UseGuards, Version } from "@nestjs/common";
 import { Role } from "@prisma/client";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
+import type { AuthenticatedUser } from "../auth/auth.types";
 import { RedService } from "./red.service";
-import { GrupoDto, ProbarGravixDto, SedeDto } from "./dto/red.dto";
+import { AlarmasDto, GrupoDto, ProbarGravixDto, SedeDto } from "./dto/red.dto";
 
 const HUMANS = [Role.admin, Role.operator, Role.viewer];
 
@@ -54,6 +56,37 @@ export class RedController {
   @Delete("sedes/:id")
   borrarSede(@Param("id") id: string) {
     return this.red.borrarSede(id);
+  }
+
+  /** Modulo "Alarmas y correos": de donde lee el centro las alarmas de la sede y la configuracion de su Gravix. */
+  @Version("1")
+  @Roles(Role.admin)
+  @Get("sedes/:id/alarmas")
+  alarmas(@Param("id") id: string) {
+    return this.red.alarmas(id);
+  }
+
+  @Version("1")
+  @Roles(Role.admin)
+  @Put("sedes/:id/alarmas")
+  guardarAlarmas(@Param("id") id: string, @Body() dto: AlarmasDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.red.guardarAlarmas(id, dto, user.username);
+  }
+
+  @Version("1")
+  @Roles(Role.admin)
+  @Post("sedes/:id/alarmas/prueba")
+  correoPrueba(@Param("id") id: string, @Body() body: { dispositivo?: string }, @CurrentUser() user: AuthenticatedUser) {
+    return this.red.correoPrueba(id, user.username, body?.dispositivo);
+  }
+
+  /** HTML de un correo del Gravix de la sede ("vista-previa" = correo simulado con datos reales). */
+  @Version("1")
+  @Roles(Role.admin)
+  @Get("sedes/:id/alarmas/correos/:correoId")
+  @Header("Content-Type", "text/html; charset=utf-8")
+  correoHtml(@Param("id") id: string, @Param("correoId") correoId: string) {
+    return this.red.correoHtml(id, correoId);
   }
 
   /** Prueba la conexion con un Gravix de sede (direccion + clave de consulta) antes de guardarlo. */
