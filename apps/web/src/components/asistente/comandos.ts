@@ -118,6 +118,23 @@ export function quitarDespertar(texto: string): string | null {
 
 const tiene = (t: string, ...pal: string[]) => pal.some((p) => new RegExp(`\\b${p}\\b`).test(t));
 
+/** Distancia de edicion (Levenshtein) entre dos palabras. */
+function distancia(a: string, b: string): number {
+  const fila = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = fila[0];
+    fila[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = fila[j];
+      fila[j] = Math.min(fila[j] + 1, fila[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = tmp;
+    }
+  }
+  return fila[b.length];
+}
+/** Parecido 0-1 (1 = igual). */
+const parecido = (a: string, b: string) => 1 - distancia(a, b) / Math.max(a.length, b.length, 1);
+
 /** Sede mencionada en la frase (por nombre completo, id o palabra distintiva del nombre). */
 export function buscarSede(t: string, sedes: SedeRef[]): SedeRef | null {
   let mejor: { s: SedeRef; largo: number } | null = null;
@@ -127,6 +144,30 @@ export function buscarSede(t: string, sedes: SedeRef[]): SedeRef | null {
     for (const w of normalizar(s.nombre).split(" ")) if (w.length >= 5) candidatos.add(w);
     for (const c of candidatos) {
       if (c && new RegExp(`\\b${c}\\b`).test(t) && (!mejor || c.length > mejor.largo)) mejor = { s, largo: c.length };
+    }
+  }
+  return mejor?.s ?? buscarSedeParecida(t, sedes);
+}
+
+/**
+ * Lo que el reconocimiento de voz escribe mal: "masa tenango" (Mazatenango), "reta lulu"
+ * (Retalhuleu), "tiki sate" (Tiquisate), "esquintla". Compara cada palabra, y cada par de palabras
+ * juntas, con el nombre de la sede; acepta si se parecen al menos 75 %.
+ */
+function buscarSedeParecida(t: string, sedes: SedeRef[]): SedeRef | null {
+  const pal = t.split(" ").filter((w) => w.length >= 3 && !/^\d+$/.test(w));
+  const trozos = [...pal, ...pal.slice(1).map((w, i) => pal[i] + w), ...pal.slice(2).map((w, i) => pal[i] + pal[i + 1] + w)];
+  let mejor: { s: SedeRef; p: number } | null = null;
+  for (const s of sedes) {
+    const nombres = new Set([normalizar(s.nombre).replace(/\s+/g, ""), ...normalizar(s.nombre).split(" ").filter((w) => w.length >= 5)]);
+    for (const n of nombres) {
+      // Palabras cortas ("nueva", "santa", "palin") solo cuentan exactas: evita confundirlas.
+      if (n.length < 6) continue;
+      for (const tr of trozos) {
+        if (Math.abs(tr.length - n.length) > 3) continue;
+        const p = parecido(tr, n);
+        if (p >= 0.75 && (!mejor || p > mejor.p)) mejor = { s, p };
+      }
     }
   }
   return mejor?.s ?? null;

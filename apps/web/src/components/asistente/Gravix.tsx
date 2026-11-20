@@ -242,7 +242,7 @@ export default function Gravix(props: Props) {
   const ultimosRiesgos = useRef<HallazgoRiesgo[]>([]);
   /** Texto que no se pudo decir porque el navegador aun no permite audio (falta el primer clic). */
   const vozPendiente = useRef<string | null>(null);
-  const [globo, setGlobo] = useState<{ texto: string; accion?: Accion; bienvenida?: boolean } | null>(null);
+  const [globo, setGlobo] = useState<{ texto: string; accion?: Accion; bienvenida?: boolean; aviso?: boolean } | null>(null);
   /** Atajos que se muestran bajo la conversacion; cambian segun el tema. */
   const [sugerencias, setSugerencias] = useState<string[]>(MENU);
   const conv = useRef<Conversacion>({ sedeId: null, grupoId: null, esperando: null });
@@ -334,11 +334,22 @@ export default function Gravix(props: Props) {
   const agregar = (de: Mensaje["de"], t: string, boton?: Mensaje["boton"], tarjetas?: HallazgoRiesgo[]) =>
     setMensajes((m) => [...m.slice(-40), { id: ++idRef.current, de, texto: t, boton, tarjetas }]);
 
+  /** true cuando la ultima orden abrio algo: el panel se minimiza para dejar ver la pantalla. */
+  const minimizar = useRef(false);
+  const abiertoRef = useRef(abierto);
+  abiertoRef.current = abierto;
+
   const decir = (t: string, boton?: Mensaje["boton"], atajos?: string[], tarjetas?: HallazgoRiesgo[]) => {
     agregar("gravix", t, boton, tarjetas);
     pendienteRef.current = boton?.accion ?? null;
     if (atajos) setSugerencias(atajos);
     hablar(t);
+    // Si abrio una pantalla, o si el panel esta cerrado, la respuesta se ve en un globo junto al orbe.
+    if (minimizar.current || !abiertoRef.current) {
+      minimizar.current = false;
+      setAbierto(false);
+      setGlobo({ texto: t, aviso: true });
+    }
   };
 
   /** Ultima sede consultada por este usuario (para personalizar el saludo). */
@@ -402,7 +413,12 @@ export default function Gravix(props: Props) {
   };
 
   const responder = (a: Accion) => {
-    const { vista, equipos, alarmas: todas, esAdmin, ejecutar, grupos, grupoDe } = p.current;
+    const { vista, equipos, alarmas: todas, esAdmin, ejecutar: ejecutarNav, grupos, grupoDe } = p.current;
+    /** Navega y deja marcado que el panel se minimice para que se vea lo que se abrio. */
+    const ejecutar = (x: Accion) => {
+      ejecutarNav(x);
+      minimizar.current = true;
+    };
     const nombreSede = (id: string | null) => vista.sedes.find((s) => s.id === id)?.nombre ?? id ?? "";
     const nombreGrupo = (id: string | null | undefined) => grupos.find((g) => g.id === id)?.nombre ?? "sin grupo";
     // Con telemetria pedida, todo se limita a las sedes de esa telemetria.
@@ -490,6 +506,7 @@ export default function Gravix(props: Props) {
         if (!pestanas.includes(a.pestana)) return decir(`Su perfil no tiene acceso a ${PESTANA_NOMBRE[a.pestana]}.`, undefined, MENU);
         if (pestanaActual === a.pestana) return decir(`Ya está en ${PESTANA_NOMBRE[a.pestana]}. ¿Qué desea hacer aquí?`, undefined, MENU);
         irPestana(a.pestana);
+        minimizar.current = true;
         return decir(`Le abro ${PESTANA_NOMBRE[a.pestana]}.${a.pestana === "centro" ? "" : " Cuando quiera volver, diga «centro de mando»."}`, undefined, a.pestana === "centro" ? MENU : ["Centro de mando", "Menú"]);
       }
       case "riesgos": {
@@ -932,9 +949,11 @@ export default function Gravix(props: Props) {
   }, [globo]);
 
   const abrirPanel = () => {
-    setAbierto((x) => !x);
+    const abrir = !abierto;
+    abiertoRef.current = abrir;
+    setAbierto(abrir);
     setGlobo(null);
-    if (!abierto && mensajes.length === 0) responder({ tipo: "saludo" });
+    if (abrir && mensajes.length === 0) responder({ tipo: "saludo" });
   };
 
   // Bienvenida: al entrar (una vez por sesion del navegador) Gravix abre su panel, saluda segun la hora
@@ -950,6 +969,7 @@ export default function Gravix(props: Props) {
     }
     if (visto) return;
     const id = window.setTimeout(() => {
+      abiertoRef.current = true;
       setAbierto(true);
       setGlobo(null);
       setMensajes((m) => {
@@ -973,7 +993,24 @@ export default function Gravix(props: Props) {
 
   return (
     <div className="gravix-asistente cm">
-      {globo && !abierto && (
+      {globo && !abierto && globo.aviso && (
+        // Respuesta de Gravix con el panel minimizado: se ve lo que abrio y se puede volver a hablar.
+        <div role="status" className="gx-globo gx-globo-info">
+          <p className="text-[13px] leading-snug text-slate-100">{escuchando ? (parcial ? `${parcial}…` : "Escuchando…") : globo.texto}</p>
+          <div className="mt-2 flex gap-2">
+            <button type="button" onClick={pulsarMic} className={`flex min-h-[32px] items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-white ${escuchando ? "bg-rose-600 gx-pulso" : "bg-sky-600 hover:bg-sky-500"}`}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                <rect x="9" y="2" width="6" height="12" rx="3" />
+                <path d="M5 10a7 7 0 0 0 14 0M12 17v5" />
+              </svg>
+              {escuchando ? "Escuchando" : "Hablar"}
+            </button>
+            <button type="button" onClick={() => { setGlobo(null); abiertoRef.current = true; setAbierto(true); }} className="min-h-[32px] rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-200 hover:bg-slate-800">Ver conversación</button>
+            <button type="button" onClick={() => { setGlobo(null); callar(); }} aria-label="Cerrar" className="min-h-[32px] rounded-lg px-2 text-xs text-slate-400 hover:bg-slate-800">✕</button>
+          </div>
+        </div>
+      )}
+      {globo && !abierto && !globo.aviso && (
         <div role={globo.bienvenida ? "status" : "alert"} className={globo.bienvenida ? "gx-globo gx-globo-info" : "gx-globo"}>
           <p className="text-[13px] leading-snug text-slate-100">{globo.texto}</p>
           <div className="mt-2 flex gap-2">
