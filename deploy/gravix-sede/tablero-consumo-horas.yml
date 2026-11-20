@@ -1,0 +1,212 @@
+# Tablero "Consumo Gravix por hora (1 año)": muestra el resumen que guarda cada hora la tarea programada
+# "Resumen de consumo por hora" (tarea-consumo.flux) en el bucket monitoreo_horas (365 dias).
+# Un punto por hora: elegir "Past 7d", "Past 30d" o mas en el selector de tiempo.
+# Se instala: influx apply -o <org> -t <token> --force yes -f tablero-consumo-horas.yml
+apiVersion: influxdata.com/v2alpha1
+kind: Dashboard
+metadata:
+  name: consumo-gravix-horas
+spec:
+  name: Consumo Gravix por hora (1 año)
+  description: Resumen por hora de la tarea programada (bucket monitoreo_horas, 1 año). Elija Past 7d o mas.
+  charts:
+    - kind: Xy
+      name: RAM promedio por hora (MB) - TimescaleDB vs InfluxDB
+      xPos: 0
+      yPos: 0
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo_horas")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "consumo_hora" and r._field == "ram_mb_prom" and (r.servicio == "db" or r.servicio == "influxdb"))
+              |> map(fn: (r) => ({_time: r._time, _value: r._value, base: if r.servicio == "db" then "TimescaleDB" else "InfluxDB"}))
+              |> group(columns: ["base"])
+    - kind: Xy
+      name: RAM maxima por hora (MB) - TimescaleDB vs InfluxDB
+      xPos: 6
+      yPos: 0
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo_horas")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "consumo_hora" and r._field == "ram_mb_max" and (r.servicio == "db" or r.servicio == "influxdb"))
+              |> map(fn: (r) => ({_time: r._time, _value: r._value, base: if r.servicio == "db" then "TimescaleDB" else "InfluxDB"}))
+              |> group(columns: ["base"])
+    - kind: Xy
+      name: CPU promedio por hora (%) - TimescaleDB vs InfluxDB
+      xPos: 0
+      yPos: 4
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: "% de un nucleo"
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo_horas")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "consumo_hora" and r._field == "cpu_pct_prom" and (r.servicio == "db" or r.servicio == "influxdb"))
+              |> map(fn: (r) => ({_time: r._time, _value: r._value, base: if r.servicio == "db" then "TimescaleDB" else "InfluxDB"}))
+              |> group(columns: ["base"])
+    - kind: Xy
+      name: RAM promedio por hora (MB) - todos los contenedores
+      xPos: 6
+      yPos: 4
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#31C0F6"
+        - name: c2
+          type: scale
+          hex: "#A500A5"
+        - name: c3
+          type: scale
+          hex: "#FF7E27"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo_horas")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "consumo_hora" and r._field == "ram_mb_prom")
+              |> group(columns: ["servicio"])
+    - kind: Xy
+      name: Disco TimescaleDB por hora (GB)
+      xPos: 0
+      yPos: 8
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: GB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#4ED8A0"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo_horas")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "consumo_hora" and r._field == "disco_gb" and r.servicio == "timescaledb")
+    - kind: Xy
+      name: Disco InfluxDB por hora (MB)
+      xPos: 6
+      yPos: 8
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#9394FF"
+        - name: c2
+          type: scale
+          hex: "#22ADF6"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo_horas")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "consumo_hora" and r._field == "disco_mb" and r.servicio == "influxdb")
+    - kind: Table
+      name: Ultimo resumen por contenedor
+      xPos: 0
+      yPos: 12
+      width: 12
+      height: 4
+      colors:
+        - name: base
+          type: text
+          hex: "#FFFFFF"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo_horas")
+              |> range(start: -1d)
+              |> filter(fn: (r) => r._measurement == "consumo_hora")
+              |> last()
+              |> pivot(rowKey: ["_time", "servicio"], columnKey: ["_field"], valueColumn: "_value")
+              |> group()
+              |> sort(columns: ["servicio"])
