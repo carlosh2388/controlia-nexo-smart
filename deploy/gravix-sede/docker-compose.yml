@@ -159,12 +159,51 @@ services:
       INFLUX_TOKEN: ${INFLUX_TOKEN}
       INFLUX_ORG: ${INFLUX_ORG}
       DB_PASSWORD: ${DB_PASSWORD}
+      COMPARATIVO_DB_PASSWORD: ${COMPARATIVO_DB_PASSWORD:-}
+    command: ["telegraf", "--config", "/etc/telegraf/telegraf.conf", "--config-directory", "/etc/telegraf/telegraf.d"]
     volumes:
       - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      # Configuraciones extra (ej. comparativo.conf, solo si el comparativo esta encendido).
+      - ./telegraf.d:/etc/telegraf/telegraf.d:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       - influxdb
       - db
+    logging: *logging
+
+  # COMPARATIVO TimescaleDB vs InfluxDB (opcional, COMPOSE_PROFILES=...,comparativo en el .env).
+  # Dos bases nuevas y vacias, en contenedores propios para medir RAM, CPU y disco por separado.
+  # Gravix les escribe cada lectura de energia al mismo tiempo (COMPARATIVO_* en el .env).
+  # Tablero: web de InfluxDB de la sede -> Dashboards -> "Comparativo TimescaleDB vs InfluxDB".
+  db-comparativo:
+    profiles: ["comparativo"]
+    image: siasa-postgres-timescale:16.15-2.31.0
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: comparativo
+      POSTGRES_PASSWORD: ${COMPARATIVO_DB_PASSWORD:-}
+      POSTGRES_DB: comparativo
+    volumes:
+      - db_comparativo:/var/lib/postgresql/data
+      - ./comparativo/timescale-init.sql:/docker-entrypoint-initdb.d/10-readings.sql:ro
+    logging: *logging
+
+  influxdb-comparativo:
+    profiles: ["comparativo"]
+    image: influxdb:2.8
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:-}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-igss}
+      DOCKER_INFLUXDB_INIT_BUCKET: comparativo
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${COMPARATIVO_INFLUX_TOKEN:-}
+      TZ: America/Guatemala
+    volumes:
+      - influx_comparativo:/var/lib/influxdb2
+      - influx_comparativo_config:/etc/influxdb2
     logging: *logging
 
   # Segundo agente (opcional, COMPOSE_PROFILES=agente2 en el .env). La meta es UN solo recolector por
@@ -194,3 +233,6 @@ volumes:
   agente2_data:
   influx_data:
   influx_config:
+  db_comparativo:
+  influx_comparativo:
+  influx_comparativo_config:

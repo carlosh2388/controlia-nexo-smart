@@ -406,6 +406,22 @@ Probado el 19/11 con un simulador de 23 casos:
 - Se instala con `influx task create -o <org> -t <token> -f tarea-consumo.flux`, después de crear el bucket
   `monitoreo_horas` con retención de 365 días.
 
+**Comparativo TimescaleDB vs InfluxDB.** Empezó el **20/11/2026 a las 18:24:55 UTC** (12:24:55 en
+Guatemala).
+- **Las bases:** dos nuevas que arrancaron **vacías al mismo tiempo**, en contenedores propios
+  (`db-comparativo` e `influxdb-comparativo`, perfil `comparativo` del compose), para medir RAM, CPU y
+  disco por separado.
+- **Qué reciben:** Gravix les escribe **exactamente las mismas lecturas de energía** que a producción
+  (`comparativo.service.ts` y el destino "comparativo" de `influx-writer.service.ts`). Comprobado: 10 088 lecturas en cada una.
+- **Configuración:** el TimescaleDB es idéntico a producción (`comparativo/timescale-init.sql`: bloques
+  de 1 día y compresión a los 7 días). Producción no se tocó: sigue con su historial.
+- **Tablero:** web de InfluxDB → **"Comparativo TimescaleDB vs InfluxDB"** (`tablero-comparativo.yml`).
+  Muestra las lecturas guardadas, el disco de cada una, el **espacio por millón de lecturas**, la RAM y la CPU.
+  Los tamaños los mide Telegraf con `telegraf.d/comparativo.conf`.
+- **Duración:** 2 a 4 semanas, para que actúe la compresión de TimescaleDB.
+- **Al terminar:** quitar `comparativo` de `COMPOSE_PROFILES`, borrar `telegraf.d/comparativo.conf` y las
+  variables `COMPARATIVO_*`, y `docker compose rm` + borrar los volúmenes `db_comparativo` e `influx_comparativo*`.
+
 **Notas:**
 - Ningún contenedor tiene límite de memoria. En una VM de 4 GB conviene poner límites, por ejemplo
   TimescaleDB 1.5 GB e InfluxDB 512 MB, y subir `shared_buffers` a unos 512 MB.

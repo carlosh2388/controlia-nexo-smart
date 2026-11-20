@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { GapDetectorService } from "./gap-detector.service";
 import { InfluxWriterService } from "./influx-writer.service";
+import { ComparativoService } from "./comparativo.service";
 
 interface SnapshotItem {
   protocol: string;
@@ -36,6 +37,7 @@ export class TimeseriesService {
     private readonly prisma: PrismaService,
     private readonly gaps: GapDetectorService,
     private readonly influx: InfluxWriterService,
+    private readonly comparativo: ComparativoService,
   ) {}
 
   agentSeen(buildingKey: string, at: Date) {
@@ -64,6 +66,7 @@ export class TimeseriesService {
         await this.prisma.reading.createMany({ data, skipDuplicates: true });
         this.last.set(deviceId, { key, at: at.getTime() });
         void this.influx.enqueue(data);
+        this.comparativo.guardar(data);
       } catch (err) {
         this.logger.warn(`No se pudo guardar el historial de ${deviceId}: ${(err as Error).message}`);
         return;
@@ -94,6 +97,7 @@ export class TimeseriesService {
     try {
       const res = await this.prisma.reading.createMany({ data: rows, skipDuplicates: true });
       void this.influx.enqueue(rows);
+      this.comparativo.guardar(rows);
       await this.gaps.reconcile(deviceId, new Date(from), new Date(to));
       return res.count;
     } catch (err) {
@@ -117,6 +121,7 @@ export class TimeseriesService {
       await this.prisma.reading.createMany({ data, skipDuplicates: true });
       this.lastHarm.set(deviceId, time.getTime());
       void this.influx.enqueue(data);
+      this.comparativo.guardar(data);
     } catch (err) {
       this.logger.warn(`No se pudo guardar el espectro de armonicos de ${deviceId}: ${(err as Error).message}`);
     }

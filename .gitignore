@@ -11,3 +11,5 @@ apps/api/uploads/
 config/centro/
 # Gravix de sede: config.yaml completos de agentes (pueden tener claves)
 deploy/gravix-sede/agentes/*.yaml
+# Configuraciones de Telegraf encendidas en cada servidor (en git solo van los .ejemplo)
+deploy/gravix-sede/telegraf.d/*.conf

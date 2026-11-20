@@ -7,6 +7,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AgentsService } from "../agents/agents.service";
 import { InfluxWriterService } from "../timeseries/influx-writer.service";
 import { AlarmasService } from "../alarmas/alarmas.service";
+import { ComparativoService } from "../timeseries/comparativo.service";
 import { armarTelemetria, equiposDeAgentes, tipoDe, type DeviceMeta } from "../red/telemetria";
 
 /**
@@ -31,6 +32,7 @@ export class SedeService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly influx: InfluxWriterService,
     private readonly alarmas: AlarmasService,
+    private readonly comparativo: ComparativoService,
   ) {
     this.codigo = config.get<string>("SEDE_CODIGO") || "sede";
     this.nombre = config.get<string>("SEDE_NOMBRE") || this.codigo;
@@ -147,6 +149,9 @@ export class SedeService implements OnModuleInit {
       bases: {
         timescale: "principal",
         influx: this.influx.activo ? { ...this.influx.estado, pendientes: this.influx.pendientes } : "no configurado",
+        comparativo: this.comparativo.activo || this.influx.estadoComparativo
+          ? { timescaledb: this.comparativo.activo ? this.comparativo.estado : "no configurado", influxdb: this.influx.estadoComparativo ?? "no configurado" }
+          : "no configurado",
       },
     };
   }

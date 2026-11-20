@@ -14,112 +14,42 @@ interface DeviceTags {
   agente: string;
 }
 
-/**
- * Copia de cada lectura en InfluxDB 2.x, AL MISMO TIEMPO que se guarda en TimescaleDB (readings).
- * TimescaleDB sigue siendo la base principal: huecos, normas, comparacion y recuperacion salen de
- * ahi. InfluxDB es una copia para tableros externos (Grafana, etc.).
- *
- * Se activa solo si estan INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG e INFLUX_BUCKET. Escribe por lotes
- * cada 5 s (line protocol, precision ms). Si InfluxDB no responde, guarda en memoria hasta
- * MAX_PENDING lineas y reintenta; nunca frena ni hace fallar el guardado en TimescaleDB.
- *
- * Formato: measurement "lectura", tags sede/agente/equipo/device_id, un field por metrica.
- *   lectura,sede=igss-escuintla,agente=igss-escuintla-directo,equipo=ANALIZADOR-1,device_id=<uuid> voltage_a_n=127.1,... <ms>
- */
-@Injectable()
-export class InfluxWriterService implements OnModuleInit, OnModuleDestroy {
-  private readonly log = new Logger("InfluxWriter");
-  private readonly url: string;
-  private readonly token: string;
-  private readonly org: string;
-  private readonly bucket: string;
-  private readonly sede: string;
+/** Un InfluxDB 2.x de destino: escribe por lotes cada 5 s y reintenta si no responde. */
+class DestinoInflux {
   private pending: string[] = [];
-  private readonly tags = new Map<string, DeviceTags>();
-  private timer: NodeJS.Timeout | null = null;
   private flushing = false;
   private static readonly MAX_PENDING = 200_000;
   private static readonly BATCH = 5_000;
   readonly estado = { escritas: 0, ultimoOk: null as string | null, error: null as string | null };
 
   constructor(
-    config: ConfigService,
-    private readonly prisma: PrismaService,
-  ) {
-    this.url = (config.get<string>("INFLUX_URL") || "").replace(/\/$/, "");
-    this.token = config.get<string>("INFLUX_TOKEN") || "";
-    this.org = config.get<string>("INFLUX_ORG") || "";
-    this.bucket = config.get<string>("INFLUX_BUCKET") || "";
-    this.sede = config.get<string>("SEDE_CODIGO") || "";
-  }
+    readonly nombre: string,
+    private readonly url: string,
+    private readonly token: string,
+    private readonly org: string,
+    private readonly bucket: string,
+    private readonly log: Logger,
+  ) {}
 
-  get activo() {
-    return Boolean(this.url && this.token && this.org && this.bucket);
-  }
-
-  onModuleInit() {
-    if (!this.activo) return;
-    this.log.log(`Copia en InfluxDB activa: ${this.url} org=${this.org} bucket=${this.bucket}`);
-    this.timer = setInterval(() => void this.flush(), 5_000);
-  }
-
-  async onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
-    await this.flush();
-  }
-
-  /** Encola las lecturas que ya se guardaron en TimescaleDB. No espera a InfluxDB. */
-  async enqueue(rows: ReadingRow[]) {
-    if (!this.activo || !rows.length) return;
-    try {
-      const porPunto = new Map<string, ReadingRow[]>();
-      for (const r of rows) {
-        const k = `${r.deviceId}|${r.time.getTime()}`;
-        (porPunto.get(k) ?? porPunto.set(k, []).get(k)!).push(r);
-      }
-      for (const grupo of porPunto.values()) {
-        const { deviceId, time } = grupo[0];
-        const t = await this.tagsDe(deviceId);
-        const tagSet = [
-          this.sede ? `sede=${esc(this.sede)}` : null,
-          t.agente ? `agente=${esc(t.agente)}` : null,
-          `equipo=${esc(t.equipo || deviceId)}`,
-          `device_id=${esc(deviceId)}`,
-        ].filter(Boolean).join(",");
-        const fields = grupo.map((r) => `${esc(r.metric)}=${r.value}`).join(",");
-        this.pending.push(`lectura,${tagSet} ${fields} ${time.getTime()}`);
-      }
-      if (this.pending.length > InfluxWriterService.MAX_PENDING) {
-        const sobran = this.pending.length - InfluxWriterService.MAX_PENDING;
-        this.pending.splice(0, sobran);
-        this.estado.error = `InfluxDB atrasado: se descartaron ${sobran} lineas antiguas (TimescaleDB las tiene)`;
-      }
-    } catch (err) {
-      this.log.warn(`No se pudo preparar la copia para InfluxDB: ${(err as Error).message}`);
-    }
-  }
-
-  /** Lineas que esperan ser enviadas a InfluxDB. */
   get pendientes() {
     return this.pending.length;
   }
 
-  private async tagsDe(deviceId: string): Promise<DeviceTags> {
-    const c = this.tags.get(deviceId);
-    if (c) return c;
-    const d = await this.prisma.device.findUnique({ where: { id: deviceId }, select: { name: true, metadata: true } });
-    const meta = (d?.metadata as { agent?: { buildingKey?: string } } | null) ?? {};
-    const t = { equipo: d?.name ?? "", agente: meta.agent?.buildingKey ?? "" };
-    this.tags.set(deviceId, t);
-    return t;
+  agregar(lineas: string[]) {
+    this.pending.push(...lineas);
+    if (this.pending.length > DestinoInflux.MAX_PENDING) {
+      const sobran = this.pending.length - DestinoInflux.MAX_PENDING;
+      this.pending.splice(0, sobran);
+      this.estado.error = `InfluxDB atrasado: se descartaron ${sobran} lineas antiguas (TimescaleDB las tiene)`;
+    }
   }
 
-  private async flush() {
-    if (!this.activo || this.flushing || !this.pending.length) return;
+  async flush() {
+    if (this.flushing || !this.pending.length) return;
     this.flushing = true;
     try {
       while (this.pending.length) {
-        const lote = this.pending.slice(0, InfluxWriterService.BATCH);
+        const lote = this.pending.slice(0, DestinoInflux.BATCH);
         const q = new URLSearchParams({ org: this.org, bucket: this.bucket, precision: "ms" });
         const r = await fetch(`${this.url}/api/v2/write?${q}`, {
           method: "POST",
@@ -135,11 +65,122 @@ export class InfluxWriterService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (err) {
       const msg = (err as Error).message;
-      if (this.estado.error !== msg) this.log.warn(`InfluxDB no recibio el lote (se reintenta): ${msg}`);
+      if (this.estado.error !== msg) this.log.warn(`InfluxDB ${this.nombre} no recibio el lote (se reintenta): ${msg}`);
       this.estado.error = msg;
     } finally {
       this.flushing = false;
     }
+  }
+}
+
+/**
+ * Copia de cada lectura en InfluxDB 2.x, AL MISMO TIEMPO que se guarda en TimescaleDB (readings).
+ * TimescaleDB sigue siendo la base principal: huecos, normas, comparacion y recuperacion salen de
+ * ahi. InfluxDB es una copia para tableros externos (Grafana, etc.).
+ *
+ * Destinos:
+ *  - principal: INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET.
+ *  - comparativo (opcional): COMPARATIVO_INFLUX_URL, _TOKEN, _ORG, _BUCKET. Es el InfluxDB del
+ *    comparativo TimescaleDB vs InfluxDB; recibe exactamente las mismas lineas.
+ * Escribe por lotes cada 5 s (line protocol, precision ms). Si un InfluxDB no responde, guarda en
+ * memoria hasta 200 000 lineas y reintenta; nunca frena ni hace fallar el guardado en TimescaleDB.
+ *
+ * Formato: measurement "lectura", tags sede/agente/equipo/device_id, un field por metrica.
+ *   lectura,sede=igss-escuintla,agente=igss-escuintla-directo,equipo=ANALIZADOR-1,device_id=<uuid> voltage_a_n=127.1,... <ms>
+ */
+@Injectable()
+export class InfluxWriterService implements OnModuleInit, OnModuleDestroy {
+  private readonly log = new Logger("InfluxWriter");
+  private readonly sede: string;
+  private readonly tags = new Map<string, DeviceTags>();
+  private readonly principal: DestinoInflux | null;
+  private readonly comparativo: DestinoInflux | null;
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(
+    config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
+    this.sede = config.get<string>("SEDE_CODIGO") || "";
+    const destino = (nombre: string, prefijo: string) => {
+      const url = (config.get<string>(`${prefijo}_URL`) || "").replace(/\/$/, "");
+      const token = config.get<string>(`${prefijo}_TOKEN`) || "";
+      const org = config.get<string>(`${prefijo}_ORG`) || "";
+      const bucket = config.get<string>(`${prefijo}_BUCKET`) || "";
+      return url && token && org && bucket ? new DestinoInflux(nombre, url, token, org, bucket, this.log) : null;
+    };
+    this.principal = destino("principal", "INFLUX");
+    this.comparativo = destino("comparativo", "COMPARATIVO_INFLUX");
+  }
+
+  get activo() {
+    return Boolean(this.principal);
+  }
+
+  /** Estado del destino principal (lo muestra /sede/salud). */
+  get estado() {
+    return this.principal?.estado ?? { escritas: 0, ultimoOk: null, error: null };
+  }
+
+  get pendientes() {
+    return this.principal?.pendientes ?? 0;
+  }
+
+  /** Estado del InfluxDB del comparativo (null si no esta configurado). */
+  get estadoComparativo() {
+    return this.comparativo ? { ...this.comparativo.estado, pendientes: this.comparativo.pendientes } : null;
+  }
+
+  private get destinos() {
+    return [this.principal, this.comparativo].filter((d): d is DestinoInflux => d !== null);
+  }
+
+  onModuleInit() {
+    for (const d of this.destinos) this.log.log(`Copia en InfluxDB activa (${d.nombre})`);
+    if (this.destinos.length) this.timer = setInterval(() => void Promise.all(this.destinos.map((d) => d.flush())), 5_000);
+  }
+
+  async onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+    await Promise.all(this.destinos.map((d) => d.flush()));
+  }
+
+  /** Encola las lecturas que ya se guardaron en TimescaleDB. No espera a InfluxDB. */
+  async enqueue(rows: ReadingRow[]) {
+    if (!this.destinos.length || !rows.length) return;
+    try {
+      const porPunto = new Map<string, ReadingRow[]>();
+      for (const r of rows) {
+        const k = `${r.deviceId}|${r.time.getTime()}`;
+        (porPunto.get(k) ?? porPunto.set(k, []).get(k)!).push(r);
+      }
+      const lineas: string[] = [];
+      for (const grupo of porPunto.values()) {
+        const { deviceId, time } = grupo[0];
+        const t = await this.tagsDe(deviceId);
+        const tagSet = [
+          this.sede ? `sede=${esc(this.sede)}` : null,
+          t.agente ? `agente=${esc(t.agente)}` : null,
+          `equipo=${esc(t.equipo || deviceId)}`,
+          `device_id=${esc(deviceId)}`,
+        ].filter(Boolean).join(",");
+        const fields = grupo.map((r) => `${esc(r.metric)}=${r.value}`).join(",");
+        lineas.push(`lectura,${tagSet} ${fields} ${time.getTime()}`);
+      }
+      for (const d of this.destinos) d.agregar(lineas);
+    } catch (err) {
+      this.log.warn(`No se pudo preparar la copia para InfluxDB: ${(err as Error).message}`);
+    }
+  }
+
+  private async tagsDe(deviceId: string): Promise<DeviceTags> {
+    const c = this.tags.get(deviceId);
+    if (c) return c;
+    const d = await this.prisma.device.findUnique({ where: { id: deviceId }, select: { name: true, metadata: true } });
+    const meta = (d?.metadata as { agent?: { buildingKey?: string } } | null) ?? {};
+    const t = { equipo: d?.name ?? "", agente: meta.agent?.buildingKey ?? "" };
+    this.tags.set(deviceId, t);
+    return t;
   }
 }
 

@@ -1,0 +1,222 @@
+# Tablero "Comparativo TimescaleDB vs InfluxDB": las dos bases del comparativo (contenedores
+# db-comparativo e influxdb-comparativo) arrancan vacias y reciben exactamente las mismas lecturas de
+# energia. Datos de Telegraf (bucket "monitoreo"). Se instala con influx apply.
+apiVersion: influxdata.com/v2alpha1
+kind: Dashboard
+metadata:
+  name: comparativo-timescale-influx
+spec:
+  name: Comparativo TimescaleDB vs InfluxDB
+  description: Mismas lecturas de energia en dos bases nuevas que empezaron vacias al mismo tiempo. Disco, RAM, CPU y espacio por millon de lecturas.
+  charts:
+    - kind: Single_Stat
+      name: Lecturas guardadas (en cada base)
+      xPos: 0
+      yPos: 0
+      width: 4
+      height: 2
+      decimalPlaces: 0
+      colors:
+        - name: base
+          type: text
+          hex: "#FFFFFF"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: -30m)
+              |> filter(fn: (r) => r._measurement == "comparativo_timescaledb" and r._field == "lecturas")
+              |> last()
+    - kind: Single_Stat
+      name: Disco TimescaleDB (datos)
+      xPos: 4
+      yPos: 0
+      width: 4
+      height: 2
+      suffix: " MB"
+      decimalPlaces: 2
+      colors:
+        - name: base
+          type: text
+          hex: "#22ADF6"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: -30m)
+              |> filter(fn: (r) => r._measurement == "comparativo_timescaledb" and r._field == "readings_bytes")
+              |> last()
+              |> map(fn: (r) => ({r with _value: float(v: r._value) / 1048576.0}))
+    - kind: Single_Stat
+      name: Disco InfluxDB (datos)
+      xPos: 8
+      yPos: 0
+      width: 4
+      height: 2
+      suffix: " MB"
+      decimalPlaces: 2
+      colors:
+        - name: base
+          type: text
+          hex: "#9394FF"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: -30m)
+              |> filter(fn: (r) => r._measurement == "comparativo_influxdb" and r._field == "storage_shard_disk_size")
+              |> last()
+              |> group()
+              |> sum()
+              |> map(fn: (r) => ({r with _value: float(v: r._value) / 1048576.0}))
+    - kind: Xy
+      name: Disco ocupado por los datos (MB)
+      xPos: 0
+      yPos: 2
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            ts = from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "comparativo_timescaledb" and r._field == "readings_bytes")
+              |> aggregateWindow(every: 5m, fn: last, createEmpty: false)
+              |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) / 1048576.0, base: "TimescaleDB"}))
+            ix = from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "comparativo_influxdb" and r._field == "storage_shard_disk_size")
+              |> aggregateWindow(every: 5m, fn: last, createEmpty: false)
+              |> group(columns: ["_time"])
+              |> sum()
+              |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) / 1048576.0, base: "InfluxDB"}))
+            union(tables: [ts, ix]) |> group(columns: ["base"]) |> sort(columns: ["_time"])
+    - kind: Xy
+      name: Espacio por millon de lecturas (MB)
+      xPos: 6
+      yPos: 2
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB por millon
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            lect = from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "comparativo_timescaledb" and r._field == "lecturas")
+              |> aggregateWindow(every: 5m, fn: last, createEmpty: false)
+              |> keep(columns: ["_time", "_value"])
+            ts = from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "comparativo_timescaledb" and r._field == "readings_bytes")
+              |> aggregateWindow(every: 5m, fn: last, createEmpty: false)
+              |> keep(columns: ["_time", "_value"])
+            ix = from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "comparativo_influxdb" and r._field == "storage_shard_disk_size")
+              |> aggregateWindow(every: 5m, fn: last, createEmpty: false)
+              |> group(columns: ["_time"])
+              |> sum()
+              |> group()
+              |> keep(columns: ["_time", "_value"])
+            a = join(tables: {b: ts, l: lect}, on: ["_time"])
+              |> filter(fn: (r) => r._value_l > 0)
+              |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value_b) / float(v: r._value_l), base: "TimescaleDB"}))
+            b = join(tables: {b: ix, l: lect}, on: ["_time"])
+              |> filter(fn: (r) => r._value_l > 0)
+              |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value_b) / float(v: r._value_l), base: "InfluxDB"}))
+            union(tables: [a, b]) |> group(columns: ["base"]) |> sort(columns: ["_time"])
+    - kind: Xy
+      name: Memoria real (MB)
+      xPos: 0
+      yPos: 6
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: MB
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "docker_container_mem" and r._field == "usage" and (r["com.docker.compose.service"] == "db-comparativo" or r["com.docker.compose.service"] == "influxdb-comparativo"))
+              |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+              |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) / 1048576.0, base: if r["com.docker.compose.service"] == "db-comparativo" then "TimescaleDB" else "InfluxDB"}))
+              |> group(columns: ["base"])
+    - kind: Xy
+      name: CPU (% de un nucleo)
+      xPos: 6
+      yPos: 6
+      width: 6
+      height: 4
+      geom: line
+      position: overlaid
+      xCol: _time
+      yCol: _value
+      axes:
+        - name: x
+        - name: y
+          label: "%"
+      colors:
+        - name: c1
+          type: scale
+          hex: "#22ADF6"
+        - name: c2
+          type: scale
+          hex: "#9394FF"
+        - name: c3
+          type: scale
+          hex: "#FFB94A"
+      queries:
+        - query: |-
+            from(bucket: "monitoreo")
+              |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+              |> filter(fn: (r) => r._measurement == "docker_container_cpu" and r._field == "usage_percent" and r.cpu == "cpu-total" and (r["com.docker.compose.service"] == "db-comparativo" or r["com.docker.compose.service"] == "influxdb-comparativo"))
+              |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+              |> map(fn: (r) => ({_time: r._time, _value: r._value, base: if r["com.docker.compose.service"] == "db-comparativo" then "TimescaleDB" else "InfluxDB"}))
+              |> group(columns: ["base"])

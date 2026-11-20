@@ -1,0 +1,17 @@
+# Comparativo TimescaleDB vs InfluxDB: tamano y lecturas guardadas en cada base (cada 5 min).
+# La RAM, CPU y disco de los contenedores db-comparativo e influxdb-comparativo ya los mide [[inputs.docker]].
+
+[[inputs.postgresql_extensible]]
+  interval = "5m"
+  address = "host=db-comparativo user=comparativo password=${COMPARATIVO_DB_PASSWORD} dbname=comparativo sslmode=disable"
+  [[inputs.postgresql_extensible.query]]
+    measurement = "comparativo_timescaledb"
+    sqlquery = "SELECT hypertable_size('readings') AS readings_bytes, pg_database_size('comparativo') AS base_bytes, (SELECT count(*) FROM readings) AS lecturas, (SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name='readings' AND is_compressed) AS chunks_comprimidos, (SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name='readings') AS chunks"
+    withdbname = false
+
+[[inputs.prometheus]]
+  interval = "5m"
+  urls = ["http://influxdb-comparativo:8086/metrics"]
+  metric_version = 2
+  name_override = "comparativo_influxdb"
+  fieldinclude = ["storage_shard_disk_size", "storage_cache_inuse_bytes", "go_memstats_alloc_bytes"]
