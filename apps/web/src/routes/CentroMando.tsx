@@ -24,7 +24,7 @@ import { ArmonicosPanel } from "../components/gravix/Armonicos";
 import { GRUPO_INICIAL, conAgentes, usePilotDevicesMany, useRed, webDeSede, type RedGrupo, type RedSede } from "../api/red";
 import { BotonJsonV1, EditarSede, GestionGrupos, NuevaSede } from "../components/red/RedAdmin";
 import { AlarmasCorreos as ModuloAlarmasCorreos } from "../components/red/AlarmasCorreos";
-import Gravix from "../components/asistente/Gravix";
+import { PublicarGravix } from "../components/asistente/GravixGlobal";
 import type { Accion as AccionGravix } from "../components/asistente/comandos";
 
 /**
@@ -688,7 +688,7 @@ export default function CentroMando({ access }: { access: Access }) {
 
       {abierto && <VentanaEquipo key={`${abierto.key}-${tabEquipo}`} equipo={abierto} equiposSede={equipos.get(abierto.sedeId) ?? []} access={access} tabInicial={tabEquipo} onCerrar={cerrarEquipo} />}
       {sala && <SalaControl vista={v} equipos={equipos} onSalir={() => setSala(false)} />}
-      <Gravix vista={v} equipos={equipos} alarmas={activasRed.map((a) => ({ ...a, titulo: EVENTO_TXT[a.evento] ?? a.titulo }))} esAdmin={esAdmin} sedeActual={sede?.id ?? null} grupos={grupos} grupoDe={(id) => grupoDe(id)?.id ?? null} ejecutar={ejecutarGravix} />
+      <PublicarGravix datos={{ vista: v, equipos, alarmas: activasRed.map((a) => ({ ...a, titulo: EVENTO_TXT[a.evento] ?? a.titulo })), esAdmin, sedeActual: sede?.id ?? null, grupos, grupoDe: (id) => grupoDe(id)?.id ?? null }} ejecutar={ejecutarGravix} />
 
     </div>
   );

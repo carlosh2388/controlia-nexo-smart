@@ -46,6 +46,7 @@ import { ToastContainer, useToasts } from "../components/Toast";
 import GlobalActivityIndicator from "../components/GlobalActivityIndicator";
 import { ROLE_LABEL, TAB_DEFS, useAccess } from "../api/access";
 import CentroMando from "./CentroMando";
+import GravixGlobal from "../components/asistente/GravixGlobal";
 import Usuarios from "./Usuarios";
 
 type View = "centro" | "classic" | "building" | "automations" | "equipos" | "sedes" | "gravix" | "usuarios";
@@ -810,6 +811,9 @@ export default function Devices() {
       </main>
 
       {climateDevice && <ClimateControlPanel device={climateDevice} onClose={() => setClimateDeviceId(null)} />}
+
+      {/* Gravix: asistente de voz en todas las pestañas (no en el Gravix de sede). */}
+      {!MODO_SEDE && access.data && <GravixGlobal pestana={view} permitidas={allowed} irPestana={setView} />}
 
       <ToastContainer toasts={toasts} />
     </div>

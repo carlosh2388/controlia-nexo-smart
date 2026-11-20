@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import type { CentroVista } from "../../api/centro";
-import { interpretar, MENU, normalizar, quitarDespertar, usaContexto, type Accion, type PestanaEquipo, type VistaRed } from "./comandos";
+import { useCentroAnalitica, type CentroAnalitica, type CentroVista, type HallazgoRiesgo } from "../../api/centro";
+import { buscarEquipo, interpretar, MENU, normalizar, PESTANA_NOMBRE, quitarDespertar, usaContexto, type Accion, type Pestana, type PestanaEquipo, type VistaRed } from "./comandos";
 import { useAuthStore } from "../../store/auth.store";
 import "./gravix-asistente.css";
 
 /**
- * Gravix: asistente de voz del Centro de mando (sin IA ni licencias: todo corre en el navegador).
+ * Gravix: asistente de voz de la aplicacion (sin IA ni licencias: todo corre aqui).
+ *  - Vive en el marco de la aplicacion: maneja todas las pestañas y, dentro del Centro de mando,
+ *    sedes, equipos, alertas y vistas.
+ *  - Analitica predictiva calculada en la API propia (/centro/analitica): que puede fallar, con su
+ *    probabilidad, tendencia y recomendacion; y lo que paso en las ultimas 24 horas por sede.
  *  - Escucha (reconocimiento de voz del navegador) o lee lo que se escribe, entiende la frase con
  *    comandos.ts y lleva a la pantalla pedida; responde hablando (voces del sistema) y por escrito.
  *  - Conversa: da la bienvenida, pregunta que desea hacer, pide el dato que falta (que sede, que
@@ -34,10 +38,13 @@ interface Conversacion {
   esperando: "sede" | "telemetria" | null;
 }
 
+/** Mañana 5:00-11:59, tarde 12:00-18:59, noche 19:00-4:59 (hora de la computadora). */
 const saludoHora = () => {
   const h = new Date().getHours();
-  return h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches";
+  return h >= 5 && h < 12 ? "Buenos días" : h >= 12 && h < 19 ? "Buenas tardes" : "Buenas noches";
 };
+const NIVEL_COLOR: Record<string, string> = { alto: "#ef4444", medio: "#f59e0b", bajo: "#38bdf8" };
+const NIVEL_NOMBRE: Record<string, string> = { alto: "Riesgo alto", medio: "Riesgo medio", bajo: "Riesgo bajo" };
 /** "chernandez" -> "Chernandez"; "juan.perez@x" -> "Juan". */
 const nombreCorto = (u: string | null | undefined) => {
   const base = (u ?? "").split(/[@.\s_]/)[0];
@@ -62,8 +69,14 @@ interface Props {
   /** Telemetrias (grupos de sedes) y a cual pertenece cada sede. */
   grupos: { id: string; nombre: string }[];
   grupoDe: (sedeId: string) => string | null;
-  /** Ejecuta la navegacion en el Centro de mando. */
+  /** Ejecuta la navegacion en el Centro de mando (si hace falta, cambia antes a esa pestaña). */
   ejecutar: (a: Accion) => void;
+  /** Pestañas que el perfil puede ver, la actual y como cambiar de pestaña. */
+  pestanas: Pestana[];
+  pestanaActual: Pestana;
+  irPestana: (p: Pestana) => void;
+  /** false = todavia no hay datos del Centro de mando (otra pestaña de inicio). */
+  conDatos: boolean;
 }
 
 interface Mensaje {
@@ -71,6 +84,8 @@ interface Mensaje {
   de: "yo" | "gravix";
   texto: string;
   boton?: { label: string; accion: Accion };
+  /** Tarjetas de riesgo (analitica predictiva). */
+  tarjetas?: HallazgoRiesgo[];
 }
 
 interface Prefs {
@@ -218,7 +233,15 @@ export default function Gravix(props: Props) {
   const [parcial, setParcial] = useState("");
   const [hablando, setHablando] = useState(false);
   const [prefs, setPrefsState] = useState<Prefs>(leerPrefs);
-  const [errorMic, setErrorMic] = useState<string | null>(null);
+  const [errorMic, setErrorMic] = useState<{ texto: string; url?: string } | null>(null);
+  /** Analitica predictiva (se calcula en la API y se refresca cada 10 min). */
+  const analitica = useCentroAnalitica();
+  const analiticaRef = useRef<CentroAnalitica | undefined>(analitica.data);
+  analiticaRef.current = analitica.data;
+  /** Ultima lista de riesgos mostrada (para "explicame el segundo"). */
+  const ultimosRiesgos = useRef<HallazgoRiesgo[]>([]);
+  /** Texto que no se pudo decir porque el navegador aun no permite audio (falta el primer clic). */
+  const vozPendiente = useRef<string | null>(null);
   const [globo, setGlobo] = useState<{ texto: string; accion?: Accion; bienvenida?: boolean } | null>(null);
   /** Atajos que se muestran bajo la conversacion; cambian segun el tema. */
   const [sugerencias, setSugerencias] = useState<string[]>(MENU);
@@ -258,6 +281,12 @@ export default function Gravix(props: Props) {
 
   const hablar = (t: string, forzar = false) => {
     if ((!prefsRef.current.voz && !forzar) || typeof speechSynthesis === "undefined") return;
+    // Chrome/Edge no dejan hablar antes de que el usuario toque la pagina: se dice en el primer clic.
+    const activacion = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
+    if (activacion && !activacion.hasBeenActive) {
+      vozPendiente.current = t;
+      return;
+    }
     try {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(t.replace(/[«»]/g, ""));
@@ -279,6 +308,7 @@ export default function Gravix(props: Props) {
     }
   };
   const callar = () => {
+    vozPendiente.current = null;
     try {
       speechSynthesis.cancel();
     } catch {
@@ -286,15 +316,54 @@ export default function Gravix(props: Props) {
     }
     setHablando(false);
   };
+  useEffect(() => {
+    const alPrimerClic = () => {
+      const t = vozPendiente.current;
+      vozPendiente.current = null;
+      if (t) window.setTimeout(() => hablar(t), 50);
+    };
+    document.addEventListener("pointerdown", alPrimerClic, { once: true });
+    document.addEventListener("keydown", alPrimerClic, { once: true });
+    return () => {
+      document.removeEventListener("pointerdown", alPrimerClic);
+      document.removeEventListener("keydown", alPrimerClic);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const agregar = (de: Mensaje["de"], t: string, boton?: Mensaje["boton"]) =>
-    setMensajes((m) => [...m.slice(-40), { id: ++idRef.current, de, texto: t, boton }]);
+  const agregar = (de: Mensaje["de"], t: string, boton?: Mensaje["boton"], tarjetas?: HallazgoRiesgo[]) =>
+    setMensajes((m) => [...m.slice(-40), { id: ++idRef.current, de, texto: t, boton, tarjetas }]);
 
-  const decir = (t: string, boton?: Mensaje["boton"], atajos?: string[]) => {
-    agregar("gravix", t, boton);
+  const decir = (t: string, boton?: Mensaje["boton"], atajos?: string[], tarjetas?: HallazgoRiesgo[]) => {
+    agregar("gravix", t, boton, tarjetas);
     pendienteRef.current = boton?.accion ?? null;
     if (atajos) setSugerencias(atajos);
     hablar(t);
+  };
+
+  /** Ultima sede consultada por este usuario (para personalizar el saludo). */
+  const claveUltima = `gravix.ultima.${usuario ?? "anon"}`;
+  const recordarSede = (id: string) => {
+    try {
+      localStorage.setItem(claveUltima, id);
+    } catch {
+      /* sin almacenamiento */
+    }
+  };
+  const ultimaSede = () => {
+    try {
+      return localStorage.getItem(claveUltima);
+    } catch {
+      return null;
+    }
+  };
+
+  /** Abre el equipo de un hallazgo (lo busca por inventario o nombre en su sede). */
+  const accionDeHallazgo = (h: HallazgoRiesgo): Accion => {
+    const lista = p.current.equipos.get(h.sedeId) ?? [];
+    const ref = normalizar(h.inventario ?? h.equipo ?? "");
+    const e = ref ? lista.find((x) => normalizar(x.inventario ?? "") === ref || normalizar(x.nombre) === ref) ?? buscarEquipo(ref, lista) : null;
+    return e ? { tipo: "equipo", equipoKey: e.key, pestana: h.tipo === "voltaje" || h.tipo === "carga" ? "tendencias" : "equipo" } : { tipo: "sede", sedeId: h.sedeId, estado: true };
   };
 
   /** Atajos de seguimiento segun el tema: una sede, una telemetria o el menu. */
@@ -391,18 +460,101 @@ export default function Gravix(props: Props) {
           const peor = [...porSede.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
           estado = `En este momento hay ${crit.length ? `${plural(crit.length, "alarma crítica", "alarmas críticas")}${adv ? ` y ${plural(adv, "advertencia", "advertencias")}` : ""}` : plural(adv, "advertencia", "advertencias")}${peor ? `, la mayoría en ${peor}` : ""}.`;
         }
+        // Personal: el riesgo mas alto que encontro la analitica y la ultima sede que consulto.
+        const an = analiticaRef.current;
+        const top = an?.hallazgos.find((h) => h.nivel === "alto") ?? null;
+        const aviso = top
+          ? ` Mi análisis encontró algo importante: ${top.titulo}${top.probabilidad != null ? `, con ${Math.round(top.probabilidad * 100)} % de probabilidad en los próximos 7 días` : ""}.`
+          : an && an.hallazgos.length
+            ? ` Mi análisis de los últimos ${an.diasAnalizados} días no encontró riesgos altos.`
+            : "";
+        const ult = ultimaSede();
+        const ultNombre = ult ? vista.sedes.find((s) => s.id === ult)?.nombre : null;
+        const atajos = [...(top ? ["¿Qué puede fallar?"] : []), ...(ultNombre ? [`¿Cómo está ${ultNombre}?`] : []), ...MENU.filter((m) => m !== "¿Qué puede fallar?")];
+        if (!p.current.conDatos)
+          return decir(`${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix, su asistente. Puedo llevarlo a cualquier pestaña o consultarle el Centro de mando. ¿Qué desea hacer hoy?`, undefined, MENU);
         return decir(
-          `${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix, su asistente del Centro de mando. ${estado} ¿Qué desea hacer hoy?`,
-          crit.length ? { label: "Ver alarmas críticas", accion: { tipo: "leer_alarmas", sedeId: null } } : undefined,
-          MENU,
+          `${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix, su asistente. ${estado}${aviso}${ultNombre ? ` La última vez revisó ${ultNombre}.` : ""} ¿Qué desea hacer hoy?`,
+          top ? { label: "Ver el análisis", accion: { tipo: "riesgos", sedeId: null } } : crit.length ? { label: "Ver alarmas críticas", accion: { tipo: "leer_alarmas", sedeId: null } } : undefined,
+          atajos.slice(0, 7),
         );
       }
       case "menu":
         return decir(
-          "Puedo revisar las alarmas, darle el estado de cada telemetría, consultar una sede, decirle el consumo de energía de este momento, los generadores en marcha o los equipos fuera de línea. También puedo llevarlo a cualquier pantalla. ¿Qué desea hacer?",
+          "Puedo analizar qué puede fallar en los próximos días, revisar las alarmas, darle el estado de cada telemetría, consultar una sede, el consumo de energía, los generadores en marcha o los equipos fuera de línea. También lo llevo a cualquier pestaña: Vista Operativa, Vista de Edificio, Gestión Inteligente, Sedes, Equipos, Piloto Gravix o Usuarios. ¿Qué desea hacer?",
           undefined,
           MENU,
         );
+      case "pestana": {
+        const { pestanas, irPestana, pestanaActual } = p.current;
+        if (!pestanas.includes(a.pestana)) return decir(`Su perfil no tiene acceso a ${PESTANA_NOMBRE[a.pestana]}.`, undefined, MENU);
+        if (pestanaActual === a.pestana) return decir(`Ya está en ${PESTANA_NOMBRE[a.pestana]}. ¿Qué desea hacer aquí?`, undefined, MENU);
+        irPestana(a.pestana);
+        return decir(`Le abro ${PESTANA_NOMBRE[a.pestana]}.${a.pestana === "centro" ? "" : " Cuando quiera volver, diga «centro de mando»."}`, undefined, a.pestana === "centro" ? MENU : ["Centro de mando", "Menú"]);
+      }
+      case "riesgos": {
+        const an = analiticaRef.current;
+        if (!an) {
+          void analitica.refetch();
+          return decir("Estoy terminando el análisis de los datos. Pregúnteme de nuevo en unos segundos.", undefined, ["¿Qué puede fallar?", "Menú"]);
+        }
+        const enAlcance = (sedeId: string) => (a.sedeId ? sedeId === a.sedeId : enGrupo(sedeId));
+        const lista = an.hallazgos.filter((h) => enAlcance(h.sedeId));
+        ultimosRiesgos.current = lista.slice(0, 5);
+        const donde = a.sedeId ? ` de ${nombreSede(a.sedeId)}` : gid ? ` de ${nombreGrupo(gid)}` : " de la red";
+        const futuro = (n: number) =>
+          lista
+            .slice(0, n)
+            .map((h, i) => `${i + 1}. ${h.titulo}${h.probabilidad != null ? ` (${Math.round(h.probabilidad * 100)} % en 7 días)` : ""}.`)
+            .join(" ");
+        const sigue = lista.length ? ` ¿Quiere que le explique alguno?` : "";
+        const atajosR = [...(lista.length ? ["Explícame el primero"] : []), ...(lista.length > 1 ? ["Explícame el segundo"] : []), ...(lista[0] ? [`¿Cómo está ${lista[0].sedeNombre}?`] : []), "Menú"];
+
+        // Ultimas N horas: que paso en cada sede y lo que puede ocurrir.
+        if (a.horas) {
+          const s24 = an.sedes24h.filter((s) => enAlcance(s.sedeId));
+          const novedades = s24.filter((s) => s.nivel !== "estable");
+          const frase = (s: (typeof s24)[number]) => {
+            const partes: string[] = [];
+            if (s.criticas) partes.push(plural(s.criticas, "alarma crítica abierta", "alarmas críticas abiertas"));
+            if (s.advertencias) partes.push(plural(s.advertencias, "advertencia", "advertencias"));
+            if (s.caidas) partes.push(`${plural(s.caidas, "desconexión", "desconexiones")} de medidores (${Math.round(s.minSinDatos)} min sin datos)`);
+            if (s.cortesComunicacion) partes.push(`${plural(s.cortesComunicacion, "corte", "cortes")} de comunicación`);
+            if (s.caidasTension.length) partes.push(`caídas de tensión en ${s.caidasTension.join(", ")}`);
+            if (s.cambioConsumo != null && Math.abs(s.cambioConsumo) >= 10) partes.push(`consumo ${s.cambioConsumo > 0 ? "subió" : "bajó"} ${Math.round(Math.abs(s.cambioConsumo))} %`);
+            if (!partes.length && s.riesgo) partes.push(`riesgo ${s.riesgo.nivel}: ${s.riesgo.titulo.charAt(0).toLowerCase()}${s.riesgo.titulo.slice(1)}`);
+            return `${s.sedeNombre} (${s.nivel === "critico" ? "crítico" : "advertencia"}): ${partes.join(", ")}`;
+          };
+          const estables = s24.length - novedades.length;
+          const pasado = novedades.length
+            ? `En las últimas 24 horas${donde}: ${novedades.slice(0, 5).map(frase).join(". ")}.${estables ? ` ${plural(estables, "sede estuvo estable", "sedes estuvieron estables")}.` : ""}`
+            : `En las últimas 24 horas${donde} todas las sedes estuvieron estables.`;
+          const pron = lista.length ? ` Lo que puede ocurrir: ${futuro(3)}` : " No veo riesgos para los próximos días.";
+          return decir(`${pasado}${pron}${sigue}`, undefined, atajosR, lista.slice(0, 5));
+        }
+
+        if (!lista.length)
+          return decir(`Analicé ${an.equiposAnalizados} equipos con ${an.diasAnalizados} días de historia y no encontré riesgos${donde}. Todo se ve estable.`, undefined, MENU);
+        const altos = lista.filter((h) => h.nivel === "alto").length;
+        const medios = lista.filter((h) => h.nivel === "medio").length;
+        return decir(
+          `Analicé ${an.equiposAnalizados} equipos con ${an.diasAnalizados} días de historia. Encontré ${plural(altos, "riesgo alto", "riesgos altos")} y ${plural(medios, "medio", "medios")}${donde}. Lo más importante: ${futuro(3)}${sigue}`,
+          undefined,
+          atajosR,
+          lista.slice(0, 5),
+        );
+      }
+      case "detalle": {
+        const h = ultimosRiesgos.current[a.n - 1];
+        if (!h) return decir("Primero pídame el análisis: diga «¿qué puede fallar?».", undefined, ["¿Qué puede fallar?", "Menú"]);
+        conv.current = { sedeId: h.sedeId, grupoId: null, esperando: null };
+        return decir(
+          `${h.titulo}, en ${h.sedeNombre}. ${h.detalle} Recomendación: ${h.recomendacion}`,
+          { label: h.equipo ? `Abrir ${h.equipo}` : `Abrir ${h.sedeNombre}`, accion: accionDeHallazgo(h) },
+          [...(ultimosRiesgos.current[a.n] ? [`Explícame el ${["primero", "segundo", "tercero", "cuarto", "quinto"][a.n] ?? a.n + 1}`] : []), `¿Cómo está ${h.sedeNombre}?`, "¿Qué puede fallar?", "Menú"],
+          [h],
+        );
+      }
       case "pedir_sede": {
         conv.current = { ...conv.current, esperando: "sede" };
         // Primero las sedes con novedades, para ofrecerlas como atajos.
@@ -529,6 +681,7 @@ export default function Gravix(props: Props) {
       case "sede": {
         const s = vista.sedes.find((x) => x.id === a.sedeId);
         ejecutar(a);
+        recordarSede(a.sedeId);
         if (!s) return decir(`Abro ${nombreSede(a.sedeId)}.`);
         const n = s.abiertos.length;
         const lista = equipos.get(s.id) ?? [];
@@ -623,13 +776,36 @@ export default function Gravix(props: Props) {
     setParcial("");
   };
 
-  const iniciar = (continuo: boolean) => {
+  const iniciar = async (continuo: boolean) => {
     if (!Reconocimiento) {
-      setErrorMic("Este navegador no reconoce voz. Use Chrome o Edge, o escriba la orden.");
+      setErrorMic({ texto: "Este navegador no reconoce voz. Use Chrome o Edge, o escriba la orden." });
       return;
     }
     if (!window.isSecureContext) {
-      setErrorMic("El navegador solo permite el micrófono en HTTPS o en localhost. Puede escribir la orden mientras tanto.");
+      // La pagina se abrio por http: el navegador bloquea el microfono. La version segura es el puerto 5443.
+      setErrorMic({
+        texto: "Está usando la dirección sin seguridad (http). El navegador solo permite el micrófono en la dirección segura (https). Ábrala con el botón; la primera vez el navegador avisa del certificado: «Configuración avanzada» → «Continuar».",
+        url: `https://${window.location.hostname}:5443${window.location.pathname}`,
+      });
+      if (continuo) setPrefs({ continua: false });
+      return;
+    }
+    // Pide el permiso del microfono antes de escuchar: asi el error dice exactamente que pasa.
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach((t) => t.stop());
+    } catch (err) {
+      const n = (err as DOMException).name;
+      setErrorMic({
+        texto:
+          n === "NotAllowedError"
+            ? "El micrófono está bloqueado para esta página. Haga clic en el candado junto a la dirección → «Micrófono» → «Permitir», y recargue la página."
+            : n === "NotFoundError"
+              ? "No se encontró un micrófono conectado a esta computadora."
+              : n === "NotReadableError"
+                ? "Otro programa está usando el micrófono (Teams, Zoom...). Ciérrelo e intente de nuevo."
+                : `No se pudo abrir el micrófono (${n}).`,
+      });
       if (continuo) setPrefs({ continua: false });
       return;
     }
@@ -672,13 +848,15 @@ export default function Gravix(props: Props) {
     };
     r.onerror = (e) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-        setErrorMic("No hay permiso para usar el micrófono. Revise el permiso del sitio en el navegador.");
+        setErrorMic({ texto: "El navegador no permitió el reconocimiento de voz. Haga clic en el candado junto a la dirección → «Micrófono» → «Permitir», y recargue la página." });
         setPrefs({ continua: false });
         recRef.current = null;
       } else if (e.error === "network") {
-        setErrorMic("El reconocimiento de voz del navegador necesita internet. Puede escribir la orden.");
+        setErrorMic({ texto: "El reconocimiento de voz de Chrome/Edge necesita internet en esta computadora y no lo encontró. Puede escribir la orden." });
       } else if (e.error === "audio-capture") {
-        setErrorMic("No se encontró un micrófono.");
+        setErrorMic({ texto: "No se encontró un micrófono." });
+      } else if (e.error === "language-not-supported") {
+        setErrorMic({ texto: "El navegador no reconoce voz en español. Actualice Chrome o Edge." });
       }
     };
     r.onend = () => {
@@ -759,28 +937,28 @@ export default function Gravix(props: Props) {
     if (!abierto && mensajes.length === 0) responder({ tipo: "saludo" });
   };
 
-  // Bienvenida: una vez por sesion del navegador, un globo invita a conversar (sin voz: el navegador
-  // no deja hablar antes del primer clic; al abrir el panel Gravix saluda en voz alta).
+  // Bienvenida: al entrar (una vez por sesion del navegador) Gravix abre su panel, saluda segun la hora
+  // y pregunta que desea hacer. Espera unos segundos a que llegue la analitica para incluir su aviso.
+  // La voz suena en cuanto el navegador lo permite (primer clic o tecla en la pagina).
   useEffect(() => {
     let visto = false;
     try {
       visto = sessionStorage.getItem("gravix.bienvenida") === "1";
       sessionStorage.setItem("gravix.bienvenida", "1");
     } catch {
-      /* sin almacenamiento: se muestra igual */
+      /* sin almacenamiento: se saluda igual */
     }
     if (visto) return;
     const id = window.setTimeout(() => {
-      const nombre = nombreCorto(useAuthStore.getState().user?.username);
-      const n = p.current.alarmas.length;
-      setGlobo((g) =>
-        g ?? {
-          bienvenida: true,
-          texto: `${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix. ${n ? `Hay ${plural(n, "alarma activa", "alarmas activas")} en la red. ` : "La red está en orden. "}¿Le ayudo con algo?`,
-        },
-      );
-    }, 1500);
+      setAbierto(true);
+      setGlobo(null);
+      setMensajes((m) => {
+        if (!m.length) window.setTimeout(() => responder({ tipo: "saludo" }), 0);
+        return m;
+      });
+    }, 2500);
     return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const enviar = (e: React.FormEvent) => {
@@ -816,7 +994,15 @@ export default function Gravix(props: Props) {
             <div className="min-w-0 flex-1">
               <strong className="block text-sm tracking-wide text-slate-50">GRAVIX</strong>
               <span className="text-[11px] text-slate-400">
-                {escuchando ? (prefs.continua ? "Escucha continua · diga «Gravix…»" : "Escuchando…") : hablando ? "Hablando…" : "Asistente del Centro de mando"}
+                {escuchando
+                  ? prefs.continua
+                    ? "Escucha continua · diga «Gravix…»"
+                    : "Escuchando…"
+                  : hablando
+                    ? "Hablando…"
+                    : analitica.data
+                      ? `Analizando ${analitica.data.equiposAnalizados} equipos · ${analitica.data.resumen.alto} riesgos altos`
+                      : "Su asistente de Nodivo-SIASA"}
               </span>
             </div>
             {hablando && (
@@ -829,6 +1015,15 @@ export default function Gravix(props: Props) {
             {mensajes.map((m) => (
               <div key={m.id} className={m.de === "yo" ? "gx-msg gx-yo" : "gx-msg gx-el"}>
                 <p>{m.texto}</p>
+                {m.tarjetas?.map((h, i) => (
+                  <TarjetaRiesgo
+                    key={h.id}
+                    h={h}
+                    n={i + 1}
+                    onAbrir={() => { callar(); p.current.ejecutar(accionDeHallazgo(h)); }}
+                    onDetalle={() => { callar(); ultimosRiesgos.current = m.tarjetas!; procesar(`Explícame el ${i + 1}`); }}
+                  />
+                ))}
                 {m.boton && (
                   <button type="button" onClick={() => { callar(); responder(m.boton!.accion); }} className="mt-2 min-h-[30px] rounded-lg bg-sky-600 px-3 text-xs font-bold text-white hover:bg-sky-500">
                     {m.boton.label}
@@ -845,7 +1040,16 @@ export default function Gravix(props: Props) {
             ))}
           </div>
 
-          {errorMic && <p className="mx-4 mb-2 rounded-lg border border-amber-900 bg-amber-950/40 px-3 py-2 text-[12px] text-amber-200">{errorMic}</p>}
+          {errorMic && (
+            <div className="mx-4 mb-2 rounded-lg border border-amber-900 bg-amber-950/40 px-3 py-2 text-[12px] text-amber-200">
+              <p>{errorMic.texto}</p>
+              {errorMic.url && (
+                <a href={errorMic.url} className="mt-2 inline-flex min-h-[30px] items-center rounded-lg bg-amber-500 px-3 text-xs font-bold text-slate-950 hover:bg-amber-400">
+                  Abrir la dirección segura (micrófono)
+                </a>
+              )}
+            </div>
+          )}
 
           <form onSubmit={enviar} className="flex items-center gap-2 border-t border-slate-800 px-3 py-3">
             <button
@@ -905,6 +1109,60 @@ export default function Gravix(props: Props) {
       <button type="button" onClick={abrirPanel} aria-label={abierto ? "Ocultar Gravix" : "Abrir Gravix, asistente del Centro de mando"} title="Gravix · asistente de voz" className={`gx-orbe ${estadoOrbe} ${props.alarmas.some((a) => a.severidad === "critico") ? "alerta" : ""}`}>
         <span className="gx-letra">G</span>
       </button>
+    </div>
+  );
+}
+
+/** Tarjeta de un riesgo: nivel, probabilidad, mini grafica de los ultimos dias y acciones. */
+function TarjetaRiesgo({ h, n, onAbrir, onDetalle }: { h: HallazgoRiesgo; n: number; onAbrir: () => void; onDetalle: () => void }) {
+  const color = NIVEL_COLOR[h.nivel];
+  const vals = h.serie?.valores ?? [];
+  const nums = vals.filter((v): v is number => v != null);
+  const min = nums.length ? Math.min(...nums) : 0;
+  const max = nums.length ? Math.max(...nums) : 1;
+  const W = 120;
+  const H = 30;
+  const puntos = vals
+    .map((v, i) => (v == null ? null : `${(i / Math.max(1, vals.length - 1)) * W},${H - 3 - ((v - min) / (max - min || 1)) * (H - 6)}`))
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <div className="gx-tarjeta" style={{ borderLeftColor: color }}>
+      <div className="flex items-start gap-2">
+        <span className="mono mt-0.5 text-[11px] text-slate-500">{n}</span>
+        <div className="min-w-0 flex-1">
+          <b className="block text-[12.5px] leading-snug text-slate-50">{h.titulo}</b>
+          <span className="text-[11px] text-slate-400">{h.sedeNombre}{h.inventario ? ` · ${h.inventario}` : ""}</span>
+        </div>
+        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-extrabold" style={{ background: `${color}22`, color }}>{NIVEL_NOMBRE[h.nivel]}</span>
+      </div>
+      {h.probabilidad != null && (
+        <div className="mt-2">
+          <div className="flex justify-between text-[10.5px] text-slate-400">
+            <span>Probabilidad en 7 días</span>
+            <b style={{ color }}>{Math.round(h.probabilidad * 100)} %</b>
+          </div>
+          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800">
+            <div className="h-full rounded-full" style={{ width: `${Math.max(4, Math.round(h.probabilidad * 100))}%`, background: color }} />
+          </div>
+        </div>
+      )}
+      {h.serie && nums.length > 1 && (
+        <div className="mt-2 flex items-center gap-2">
+          <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${h.serie.etiqueta}: de ${nums[0]} a ${nums[nums.length - 1]} ${h.serie.unidad}`}>
+            <polyline points={puntos} fill="none" stroke={color} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+          </svg>
+          <span className="text-[10.5px] leading-tight text-slate-400">
+            {h.serie.etiqueta}
+            <br />
+            <b className="text-slate-200">{nums[nums.length - 1]} {h.serie.unidad}</b> hoy
+          </span>
+        </div>
+      )}
+      <div className="mt-2 flex gap-1.5">
+        <button type="button" onClick={onDetalle} className="min-h-[28px] rounded-md border border-slate-700 px-2.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-800">¿Por qué?</button>
+        <button type="button" onClick={onAbrir} className="min-h-[28px] rounded-md bg-sky-700 px-2.5 text-[11px] font-bold text-white hover:bg-sky-600">{h.equipo ? "Ver equipo" : "Ver sede"}</button>
+      </div>
     </div>
   );
 }

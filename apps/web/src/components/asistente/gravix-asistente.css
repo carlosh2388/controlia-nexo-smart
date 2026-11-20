@@ -141,3 +141,12 @@
     animation: none;
   }
 }
+
+.gx-tarjeta {
+  margin-top: 8px;
+  border: 1px solid rgba(51, 65, 85, 0.8);
+  border-left: 3px solid;
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.55);
+  padding: 8px 10px;
+}

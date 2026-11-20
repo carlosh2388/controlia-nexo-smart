@@ -47,10 +47,46 @@ export type Accion =
   | { tipo: "consumo"; sedeId: string | null; grupoId?: string | null }
   /** Generadores en marcha y sedes alimentadas por generador. */
   | { tipo: "generadores"; sedeId: string | null; grupoId?: string | null }
+  /** Analitica predictiva: que puede fallar (de la red, una telemetria o una sede). */
+  | { tipo: "riesgos"; sedeId: string | null; grupoId?: string | null; horas?: number }
+  /** Detalle del hallazgo n (1 = el primero de la ultima lista). */
+  | { tipo: "detalle"; n: number }
+  /** Cambiar de pestaña de la aplicacion. */
+  | { tipo: "pestana"; pestana: Pestana }
   | { tipo: "desconocido"; texto: string };
 
+/** Pestañas de la aplicacion (mismas claves que la vista en Devices.tsx). */
+export type Pestana = "centro" | "classic" | "building" | "automations" | "equipos" | "sedes" | "gravix" | "usuarios";
+export const PESTANA_NOMBRE: Record<Pestana, string> = {
+  centro: "Centro de mando",
+  classic: "Vista Operativa",
+  building: "Vista de Edificio",
+  automations: "Gestión Inteligente",
+  sedes: "Sedes",
+  equipos: "Equipos",
+  gravix: "Piloto Gravix",
+  usuarios: "Usuarios y permisos",
+};
+/** Frases que llevan a cada pestaña (sin tildes, ya normalizadas). */
+const PESTANA_FRASES: [Pestana, RegExp][] = [
+  ["classic", /\b(vista operativa|operativa)\b/],
+  ["building", /\b(vista (de|del) edificio|el edificio|edificio)\b/],
+  ["automations", /\b(gestion inteligente|gestion|automatizaciones|automatizacion|escenas)\b/],
+  ["gravix", /\b(piloto gravix|piloto|comparativo gravix)\b/],
+  ["usuarios", /\b(usuarios y permisos|usuarios|permisos|perfiles)\b/],
+  ["centro", /\b(centro de mando)\b/],
+  // "sedes" y "equipos" son palabras de todos los dias: solo cuentan como pestaña con un verbo o "pestaña".
+  ["sedes", /\b(pestana|seccion|modulo|vista|ir a|ve a|anda a|abre|abrir|abreme|llevame a|muestrame)( (la|las|de|a))* sedes$/],
+  ["equipos", /\b(pestana|seccion|modulo|vista|ir a|ve a|anda a|abre|abrir|abreme|llevame a|muestrame)( (la|los|de|a))* equipos$|\bagentes go\b/],
+];
+export function pestanaDeFrase(t: string): Pestana | null {
+  for (const [p, re] of PESTANA_FRASES) if (re.test(t)) return p;
+  return null;
+}
+
 /** Palabra para despertar a Gravix y como suele oirla el reconocedor de voz. */
-const DESPERTAR = /\b(?:oye\s+|hola\s+|ok\s+)?(?:gravix|gravis|grabix|grabis|gravic|graviks|gravi|grávix)\b[,.:]?\s*/;
+// Solo al inicio de la frase: "llevame al piloto Gravix" no es llamar al asistente.
+const DESPERTAR = /^\s*[¡¿]?\s*(?:oye\s+|hola\s+|ok\s+)?(?:gravix|gravis|grabix|grabis|gravic|graviks|gravi|grávix)\b[,.:]?\s*/;
 
 const NUMEROS: Record<string, string> = {
   uno: "1", una: "1", primero: "1", primer: "1", dos: "2", segundo: "2", tres: "3", tercero: "3", cuatro: "4", cinco: "5",
@@ -154,6 +190,10 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
   if (tiene(t, "sala de control", "modo sala")) return { tipo: "sala", activar: !tiene(t, "sal", "salir", "quita", "quitar", "cierra", "cerrar") };
   if (tiene(t, "cierra", "cerrar", "cierralo", "cierrala")) return { tipo: "cerrar" };
 
+  // Pestañas de la aplicacion: "anda a la vista del edificio", "abre gestion inteligente".
+  const pes = pestanaDeFrase(t);
+  if (pes) return { tipo: "pestana", pestana: pes };
+
   const sede = buscarSede(t, ctx.sedes);
   const sedeId = sede?.id ?? null;
 
@@ -173,6 +213,19 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
   // (normalizar convierte "una" en "1")
   if (!sede && /\b(1|alguna|otra|cierta)\s+sede\b/.test(t)) return { tipo: "pedir_sede" };
   if (!grupo && !todasTelemetrias && /\b(1|alguna|otra)\s+telemetria\b|^(ver |consultar |revisar )?(la )?telemetria$/.test(t)) return { tipo: "pedir_telemetria" };
+
+  // Analitica predictiva y detalle de un hallazgo ("explicame el segundo", "por que el primero").
+  // "como estan las sedes y sus tendencias ... ultimas 24 horas" -> resumen de 24 h + lo que puede ocurrir.
+  const horas = /\b(\d{1,3})\s*horas?\b/.exec(t)?.[1];
+  const ventana = horas ? Number(horas) : tiene(t, "hoy", "ultimo dia", "ayer", "dia de hoy") ? 24 : undefined;
+  if (tiene(t, "falla", "fallas", "fallar", "fallara", "riesgo", "riesgos", "analisis", "analiza", "analizar", "analitica", "mantenimiento", "preocupa", "predice", "predecir", "prediccion de fallas", "que puede pasar", "puede fallar", "tendencia", "tendencias", "ocurrir", "puede ocurrir", "pueden ocurrir", "que va a pasar"))
+    return { tipo: "riesgos", sedeId, grupoId, ...(ventana ? { horas: ventana } : {}) };
+  if (tiene(t, "que paso", "que ha pasado", "que sucedio", "que ocurrio", "novedades de hoy", "resumen de hoy", "como amanecio", "como amanecieron"))
+    return { tipo: "riesgos", sedeId, grupoId, horas: ventana ?? 24 };
+  if (tiene(t, "detalle", "detalles", "explica", "explicame", "por que", "porque", "mas informacion")) {
+    const num = /\b([1-9])\b/.exec(t)?.[1];
+    return { tipo: "detalle", n: num ? Number(num) : 1 };
+  }
 
   // Consultas: listas que Gravix lee en voz alta.
   if (/\b(sedes?)\b.*\b(no responde|no responden|sin respuesta|caida|caidas)\b/.test(t) || tiene(t, "sedes sin respuesta", "que sede no responde")) return { tipo: "sin_respuesta", grupoId };
@@ -213,4 +266,4 @@ export function interpretar(frase: string, ctx: Contexto): Accion {
 export const usaContexto = (t: string) => /^y\b/.test(t) || /\b(su|sus|esa|ese|ahi|alli|alla|la misma|el mismo|esta sede|este equipo|esta telemetria)\b/.test(t);
 
 /** Menu principal: atajos que Gravix ofrece al saludar o cuando no hay un tema en curso. */
-export const MENU = ["Revisar alarmas", "Estado por telemetría", "Consultar una sede", "Consumo de energía", "Generadores en marcha", "Equipos fuera de línea"];
+export const MENU = ["¿Qué puede fallar?", "Revisar alarmas", "Estado por telemetría", "Consultar una sede", "Consumo de energía", "Generadores en marcha", "Equipos fuera de línea"];

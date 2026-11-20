@@ -230,6 +230,46 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
   - "Comparar telemetrías" agrega los kW actuales de cada una.
 - Cortesías: "gracias" → "¿Desea algo más?"; "eso es todo" / "hasta luego" se despide y cierra el panel.
 
+### Analítica predictiva, todas las pestañas y bienvenida automática (20/11/2026)
+
+- **En toda la aplicación**: Gravix vive en el marco (`GravixGlobal` en `routes/Devices.tsx`), no solo
+  en el Centro de mando. Lleva a cualquier pestaña que el perfil pueda ver: "vista operativa",
+  "vista del edificio", "gestión inteligente", "abre la pestaña de sedes", "ir a equipos", "piloto
+  Gravix", "usuarios y permisos", "centro de mando". El Centro de mando le publica sus datos y su
+  navegación en `store/gravix.store.ts`; si se pide algo del centro desde otra pestaña ("abre
+  Escuintla"), Gravix cambia de pestaña y lo ejecuta al llegar. No aparece en el Gravix de sede.
+- **Bienvenida automática**: al entrar (una vez por sesión del navegador) se abre el panel y saluda
+  según la hora de la computadora (buenos días 5:00-11:59, buenas tardes 12:00-18:59, buenas noches
+  19:00-4:59), con el nombre del usuario, el estado de la red, el riesgo más alto que encontró la
+  analítica y la última sede que consultó; pregunta "¿Qué desea hacer hoy?". El navegador no deja
+  hablar antes del primer clic: la voz suena en el primer clic o tecla.
+- **Analítica predictiva** (sin servicios externos): `GET /centro/analitica`
+  (`apps/api/src/centro/analitica.service.ts`), calculada con `centro_lecturas` (una foto por minuto
+  de cada medidor) de los últimos 14 días; se recalcula cada 10 min (consulta de ~2 s).
+  - Desconexiones: caídas (fuera de línea / voltaje en cero) por equipo, tiempo medio entre fallas y
+    probabilidad de otra caída en 7 días (Poisson con la tasa del periodo, hasta 1.5 veces si en los
+    últimos 3 días falló más seguido). Con menos de 15 min sin datos en total son "cortes breves" y
+    el riesgo no pasa de medio.
+  - Voltaje: desviación contra el nominal deducido (120/127/208/220/230/240/277/480 V), tendencia
+    diaria y días estimados para salir de ±5 %; días con caídas por debajo del 90 %.
+  - Carga: demanda máxima diaria, crecimiento entre la primera y la segunda mitad del periodo y pico
+    proyectado a 7 días (riesgo alto solo con 8 días o más de datos).
+  - Comunicación con la sede (huecos de más de 5 min), lecturas congeladas y arranques de generador.
+  - `sedes24h`: por sede, lo de las últimas 24 h (desconexiones, cortes de comunicación, caídas de
+    tensión, alarmas críticas y advertencias, cambio de consumo contra las 24 h anteriores) y su peor
+    riesgo; "crítico" solo por lo ocurrido en esas 24 h. Los vigilantes desconectados cuentan como
+    advertencia, igual que en la pantalla.
+  - Es una estimación estadística con pocos días de historia: orienta el mantenimiento, no lo reemplaza.
+- En Gravix: "¿qué puede fallar?", "análisis de Telemetría 1", "¿qué puede fallar en Gineco?",
+  "¿cómo están las sedes y sus tendencias en las últimas 24 horas?", "¿qué pasó hoy?"; muestra
+  tarjetas de riesgo (nivel, probabilidad, mini gráfica de los últimos días, "¿Por qué?" y "Ver
+  equipo") y "explícame el segundo" da el detalle y la recomendación.
+- Micrófono: si la página se abrió por `http`, Gravix lo dice y ofrece el botón "Abrir la dirección
+  segura" (`https://<servidor>:5443`); antes de escuchar pide el permiso del micrófono y explica cada
+  error (bloqueado, sin micrófono, ocupado por otro programa, sin internet para el reconocimiento).
+- La web se sirve con `Cache-Control: no-cache` en la página y caché larga solo en `/assets/`
+  (nombres versionados): cada publicación llega sin borrar la caché del navegador.
+
 ## Pendiente
 
 - "Reconocer alarma" desde Nodivo (hoy las alarmas se cierran solas en la sede al normalizarse).

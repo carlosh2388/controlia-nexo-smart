@@ -152,3 +152,54 @@ export function useCentroHistorial(sede: string | null, medidor: string | null, 
     refetchOnWindowFocus: false,
   });
 }
+
+/* ---------------- analitica predictiva (asistente Gravix) ---------------- */
+export type NivelRiesgo = "alto" | "medio" | "bajo";
+export interface HallazgoRiesgo {
+  id: string;
+  tipo: "desconexion" | "voltaje" | "carga" | "comunicacion" | "lectura" | "generador";
+  nivel: NivelRiesgo;
+  puntaje: number;
+  /** Probabilidad estimada (0-1) en los proximos 7 dias, cuando aplica. */
+  probabilidad: number | null;
+  sedeId: string;
+  sedeNombre: string;
+  equipo: string | null;
+  inventario: string | null;
+  titulo: string;
+  detalle: string;
+  recomendacion: string;
+  serie: { etiqueta: string; dias: string[]; valores: (number | null)[]; unidad: string } | null;
+}
+export interface CentroAnalitica {
+  generado: string;
+  diasAnalizados: number;
+  equiposAnalizados: number;
+  resumen: { alto: number; medio: number; bajo: number };
+  hallazgos: HallazgoRiesgo[];
+  sedes24h: Sede24h[];
+}
+
+/** Riesgos calculados en el servidor con el historial de centro_lecturas (se recalcula cada 10 min). */
+export function useCentroAnalitica() {
+  return useQuery({
+    queryKey: ["centro", "analitica"],
+    queryFn: async () => (await apiClient.get<CentroAnalitica>("/centro/analitica")).data,
+    refetchInterval: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+}
+export interface Sede24h {
+  sedeId: string;
+  sedeNombre: string;
+  nivel: "critico" | "advertencia" | "estable";
+  caidas: number;
+  minSinDatos: number;
+  cortesComunicacion: number;
+  caidasTension: string[];
+  criticas: number;
+  advertencias: number;
+  cambioConsumo: number | null;
+  riesgo: { titulo: string; nivel: NivelRiesgo; probabilidad: number | null } | null;
+}

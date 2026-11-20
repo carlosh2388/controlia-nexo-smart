@@ -9,6 +9,7 @@ import { AccessService } from "../access/access.service";
 import { ActionGuard, RequireAction } from "../access/action.guard";
 import { buildXlsx } from "../common/xlsx";
 import { CentroService } from "./centro.service";
+import { AnaliticaService } from "./analitica.service";
 
 class EventosQuery {
   @IsString() dispositivo!: string;
@@ -30,12 +31,20 @@ export class CentroController {
   constructor(
     private readonly centro: CentroService,
     private readonly access: AccessService,
+    private readonly analitica: AnaliticaService,
   ) {}
 
   @Version("1")
   @Get("vista")
   async vista(@CurrentUser() user: AuthenticatedUser) {
     return this.centro.vistaPara(await this.access.forUser(user));
+  }
+
+  /** Analitica predictiva (asistente Gravix): riesgos de desconexion, voltaje, carga y comunicacion. */
+  @Version("1")
+  @Get("analitica")
+  async analiticaRiesgos(@CurrentUser() user: AuthenticatedUser) {
+    return this.analitica.para(await this.access.forUser(user));
   }
 
   @Version("1")
