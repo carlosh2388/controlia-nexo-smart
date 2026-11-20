@@ -34,6 +34,12 @@ server {
     proxy_read_timeout 1h;
   }
 
+  # Certificado publico (sin la llave) para instalarlo como confiable y quitar el aviso del navegador.
+  location = /certificado-nodivo.crt {
+    alias /etc/nginx/certs/web.crt;
+    default_type application/x-x509-ca-cert;
+  }
+
   location /assets/ {
     add_header Cache-Control "public, max-age=31536000, immutable";
     try_files $uri =404;

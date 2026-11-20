@@ -85,6 +85,9 @@ services:
       # HTTPS en el puerto 5443 si hay certificado en config/web-tls (web.crt + web.key, fuera de git).
       # Hace falta para el microfono del asistente Gravix (el navegador lo bloquea en HTTP).
       WEB_HTTPS: ${WEB_HTTPS:-1}
+      # Con HTTPS activo, la direccion http (5173) manda a la https; 0 = dejar http abierto.
+      WEB_HTTP_REDIRECT: ${WEB_HTTP_REDIRECT:-1}
+      WEB_HTTPS_PORT: ${WEB_HTTPS_PORT:-5443}
     ports:
       - "5173:80"
       - "${WEB_HTTPS_PORT:-5443}:443"

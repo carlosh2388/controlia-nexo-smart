@@ -187,8 +187,12 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
   pitido, aviso hablado y globo con "Ver". Los navegadores no dejan sonar audio ni voz hasta el
   primer clic en la página.
 - Limitaciones:
-  - El **micrófono solo funciona en HTTPS o en localhost**. En `http://192.168.70.4:5173` el
-    navegador lo bloquea; para hablarle se usa **`https://192.168.70.4:5443`**.
+  - El **micrófono solo funciona en HTTPS o en localhost**. Por eso, con HTTPS activo,
+    `http://192.168.70.4:5173` **redirige sola** a `https://192.168.70.4:5443` (misma ruta; generado
+    por `30-https.sh`; `WEB_HTTP_REDIRECT=0` en el `.env` la desactiva, `WEB_HTTPS_PORT` cambia el
+    puerto). Al cambiar de dirección hay que iniciar sesión una vez (la sesión se guarda por
+    dirección). Con el micrófono: un clic en el botón, el navegador pide permiso la primera vez,
+    escucha la orden y la ejecuta.
   - HTTPS de la web: el contenedor `web` activa el puerto 443 (publicado como 5443) si
     `WEB_HTTPS=1` y existe `config/web-tls/web.crt` + `web.key` (fuera de git). Por ese puerto,
     nginx pasa `/api` y `/ws` a la API (`apps/web/https.conf.tpl`, `apps/web/30-https.sh`), y la web
@@ -200,8 +204,11 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
       -addext 'subjectAltName=IP:192.168.70.4,DNS:localhost,IP:127.0.0.1'
     ```
     La primera vez el navegador avisa que la conexión no es privada: "Configuración avanzada" →
-    "Continuar a 192.168.70.4". Para quitar el aviso, importar `web.crt` como entidad de confianza en
-    cada PC (lo hace el usuario o TI).
+    "Continuar a 192.168.70.4". Para quitar el aviso, cada PC (el usuario o TI) descarga el
+    certificado público en `https://192.168.70.4:5443/certificado-nodivo.crt`, lo abre → "Instalar
+    certificado" → "Equipo local" → "Colocar todos los certificados en el siguiente almacén" →
+    "Entidades de certificación raíz de confianza", y reinicia el navegador. La llave privada
+    (`web.key`) nunca se publica.
   - El reconocimiento de voz es el de Chrome/Edge y necesita internet (el audio lo procesa el
     servicio del navegador). Firefox no lo trae: queda la caja de texto.
 - Sin IA ni licencias (decisión del 20/11/2026): se probó una versión con la API de Claude (commit

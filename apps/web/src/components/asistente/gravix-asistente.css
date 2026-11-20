@@ -150,3 +150,14 @@
   background: rgba(2, 6, 23, 0.55);
   padding: 8px 10px;
 }
+
+.gx-atajos {
+  scrollbar-width: thin;
+}
+.gx-atajos::-webkit-scrollbar {
+  height: 4px;
+}
+.gx-atajos::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}

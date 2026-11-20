@@ -1034,9 +1034,10 @@ export default function Gravix(props: Props) {
             {parcial && <div className="gx-msg gx-yo opacity-60"><p>{parcial}…</p></div>}
           </div>
 
-          <div className="flex flex-wrap gap-1.5 px-4 pb-2">
+          {/* Atajos en una sola fila desplazable: la conversacion conserva el espacio. */}
+          <div className="gx-atajos flex gap-1.5 overflow-x-auto px-4 pb-2 pt-1">
             {sugerencias.map((s) => (
-              <button key={s} type="button" onClick={() => { callar(); procesar(s); }} className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11.5px] text-slate-300 hover:border-sky-600 hover:text-white">{s}</button>
+              <button key={s} type="button" onClick={() => { callar(); procesar(s); }} className="shrink-0 whitespace-nowrap rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11.5px] text-slate-300 hover:border-sky-600 hover:text-white">{s}</button>
             ))}
           </div>
 
