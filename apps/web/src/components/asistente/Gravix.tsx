@@ -23,9 +23,7 @@ const APP_A_PESTANA: Record<string, Pestana> = {
   piloto: "gravix",
   usuarios: "usuarios",
 };
-/** Preguntas que la analitica propia no responde (por que, comparaciones, periodos...): con IA activa van a Claude. */
-const COMPLEJA =
-  /\b(por que|porque|compara|comparar|comparacion|comparado|diferencia|cuando|semana pasada|mes pasado|ayer|anoche|promedio|maximo|minimo|pico|historial|historico|evolucion|explica por que|cuanto subio|cuanto bajo|cual fue|cuales fueron|desde)\b/;
+
 /** Ordenes que siempre se resuelven aqui (rapido y sin costo), aunque la IA este activa. */
 const SIEMPRE_LOCAL = new Set<Accion["tipo"]>(["detalle", "pestana", "sede", "equipo", "alertas", "vista", "inicio", "sala", "cerrar", "callar", "avisos", "gracias", "adios", "menu", "saludo", "pedir_sede", "pedir_telemetria"]);
 import "./gravix-asistente.css";
@@ -112,6 +110,8 @@ interface Mensaje {
   boton?: { label: string; accion: Accion };
   /** Tarjetas de riesgo (analitica predictiva). */
   tarjetas?: HallazgoRiesgo[];
+  /** Quien respondio cuando fue la IA ("IA local · qwen3.5:4b"). */
+  fuente?: string;
 }
 
 interface Prefs {
@@ -362,16 +362,16 @@ export default function Gravix(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const agregar = (de: Mensaje["de"], t: string, boton?: Mensaje["boton"], tarjetas?: HallazgoRiesgo[]) =>
-    setMensajes((m) => [...m.slice(-40), { id: ++idRef.current, de, texto: t, boton, tarjetas }]);
+  const agregar = (de: Mensaje["de"], t: string, boton?: Mensaje["boton"], tarjetas?: HallazgoRiesgo[], fuente?: string) =>
+    setMensajes((m) => [...m.slice(-40), { id: ++idRef.current, de, texto: t, boton, tarjetas, fuente }]);
 
   /** true cuando la ultima orden abrio algo: el panel se minimiza para dejar ver la pantalla. */
   const minimizar = useRef(false);
   const abiertoRef = useRef(abierto);
   abiertoRef.current = abierto;
 
-  const decir = (t: string, boton?: Mensaje["boton"], atajos?: string[], tarjetas?: HallazgoRiesgo[]) => {
-    agregar("gravix", t, boton, tarjetas);
+  const decir = (t: string, boton?: Mensaje["boton"], atajos?: string[], tarjetas?: HallazgoRiesgo[], fuente?: string) => {
+    agregar("gravix", t, boton, tarjetas, fuente);
     pendienteRef.current = boton?.accion ?? null;
     if (atajos) setSugerencias(atajos);
     hablar(t);
@@ -521,7 +521,7 @@ export default function Gravix(props: Props) {
         if (!p.current.conDatos)
           return decir(`${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix, su asistente. Puedo llevarlo a cualquier pestaña o consultarle el Centro de mando. ¿Qué desea hacer hoy?`, undefined, MENU);
         return decir(
-          `${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix, su asistente. ${estado}${aviso}${ultNombre ? ` La última vez revisó ${ultNombre}.` : ""} ¿Qué desea hacer hoy?`,
+          `${saludoHora()}${nombre ? `, ${nombre}` : ""}. Soy Gravix, su asistente. ${estado}${aviso}${ultNombre ? ` La última vez revisó ${ultNombre}.` : ""}${iaRef.current && prefsRef.current.ia ? " Tengo la inteligencia artificial conectada: pregúnteme lo que necesite." : ""} ¿Qué desea hacer hoy?`,
           top ? { label: "Ver el análisis", accion: { tipo: "riesgos", sedeId: null } } : crit.length ? { label: "Ver alarmas críticas", accion: { tipo: "leer_alarmas", sedeId: null } } : undefined,
           atajos.slice(0, 7),
         );
@@ -806,10 +806,10 @@ export default function Gravix(props: Props) {
       } else if (accion.tipo === "resumen" && c.sedeId) accion = { tipo: "sede", sedeId: c.sedeId, estado: true };
       else if (accion.tipo === "resumen" && c.grupoId) accion = { tipo: "grupo", grupoId: c.grupoId };
     }
-    // Con Gravix IA activa: lo que no entiende, o las preguntas que piden razonar (por que, comparar,
-    // periodos), van a Claude; abrir pantallas y las consultas conocidas siguen aqui, sin costo.
-    if (iaRef.current && prefsRef.current.ia && (accion.tipo === "desconocido" || (COMPLEJA.test(n) && !SIEMPRE_LOCAL.has(accion.tipo)))) {
-      void preguntarIA(orden);
+    // Con Gravix IA activa, TODAS las preguntas las responde la IA; aqui solo se resuelven las ordenes
+    // (abrir pantallas, sedes, equipos, pestañas, cortesias). Si la IA falla, responde el analisis propio.
+    if (iaRef.current && prefsRef.current.ia && !SIEMPRE_LOCAL.has(accion.tipo)) {
+      void preguntarIA(orden, accion);
       return;
     }
     responder(accion);
@@ -817,14 +817,20 @@ export default function Gravix(props: Props) {
 
   /* ---------- Gravix IA (opcional: solo con clave en el servidor y el interruptor "Usar IA") ---------- */
   const [iaDisponible, setIaDisponible] = useState(false);
+  /** "IA local · qwen3.5:4b" o "Claude · ..." (lo que informa el servidor). */
+  const [iaNombre, setIaNombre] = useState("IA");
   const iaRef = useRef(false);
   iaRef.current = iaDisponible;
   const [pensando, setPensando] = useState(false);
   useEffect(() => {
     let vivo = true;
     apiClient
-      .get<{ disponible: boolean }>("/asistente/estado")
-      .then((r) => vivo && setIaDisponible(!!r.data?.disponible))
+      .get<{ disponible: boolean; proveedor?: string | null; modelo?: string | null }>("/asistente/estado")
+      .then((r) => {
+        if (!vivo) return;
+        setIaDisponible(!!r.data?.disponible);
+        setIaNombre(`${r.data?.proveedor === "ollama" ? "IA local" : "IA"}${r.data?.modelo ? ` · ${r.data.modelo}` : ""}`);
+      })
       .catch(() => vivo && setIaDisponible(false));
     return () => {
       vivo = false;
@@ -858,7 +864,7 @@ export default function Gravix(props: Props) {
     return null;
   };
 
-  const preguntarIA = async (pregunta: string) => {
+  const preguntarIA = async (pregunta: string, respaldo?: Accion) => {
     setPensando(true);
     pendienteRef.current = null;
     // Turnos anteriores en texto (la pregunta actual va aparte; el estado aun no la incluye).
@@ -867,7 +873,7 @@ export default function Gravix(props: Props) {
       const { data } = await apiClient.post<{ respuesta: string; acciones: AccionIA[] }>(
         "/asistente/preguntar",
         { pregunta, historial, sedeActual: p.current.sedeActual ?? undefined },
-        { timeout: 180_000 },
+        { timeout: 90_000 },
       );
       for (const a of data.acciones ?? []) {
         const nav = accionDeIA(a);
@@ -877,13 +883,15 @@ export default function Gravix(props: Props) {
         } else p.current.ejecutar(nav);
         minimizar.current = true;
       }
-      decir(data.respuesta, undefined, MENU);
+      decir(data.respuesta, undefined, MENU, undefined, iaNombre);
     } catch (e) {
       const status = (e as { response?: { status?: number } }).response?.status;
-      if (status === 503) {
-        setIaDisponible(false);
-        decir("Gravix IA no está activada en el servidor. Sigo con mi análisis propio: pida «menú» para ver lo que puedo hacer.", undefined, MENU);
-      } else decir("No pude completar la consulta con la IA en este momento. Intente de nuevo, o desactive «Usar IA» para trabajar solo con el análisis propio.", undefined, MENU);
+      if (status === 503) setIaDisponible(false);
+      // Respaldo: si la IA no responde, contesta el analisis propio (si entendio la pregunta).
+      if (respaldo && respaldo.tipo !== "desconocido") {
+        agregar("gravix", "La IA no respondió a tiempo; le contesto con mi análisis propio.");
+        responder(respaldo);
+      } else decir("La IA no respondió en este momento. Intente de nuevo en unos segundos, o pídame «menú» para ver lo que puedo hacer sin ella.", undefined, MENU);
     } finally {
       setPensando(false);
     }
@@ -1142,7 +1150,7 @@ export default function Gravix(props: Props) {
             <div className="min-w-0 flex-1">
               <strong className="flex items-center gap-1.5 text-sm tracking-wide text-slate-50">
                 GRAVIX
-                {iaDisponible && prefs.ia && <span title="Preguntas libres con IA activadas" className="rounded bg-sky-900 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-sky-200">IA</span>}
+                {iaDisponible && prefs.ia && <span title="Inteligencia artificial conectada: responde las preguntas" className="rounded bg-emerald-900 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-emerald-200">{iaNombre} · conectada</span>}
               </strong>
               <span className="text-[11px] text-slate-400">
                 {pensando && "Consultando los datos… "}
@@ -1167,6 +1175,7 @@ export default function Gravix(props: Props) {
             {mensajes.map((m) => (
               <div key={m.id} className={m.de === "yo" ? "gx-msg gx-yo" : "gx-msg gx-el"}>
                 <p>{m.texto}</p>
+                {m.fuente && <span className="mt-1 inline-block rounded bg-sky-950 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">Respondió: {m.fuente}</span>}
                 {m.tarjetas?.map((h, i) => (
                   <TarjetaRiesgo
                     key={h.id}
