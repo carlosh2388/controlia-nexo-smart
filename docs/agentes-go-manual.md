@@ -54,8 +54,10 @@ nativos.
 |---|---|---|---|---|
 | `/home/api/agente-go/` | `tec3-nivel10` | LoRaWAN (ChirpStack 192.168.70.6) + BACnet (bridge `127.0.0.1:3099` → AC Smart 5 10.3.0.11) | cada 30 s | Funcionando: 35 equipos, todos ya existían (sin duplicados) |
 | `/home/api/agente-go-tec3-oficina/` | `tec3-oficina` | Gateway LoRa directo (UDP `0.0.0.0:1700`) | cada 15 s | **En pausa**: el gateway de pruebas volvió a apuntar a ChirpStack, no recibe tramas |
-| `/home/api/agente-go-escuintla/` | `igss-escuintla` | Modbus (EBO AS-P 10.0.6.26) + LoRaWAN (ChirpStack 10.0.6.35) | cada 15 s | Funcionando: 14/15 equipos Modbus + ~120 sensores LoRaWAN |
-| `/home/api/agente-go-escuintla-directo/` | `igss-escuintla-directo` | Modbus directo a 12 medidores (Piloto Gravix, Fase B), agente 0.5.5 con `remoteConfig: true` y backlog | cada 30 s | Funcionando (actualizado al 17/11/2026). **No está en el crontab**: no arranca solo si se reinicia el servidor |
+| `/home/api/agente-go-escuintla/` | `igss-escuintla` | Modbus (EBO AS-P 10.0.6.26) + LoRaWAN (ChirpStack 10.0.6.35) | cada 15 s | **Detenido desde el 20/11/2026 00:14 UTC: migrado al Gravix de sede** (contenedor `agente2`, ver abajo). Su línea del crontab quedó comentada. No volver a arrancarlo: leería los mismos equipos dos veces |
+| `/home/api/agente-go-escuintla-directo/` | `igss-escuintla-directo` | Modbus directo a 14 medidores (Piloto Gravix) | cada 30 s | **Detenido desde el 20/11/2026: migrado al Gravix de sede** (contenedor `agente`) |
+| Docker `gravix-sede-prueba` → `agente` | `igss-escuintla-directo` | Modbus directo, 14 medidores, 0.5.5, config remota | cada 30 s | **Funcionando desde el 20/11/2026.** Envía al Gravix de sede (3110) y arranca solo con Docker |
+| Docker `gravix-sede-prueba` → `agente2` | `igss-escuintla` | Agente general: AS-P (14) + LoRaWAN (122) + eventos con sus umbrales (`deploy/gravix-sede/agentes/igss-escuintla.yaml`, solo en el servidor) | cada 15 s | **Funcionando desde el 20/11/2026.** Pasó de 0.4.0 a 0.5.5. Vuelta atrás: `~/gravix-sede-prueba/migr-vuelta-atras.sh` |
 
 > Al 18/11/2026: `bacnet-bridge` está caído desde el 15/11 (sin memoria), así que el agente de TEC 3
 > Nivel 10 no recibe datos de los aires. Diagrama general en

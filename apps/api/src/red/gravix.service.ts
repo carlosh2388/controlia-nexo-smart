@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { PrismaService } from "../prisma/prisma.service";
 
 /** Lo que el centro sabe de una sede Gravix en este momento. */
@@ -59,6 +60,11 @@ export class GravixService implements OnModuleInit, OnModuleDestroy {
   private readonly vistas = new Map<string, VistaSede>();
   /** deviceId (de la base de la sede) → id de la sede. */
   private readonly equipos = new Map<string, string>();
+  /** Lista completa de equipos (GET /devices) y estado de sus agentes, por sede: la usa la pestaña Sedes. */
+  private readonly dispositivos = new Map<string, Record<string, unknown>[]>();
+  private readonly estadoAgentes = new Map<string, Record<string, unknown>[]>();
+  /** Sedes que tambien trae el monitoreo central (Telemetria 1): su foto por minuto ya la guarda CentroService. */
+  private readonly sedesCentrales: Set<string>;
   private timers: NodeJS.Timeout[] = [];
   private vuelta = 0;
 
@@ -68,6 +74,40 @@ export class GravixService implements OnModuleInit, OnModuleDestroy {
   ) {
     const secreto = config.get<string>("GRAVIX_KEYS_SECRET") || config.get<string>("JWT_ACCESS_SECRET") || "change-me-access";
     this.llave = createHash("sha256").update(`gravix-sede:${secreto}`).digest();
+    let ids: string[] = [];
+    try {
+      const archivo = config.get<string>("CENTRAL_SEDES_FILE");
+      if (archivo) ids = (JSON.parse(readFileSync(archivo, "utf8")) as { id: string }[]).map((s) => s.id);
+    } catch {
+      /* sin archivo de sedes: ninguna sede central */
+    }
+    this.sedesCentrales = new Set(ids);
+  }
+
+  /** Equipos de las sedes Gravix que respondieron, y los buildingKey que cubren (para la lista GET /devices). */
+  dispositivosDeSedes() {
+    const keys = new Set<string>();
+    const lista: Record<string, unknown>[] = [];
+    for (const s of this.sedes) {
+      const d = this.dispositivos.get(s.id);
+      if (!d) continue;
+      s.agentes.forEach((k) => keys.add(k));
+      lista.push(...d);
+    }
+    return { keys, lista };
+  }
+
+  /** Estado de los agentes de las sedes Gravix (GET /devices/agent-status). */
+  estadoAgentesDeSedes() {
+    const keys = new Set<string>();
+    const lista: Record<string, unknown>[] = [];
+    for (const s of this.sedes) {
+      const d = this.estadoAgentes.get(s.id);
+      if (!d) continue;
+      s.agentes.forEach((k) => keys.add(k));
+      lista.push(...d);
+    }
+    return { keys, lista };
   }
 
   onModuleInit() {
@@ -203,6 +243,15 @@ export class GravixService implements OnModuleInit, OnModuleDestroy {
       const vista = (await r.json()) as VistaSede;
       this.vistas.set(s.id, vista);
       for (const d of vista.dispositivos ?? []) this.equipos.set(d.id, s.id);
+      // Todos los equipos de la sede (energia y sensores) y el estado de sus agentes.
+      const h = { headers: { "x-api-key": s.key }, signal: AbortSignal.timeout(8000) };
+      const [rd, ra] = await Promise.all([fetch(`${s.url}/api/v1/devices`, h).catch(() => null), fetch(`${s.url}/api/v1/devices/agent-status`, h).catch(() => null)]);
+      if (rd?.ok) {
+        const lista = (await rd.json()) as Record<string, unknown>[];
+        this.dispositivos.set(s.id, lista);
+        for (const d of lista) if (typeof d.id === "string") this.equipos.set(d.id, s.id);
+      }
+      if (ra?.ok) this.estadoAgentes.set(s.id, (await ra.json()) as Record<string, unknown>[]);
       let influx = previo?.influx ?? null;
       let webPuerto = previo?.webPuerto ?? null;
       let alarmas = previo?.alarmas ?? null;
@@ -243,6 +292,7 @@ export class GravixService implements OnModuleInit, OnModuleDestroy {
   private async guardarFoto() {
     const time = new Date(Math.floor(Date.now() / 60_000) * 60_000);
     const data = this.sedes.flatMap((s) => {
+      if (this.sedesCentrales.has(s.id)) return []; // ya la guarda CentroService desde el monitoreo central
       const e = this.estados.get(s.id);
       if (!e?.ok || !e.ultimoContacto || Date.now() - new Date(e.ultimoContacto).getTime() > 60_000) return [];
       return (this.vistas.get(s.id)?.dispositivos ?? []).map((d) => ({

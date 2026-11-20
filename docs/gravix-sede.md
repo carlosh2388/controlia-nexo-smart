@@ -405,8 +405,25 @@ no toca el stack `siasa-iot-platform` (3010/5173).
 | API de sede | `http://192.168.70.4:3110/api/v1` |
 | Web local | `http://192.168.70.4:5273`, usuario `admin`. La clave está en `ADMIN_PASSWORD` del `.env` |
 | Claves | `deploy/gravix-sede/.env` (permiso 600, fuera de git), generado con `generar-env.sh` |
-| Sede / agente | `SEDE_CODIGO=igss-escuintla`, buildingKey **`gravix-prueba-escuintla`**. Es provisional: si usara `igss-escuintla-directo` antes de mover el agente de verdad, el central le pediría a esta sede vacía los equipos directos de Escuintla |
-| En el Centro de mando | Sede `escuintla-gravix-prueba`, "Escuintla · Gravix de sede (prueba)", grupo Telemetría 2, dirección `http://192.168.70.4:3110` |
+| Agentes (desde el 20/11) | `agente` = `igss-escuintla-directo` (energía directa, 14 medidores) y `agente2` = `igss-escuintla` (general: AS-P 14 + LoRaWAN 122 + eventos). Son temporales: la meta es **un solo recolector por sede** |
+| En el Centro de mando | Sede **`escuintla`**, origen `gravix`, **Telemetría 2**, dirección `http://192.168.70.4:3110`, alarmas leídas de **api-SIASA**. Se quitó la sede de prueba `escuintla-gravix-prueba` |
+| Alarmas de Gravix | `ALARMAS_AGENTES=igss-escuintla-directo`, `ALERTAS_SEDE=Escuintla`, en paralelo (no envían) |
+
+### Migración de Escuintla (20/11/2026)
+
+| Paso | Qué se hizo | Resultado |
+| --- | --- | --- |
+| 1. Preparación, sin corte (00:03–00:11 UTC) | Respaldo de la base de la sede; código nuevo en el central y en la sede; `agentes/igss-escuintla.yaml` armado desde el `config.yaml` del agente; copia de 150 equipos, 6.65 M lecturas de sensores y 43.5 M lecturas de energía hasta T0 | 8 min |
+| 2. Cambio (desde 00:13:58 UTC) | Se detuvieron los 2 agentes del servidor y se comentó su línea del crontab. Se copiaron las lecturas desde T0, estados, 296 huecos, 81 255 eventos y configuraciones. Arrancaron `agente` y `agente2`. Escuintla se registró como sede Gravix en Telemetría 2 | Sede y central quedaron con el **mismo número de lecturas** (43 562 941) |
+| Arreglos durante el cambio | `agente2` no podía leer su archivo (permiso 600 con el usuario del contenedor, que es otro). `agente` tenía en disco la config vacía del agente de prueba con la misma versión v1 | Corregidos. **Corte real: unos 6 minutos** (00:14–00:20 UTC) |
+| Verificación | Lista de equipos sin duplicados (136 + 14), sync en vivo, comparación directo vs EBO, historial desde noviembre, historial LoRaWAN, InfluxDB escribiendo y motor de alarmas en paralelo | ✅ |
+
+Respaldos: `~/backups/gravix-sede-202611200003.dump` y `~/backups/siasa_iot-202611192250.dump`.
+Vuelta atrás: `~/gravix-sede-prueba/migr-vuelta-atras.sh`.
+
+**Antes de la migración** ocurrieron dos errores que conviene no repetir:
+- Al cambiar el agente de una sede, hay que **borrar la copia en disco** (`/data/remote-config.json`): si la configuración nueva tiene el mismo número de versión, el agente no la vuelve a pedir.
+- Mientras se reconstruye la imagen, el agente viejo sigue corriendo y puede volver a registrar su código: hay que **borrar su `agent_configs` después** de recrearlo.
 | Versión | `GRAVIX_VERSION=0.1.0` (imágenes `gravix-sede-api`, `gravix-sede-web`, `gravix-sede-agente`) |
 | InfluxDB propio | Servicio `influxdb` del mismo compose, web en `http://192.168.70.4:8186`, usuario `admin`, clave en `INFLUX_ADMIN_PASSWORD` del `.env`, org `igss`, bucket `telemetry`. (El contenedor `influxdb-test` del puerto 8086 es otro, de agosto, y no se usa) |
 | Estado | Agente conectado y config remota v1 subida, **sin fuentes**: todavía no lee medidores, para no leerlos dos veces |

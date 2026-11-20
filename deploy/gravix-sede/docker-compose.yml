@@ -140,9 +140,32 @@ services:
       AGENT_API_URL: http://gravix:3000/api/v1
       AGENT_SYNC_SECONDS: ${AGENT_SYNC_SECONDS:-30}
       AGENT_EVENTS: ${AGENT_EVENTS:-false}
+      AGENT_CONFIG_BASE: ${AGENT_CONFIG_BASE:-}
       TZ: America/Guatemala
     volumes:
       - agente_data:/data
+      - ./agentes:/config:ro
+    depends_on:
+      - gravix
+    logging: *logging
+
+  # Segundo agente (opcional, COMPOSE_PROFILES=agente2 en el .env). La meta es UN solo recolector por
+  # sede; esto es para la transicion de una sede que ya tenia dos agentes (ej. Escuintla: general + directo).
+  agente2:
+    profiles: ["agente2"]
+    image: gravix-sede-agente:${GRAVIX_VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      AGENT_BUILDING_KEY: ${AGENT2_BUILDING_KEY:-}
+      AGENT_API_KEY: ${AGENT_API_KEY}
+      AGENT_API_URL: http://gravix:3000/api/v1
+      AGENT_SYNC_SECONDS: ${AGENT2_SYNC_SECONDS:-30}
+      AGENT_EVENTS: ${AGENT2_EVENTS:-false}
+      AGENT_CONFIG_BASE: ${AGENT2_CONFIG_BASE:-}
+      TZ: America/Guatemala
+    volumes:
+      - agente2_data:/data
+      - ./agentes:/config:ro
     depends_on:
       - gravix
     logging: *logging
@@ -150,5 +173,6 @@ services:
 volumes:
   db_data:
   agente_data:
+  agente2_data:
   influx_data:
   influx_config:
