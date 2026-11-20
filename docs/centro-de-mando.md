@@ -204,39 +204,8 @@ ningún equipo ni cambia configuración. Fase 1: no usa IA ni licencias; todo co
     cada PC (lo hace el usuario o TI).
   - El reconocimiento de voz es el de Chrome/Edge y necesita internet (el audio lo procesa el
     servicio del navegador). Firefox no lo trae: queda la caja de texto.
-
-### Gravix IA: preguntas libres (fase 2, 20/11/2026)
-
-Con una clave de la API de Claude, Gravix responde preguntas libres sobre las sedes, las tres
-telemetrías, equipos, alarmas, consumo e historial ("¿qué sede consumió más hoy?", "¿por qué se
-disparó la alarma de Cobán?", "compara Telemetría 1 con la 2"), y puede abrir la pantalla que
-corresponda. Sin clave, todo sigue como en la fase 1.
-
-- API: módulo `apps/api/src/asistente/` (solo en el servidor central). `GET /asistente/estado`
-  (`{ disponible, modelo }`) y `POST /asistente/preguntar` (`{ pregunta, historial?, sedeActual? }` →
-  `{ respuesta, acciones }`); perfiles Administrador, Operador y Consulta.
-- Cómo responde: Claude (`claude-opus-5-5`, esfuerzo `medium`; con respaldo automático del servidor
-  de Anthropic si el modelo rechaza una consulta) con herramientas de **solo lectura**
-  (`herramientas.ts`): `red_resumen` (vista del centro + telemetrías + sedes de Agentes Go),
-  `centro_eventos`, `centro_historial_medidor`, `piloto_*`, `normas`, `eventos_sede` y `navegar`
-  (solo cambia la pantalla). Cada herramienta llama a esta misma API **con el token del usuario que
-  pregunta**, así ve solo sus sedes y sus permisos. Máximo 8 vueltas de herramientas por pregunta;
-  resultados de más de 60 000 caracteres se recortan avisándole al modelo.
-- Web: si `/asistente/estado` dice disponible, el panel muestra la etiqueta **IA**. Las órdenes
-  fijas (abrir sede, alarmas, ranking...) se siguen resolviendo en el navegador; las frases que no
-  entiende o que piden análisis (consumo, historial, "por qué", "cuándo", comparaciones, máximos...)
-  van a Gravix IA. Se envían los últimos 8 turnos para preguntas de seguimiento.
-- Qué sale del servidor: la pregunta y los datos que las herramientas consultan para responderla
-  viajan a la API de Claude (Anthropic). No se envían contraseñas ni claves.
-- Activarlo en un servidor (requiere salida a internet hacia `api.anthropic.com`; 192.168.70.4 sí
-  la tiene): agregar al `.env` del proyecto
-  ```
-  ANTHROPIC_API_KEY=sk-ant-...
-  # opcionales: ASISTENTE_MODELO=claude-opus-5-5  ASISTENTE_ESFUERZO=medium
-  ```
-  y recrear solo la API: `docker compose up -d --no-deps api`. Para apagarlo, borrar la clave y
-  recrear la API. El costo depende de cada pregunta (se cobra por uso en la cuenta de la clave);
-  conviene poner un límite de gasto en la consola de Anthropic.
+- Fase 2 (pendiente, requiere licencia de la API de Claude y salida a internet del servidor):
+  preguntas libres de analítica usando las mismas consultas del servidor MCP (`apps/mcp`).
 
 ## Pendiente
 
