@@ -394,6 +394,18 @@ Probado el 19/11 con un simulador de 23 casos:
 | Escritura | ~2 360 lecturas de energía por minuto | ~73 000 puntos por día |
 | Configuración de memoria | `shared_buffers` 128 MB (el valor de fábrica), `work_mem` 4 MB, 11 conexiones, caché 97.4 % | Sin límite |
 
+**Tarea programada "Resumen de consumo por hora"** (`tarea-consumo.flux`, creada el 20/11):
+- Corre en InfluxDB cada hora, 2 min después de la hora en punto.
+- Toma el detalle de `monitoreo` y guarda en el bucket **`monitoreo_horas`** (se conserva **365 días**),
+  measurement `consumo_hora`, tag `servicio`.
+- Por cada contenedor guarda `ram_mb_prom`, `ram_mb_max`, `cpu_pct_prom` y `cpu_pct_max`. Además,
+  `disco_gb` para `timescaledb` y `disco_mb` para `influxdb`.
+- Así se ve la tendencia de meses aunque el detalle de 10 s solo dure 30 días.
+- Se revisa en la web de InfluxDB → *Tasks* (ícono de calendario) → "Resumen de consumo por hora":
+  cada ejecución y su registro.
+- Se instala con `influx task create -o <org> -t <token> -f tarea-consumo.flux`, después de crear el bucket
+  `monitoreo_horas` con retención de 365 días.
+
 **Notas:**
 - Ningún contenedor tiene límite de memoria. En una VM de 4 GB conviene poner límites, por ejemplo
   TimescaleDB 1.5 GB e InfluxDB 512 MB, y subir `shared_buffers` a unos 512 MB.
