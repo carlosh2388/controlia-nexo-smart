@@ -1,9 +1,12 @@
 # Gravix: arquitectura de la solución implementada
 
-Estado al **18/11/2026**. Sede piloto: **IGSS Escuintla**. Servidor: **192.168.70.4 (pruebas)**.
+Estado al **23/11/2026**. Sede piloto: **IGSS Escuintla**, que desde el 20/11 funciona en su **Gravix de sede**.
+Servidor: **192.168.70.4 (pruebas)**.
 
-> En producción cada sede nueva tendrá **su propio Gravix local** (VM Linux con Docker), igual que
-> hoy cada sede de Telemetría 1 tiene su AS-P. El diseño está en [gravix-sede.md](./gravix-sede.md).
+> En producción cada sede tiene **su propio Gravix local** (VM Linux con Docker), igual que hoy cada
+> sede de Telemetría 1 tiene su AS-P. La arquitectura actual está en la **[sección 0](#0-arquitectura-en-producción-actualizado-al-2311)**.
+> La instalación y operación por sede, en [gravix-sede.md](./gravix-sede.md). La lista completa de
+> endpoints, en [api-referencia.md](./api-referencia.md).
 
 Gravix es la solución de SIASA para que las sedes **no dependan del EBO AS-P ni de sus licencias**
 para tener sus datos de energía. El software lee los medidores, guarda todo el historial con su hora,
@@ -11,9 +14,135 @@ detecta los datos que faltan y, en la fase final, los recupera. Este documento d
 está construido y funcionando**. La bitácora del despliegue, el mapa de registros y el detalle del
 comparativo están en [piloto-gravix.md](./piloto-gravix.md).
 
-![Arquitectura de Gravix](./diagramas/gravix-arquitectura.svg)
+---
 
-Archivos del diagrama: [SVG](./diagramas/gravix-arquitectura.svg) ·
+## 0. Arquitectura en producción (actualizado al 23/11)
+
+![Gravix de sede y Centro de mando en producción](./diagramas/gravix-produccion.svg)
+
+Archivos: [SVG](./diagramas/gravix-produccion.svg) · [PNG en alta resolución](./diagramas/gravix-produccion.png).
+El diagrama del piloto en un solo servidor (estado del 18/11) sigue en las secciones 2 a 8:
+[gravix-arquitectura.svg](./diagramas/gravix-arquitectura.svg).
+
+### 0.1 Vista general
+
+```mermaid
+flowchart LR
+  subgraph RED["Red de la sede"]
+    MED["Medidores ION7400 / PM2130 / generador"]
+    ASP["AS-P EBO (transición)"]
+    CS["ChirpStack (LoRaWAN)"]
+  end
+  subgraph VM["VM de la sede · Gravix de sede (docker compose)"]
+    AG["Agentes Go<br/>directo + general"]
+    API["BACKEND<br/>Gravix API NestJS<br/>GRAVIX_MODO=sede"]
+    WEB["FRONTEND<br/>web local React + nginx"]
+    TS[("TimescaleDB<br/>base principal")]
+    IX[("InfluxDB de la sede<br/>telemetry · monitoreo")]
+    TG["Telegraf"]
+  end
+  subgraph CEN["Servidor central"]
+    WC["FRONTEND<br/>Centro de mando"]
+    AC["BACKEND<br/>API central NestJS<br/>GRAVIX_MODO=central"]
+    PC[("PostgreSQL + TimescaleDB<br/>del central")]
+    IC[("InfluxDB CENTRAL<br/>un bucket por sede + resumen")]
+    MC["Monitoreo central 10.30.10.27<br/>(Telemetría 1, solo lectura)"]
+  end
+  MED -->|"Modbus TCP directo"| AG
+  ASP -->|"Modbus"| AG
+  CS -->|"MQTT"| AG
+  AG -->|"POST /devices/agent-sync"| API
+  WEB -->|"/api/v1 + /ws (nginx)"| API
+  API --> TS
+  API -->|"lectura · alarma · correo"| IX
+  TG --> IX
+  IX ==>|"réplica nativa, cola en disco 5 GB"| IC
+  AC -->|"GET /sede/* cada 15 s<br/>x-api-key (viewer)"| API
+  WC -->|"/api/v1 + JWT · /ws"| AC
+  AC --> PC
+  AC -->|"GET /api/vista"| MC
+  TS -.->|"respaldo nocturno (pendiente)"| CEN
+```
+
+### 0.2 Bases de datos
+
+| Base | Dónde | Motor | Qué guarda | Retención |
+| --- | --- | --- | --- | --- |
+| **TimescaleDB de la sede** (servicio `db`) | VM de la sede | PostgreSQL 16 + TimescaleDB 2.31 | **Todo**: `readings` (energía, bloques de 1 día, comprime a 7 días), `device_readings` (historial de sensores y medidores), `devices` y `agent_configs` (equipos, fichas, configuración de agentes), `alarma_eventos`, `alarma_correos`, `alarma_config`, `reading_gaps`, `site_events`, `users`, `role_permissions`, `api_keys`, `device_states` | Detalle **60 días** (`SEDE_RETENCION_DIAS`). Alarmas 12 meses. Configuración sin límite |
+| **InfluxDB de la sede** (servicio `influxdb`) | VM de la sede | InfluxDB 2.8 | Bucket `telemetry`: measurements **`lectura`** (energía), **`alarma`** (apertura y cierre) y **`correo`** (preparado o enviado) | **60 días** |
+| | | | Bucket `monitoreo`: consumo de contenedores y tamaño de las bases (Telegraf, cada 10 s) | 30 días |
+| | | | Bucket `monitoreo_horas`: resumen por hora (tarea "Resumen de consumo por hora") | 1 año |
+| **InfluxDB central** (`deploy/central-influx`) | Servidor central | InfluxDB 2.8 | **Un bucket por sede** (código de la sede): réplica de `lectura`, `alarma` y `correo` | **1 año** |
+| | | | Bucket `resumen`: promedio, mínimo y máximo de 15 min de todas las sedes (`lectura_15m_prom/_min/_max`) | **5 años** |
+| **PostgreSQL + TimescaleDB del central** | Servidor central | PostgreSQL 16 + TimescaleDB | `red_grupos` y `red_sedes` (URL y clave cifrada de cada sede, fuente de alarmas), `centro_lecturas` (foto por minuto de cada sede), usuarios y permisos, TEC 3, historial de Escuintla anterior al 20/11 | Sin política |
+| Comparativo (opcional, desde el 20/11) | VM de la sede | `db-comparativo` (TimescaleDB) + `influxdb-comparativo` | Las mismas lecturas de energía en dos bases vacías, para medir el consumo de cada una | Hasta que termine la prueba |
+| Redis (servicio `redis`) | Sede y central | Redis 7 | Cola de comandos (BullMQ) | En memoria |
+
+**Por qué dos motores:**
+- **TimescaleDB es la base principal de Gravix.** Además de las lecturas guarda lo que no es serie de
+  tiempo (fichas, configuración, usuarios, alarmas, huecos), con ediciones, relaciones y transacciones.
+- **InfluxDB guarda solo series de tiempo.** Viaja al central por la réplica y alimenta los tableros.
+- **La configuración no va a InfluxDB.** Su respaldo es el **respaldo nocturno de TimescaleDB**
+  (pendiente) al central.
+
+**Si se cae el enlace con el central,** la sede sigue completa: lee, guarda, detecta huecos y genera
+alarmas. Al volver:
+- la réplica envía en orden todo lo pendiente (prueba del 23/11: 6 793 lecturas de un corte de 3 min, iguales en los dos lados);
+- el Centro de mando vuelve a consultar la sede.
+
+### 0.3 Backend, frontend y cómo se comunican
+
+| Pieza | Tecnología | Dónde corre | Qué hace |
+| --- | --- | --- | --- |
+| **Backend de sede** (Gravix API) | NestJS 10 + Fastify, Prisma, Node 20 | Contenedor `gravix` (:3010) | Recibe a los agentes, guarda en TimescaleDB e InfluxDB, detecta huecos, normas, motor de alarmas, API `/sede` para el central |
+| **Frontend de sede** (web local) | React 18 + Vite + TypeScript, React Query, Tailwind; nginx | Contenedor `web` (:5173) | Equipos (buscar y agregar, ficha), Piloto Gravix, Usuarios. Compilado con `VITE_GRAVIX_MODO=sede` |
+| **Backend central** (API central) | El mismo código, `GRAVIX_MODO=central` | Contenedor `api` (:3010) | Centro de mando, red y sedes Gravix (colector, paso de consultas), módulo de alarmas, asistente, TEC 3 |
+| **Frontend central** (Centro de mando) | La misma web, modo central | Contenedor `web` (:5173) | Mapa, Telemetría 1/2/3, alertas, Piloto, Equipos, Alarmas y correos, Usuarios |
+
+**Cómo se comunican:**
+1. **Frontend → backend (REST):**
+   - El navegador llama a `/api/v1/...` con `axios` (`apps/web/src/api/client.ts`). Envía `Authorization: Bearer <JWT>`.
+   - El JWT dura 15 min. Ante un 401, el cliente lo renueva solo con `POST /auth/refresh`.
+   - **React Query** guarda en caché y refresca cada pantalla, normalmente cada 15–60 s.
+   - En la sede, la web usa rutas **relativas** (`/api/v1`) y **nginx** las pasa a la API. Así la misma imagen sirve para cualquier IP.
+2. **Backend → frontend (tiempo real):** WebSocket **`/ws?token=<JWT>`**. La API envía
+   `{type: "device.state", deviceId, state}` cuando cambia un equipo, y la web refresca sus datos (`useDeviceSocket.ts`).
+3. **Agente → backend de sede:**
+   - Cada 15–30 s, `POST /devices/agent-sync` con `x-api-key` de rol `agent`: estado, lecturas, eventos y respaldo en disco.
+   - Cada 5 s, `GET /agents/:key/control`, para saber si hay configuración nueva o una búsqueda pedida.
+4. **Backend central → backend de sede:**
+   - Cada 15 s, `GET /sede/vista`, `/devices`, `/devices/agent-status` y `/agents`, más `/sede/salud` cada minuto, con la **clave de consulta** (rol `viewer`, cifrada en el central).
+   - Las pantallas del central piden el detalle de un equipo de la sede **a través del central** (paso de consultas, solo GET).
+   - El módulo de alarmas escribe en `PUT /sede/alarmas/config`, la única escritura que la sede acepta del central.
+5. **Backend → bases:** Prisma (SQL) a TimescaleDB; *line protocol* por HTTP a InfluxDB.
+6. **InfluxDB de la sede → InfluxDB central:** réplica nativa de InfluxDB, con cola en disco. **No pasa por la API.**
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant N as Navegador (Centro de mando)
+  participant AC as API central
+  participant AS as Gravix API (sede)
+  participant TS as TimescaleDB (sede)
+  participant AG as Agente Go
+  AG->>AS: POST /devices/agent-sync (x-api-key agent)
+  AS->>TS: lecturas, estado, huecos
+  N->>AC: GET /api/v1/pilot/devices/ID/series (Bearer JWT)
+  AC->>AS: misma ruta con x-api-key de consulta (paso de consultas)
+  AS->>TS: SELECT time_bucket(...)
+  AS-->>AC: serie
+  AC-->>N: serie (la pantalla no sabe que vino de la sede)
+  AS-->>N: (WebSocket /ws en la web local: device.state)
+```
+
+La lista completa de los 97 endpoints, con permisos y en qué servidor existe cada uno, está en
+**[api-referencia.md](./api-referencia.md)**.
+
+---
+
+![Arquitectura de Gravix (piloto, 18/11)](./diagramas/gravix-arquitectura.svg)
+
+Archivos del diagrama del piloto: [SVG](./diagramas/gravix-arquitectura.svg) ·
 [PNG en alta resolución](./diagramas/gravix-arquitectura.png).
 
 ---
@@ -200,6 +329,9 @@ modbusServers:
 
 ### Endpoints
 
+Endpoints de Gravix para historial y agentes. La lista completa de los 97 endpoints, incluida la API
+`/sede` que consulta el Centro de mando y el módulo de alarmas, está en [api-referencia.md](./api-referencia.md).
+
 | Método | Ruta | Uso |
 | --- | --- | --- |
 | POST | `/devices/agent-sync` | El agente envía snapshot, eventos y respaldo (API key de rol `agent`) |
@@ -378,14 +510,19 @@ sequenceDiagram
 
 ## 10. Operación
 
-| Tarea | Cómo |
+Desde el 20/11, los dos agentes de Escuintla corren en el **Gravix de sede** (Docker `gravix-sede-prueba`).
+Los programas de `~/agente-go-escuintla*` están detenidos y **no deben volver a arrancarse**, porque
+leerían los mismos medidores dos veces.
+
+| Tarea | Cómo (dentro de `~/gravix-sede-prueba/src/deploy/gravix-sede`) |
 | --- | --- |
-| Ver si el agente directo corre | `ps -ef \| grep agente-go-escuintla-directo` (no usar `pkill -f` con el nombre del script: también mata la sesión SSH) |
-| Arrancarlo después de reiniciar el servidor | `~/agente-go-escuintla-directo/start.sh` (no está en el crontab) |
-| Cambiar su configuración | Web → **Equipos** → Configuración (se guarda como versión nueva y el agente la aplica sola) |
-| Ver el log | `~/agente-go-escuintla-directo/agente.log` |
-| Respaldo pendiente de enviar | `~/agente-go-escuintla-directo/data/backlog/` |
-| Volver atrás la base de datos | Ver "Vuelta atrás" en [piloto-gravix.md](./piloto-gravix.md#vuelta-atrás) |
+| Ver si todo corre | `docker compose -p gravix-sede-prueba ps` |
+| Log de un agente | `docker compose -p gravix-sede-prueba logs -f --tail 50 agente` (o `agente2`) |
+| Arranque después de reiniciar el servidor | Automático (`restart: unless-stopped`) |
+| Cambiar la configuración de un agente | Web local de la sede → **Equipos** → Configuración (versión nueva, se aplica sola) |
+| Salud de la sede, réplica y alarmas | `GET /api/v1/sede/salud` con la clave de consulta |
+| Consumo de las bases | InfluxDB de la sede → Dashboards → "Consumo Gravix de sede" |
+| Volver al esquema anterior | `~/gravix-sede-prueba/migr-vuelta-atras.sh` |
 
 ## 11. Pendientes para pasar a producción
 
@@ -393,15 +530,20 @@ sequenceDiagram
    y verificar el factor de potencia de los PM2130 (sale entre 1.05 y 1.42, probablemente codificación de 4 cuadrantes).
 2. **Confirmar en la pantalla del medidor:** el THD de corriente de las fases B y C, y la escala de kW, kVA, Hz, RPM,
    carga, aceite y combustible del generador (con el motor encendido).
-3. **Agregar el agente directo al crontab** para que arranque solo.
-4. **Fase C:** verificar cómo se lee la memoria (data recorder) del ION7400 antes de programar la recuperación.
-5. **Retención:** decidir cuánto tiempo se guarda el detalle de 15–30 s.
+3. ~~Agregar el agente directo al crontab~~: resuelto. Desde el 20/11 corre en Docker y arranca solo.
+4. **Fase C:** verificar cómo se lee la memoria (data recorder) del ION7400 antes de programar la
+   recuperación ("recuperado"). En los PM2130, estimar la energía del hueco por diferencia de contador ("estimado").
+5. ~~Retención~~: decidida el 23/11. 2 meses en la sede; 1 año de detalle y 5 años de resumen en el InfluxDB central.
 6. **Generador Módulos:** todavía no se lee directo.
 7. **Confirmar el modelo** PM2130 o EM6400NG+.
+8. **Respaldo nocturno de la configuración** (TimescaleDB sin lecturas) de cada sede al central.
+9. **Correos:** comparar unas semanas los preparados por Gravix contra los enviados por api-SIASA, antes de que Gravix envíe.
+10. **Un solo recolector por sede:** unir el agente general y el directo cuando se retire el AS-P.
 
 ## 12. Documentos relacionados
 
-- [gravix-sede.md](./gravix-sede.md): diseño para producción, con un Gravix local por sede.
+- [api-referencia.md](./api-referencia.md): los 97 endpoints, autenticación, WebSocket y paso de consultas.
+- [gravix-sede.md](./gravix-sede.md): instalación y operación del Gravix de sede, alarmas, consumo, InfluxDB central.
 - [piloto-gravix.md](./piloto-gravix.md): bitácora, mapa de registros y detalle del comparativo.
 - [arquitectura-general.md](./arquitectura-general.md): toda la plataforma.
 - [agentes-go-manual.md](./agentes-go-manual.md): operación de los agentes.

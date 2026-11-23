@@ -1,0 +1,280 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1200" width="1800" height="1200" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif">
+  <title>Gravix de sede y Centro de mando: arquitectura en producción, bases de datos, backend y frontend (23/11/2026)</title>
+  <defs>
+    <style>
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.2; }
+      .key { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.6; }
+      .agent { fill: #f0fdfa; stroke: #0d9488; stroke-width: 1.8; }
+      .chip { fill: #ffffff; stroke: #93c5fd; stroke-width: 1.1; }
+      .front { fill: #f0f9ff; stroke: #0284c7; stroke-width: 1.6; }
+      .dbx { fill: #eef2ff; stroke: #6366f1; stroke-width: 1.8; }
+      .ifx { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 1.8; }
+      .ext { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.2; stroke-dasharray: 5 4; }
+      .opt { fill: #fffbeb; stroke: #d97706; stroke-width: 1.2; stroke-dasharray: 6 4; }
+      .note { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1; }
+      .ptitle { font-size: 13px; font-weight: 700; letter-spacing: 1.2px; fill: #334155; }
+      .t { font-size: 14px; font-weight: 700; fill: #0f172a; }
+      .ts { font-size: 12.5px; font-weight: 700; fill: #0f172a; }
+      .d { font-size: 11.5px; fill: #475569; }
+      .ds { font-size: 10.8px; fill: #64748b; }
+      .tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.8px; }
+      .lbl { font-size: 11px; fill: #334155; font-weight: 600; paint-order: stroke; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }
+      .ln { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+      .direct { stroke: #2563eb; stroke-dasharray: 7 4; }
+      .modbus { stroke: #2563eb; }
+      .mqtt { stroke: #ea580c; }
+      .http { stroke: #0f172a; stroke-width: 2.6; }
+      .web { stroke: #0284c7; }
+      .db { stroke: #6366f1; }
+      .cons { stroke: #0891b2; stroke-width: 2.6; }
+      .rep { stroke: #16a34a; stroke-width: 3.4; }
+      .bak { stroke: #94a3b8; stroke-dasharray: 6 5; }
+    </style>
+    <marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+    <marker id="a-org" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#ea580c"/></marker>
+    <marker id="a-blk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0f172a"/></marker>
+    <marker id="a-web" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0284c7"/></marker>
+    <marker id="a-db" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6366f1"/></marker>
+    <marker id="a-cons" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0891b2"/></marker>
+    <marker id="a-rep" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#16a34a"/></marker>
+    <marker id="a-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#94a3b8"/></marker>
+  </defs>
+
+  <rect width="1800" height="1200" fill="#f1f5f9"/>
+
+  <!-- Encabezado -->
+  <rect width="1800" height="82" fill="#0f172a"/>
+  <text x="40" y="44" font-size="26" font-weight="700" fill="#ffffff">Gravix de sede + Centro de mando · Arquitectura en producción</text>
+  <text x="40" y="68" font-size="13.5" fill="#94a3b8">Cada sede guarda sus datos en su propio Gravix (reemplazo del AS-P); el central consulta, replica y respalda</text>
+  <text x="1760" y="44" font-size="14" font-weight="600" fill="#e2e8f0" text-anchor="end">Estado al 23/11/2026 · piloto IGSS Escuintla</text>
+  <text x="1760" y="68" font-size="12" fill="#94a3b8" text-anchor="end">Prueba: sede y central en 192.168.70.4 · producción: VM por sede + servidor central</text>
+
+  <!-- ===================== 1 · RED DE LA SEDE ===================== -->
+  <rect class="panel" x="30" y="100" width="380" height="1000" rx="12"/>
+  <text class="ptitle" x="50" y="126">1 · RED DE LA SEDE</text>
+
+  <rect class="box" x="48" y="145" width="344" height="150" rx="9"/>
+  <text class="t" x="64" y="170">Medidores de energía · Modbus TCP</text>
+  <text class="d" x="64" y="194">ANALIZADOR-1…6 · ION7400 (calidad de energía)</text>
+  <text class="d" x="64" y="213">PM2130 ×7 (circuitos)</text>
+  <text class="d" x="64" y="232">Generador (gateway RS-485 de ANALIZADOR-2)</text>
+  <text class="ds" x="64" y="256">10.0.6.x · solo lectura, funciones 03/04</text>
+  <text class="ds" x="64" y="274">Nunca se escribe en un medidor</text>
+
+  <rect class="ext" x="48" y="315" width="344" height="90" rx="9"/>
+  <text class="t" x="64" y="340">AS-P EBO 10.0.6.26 · Telemetría 1</text>
+  <text class="d" x="64" y="362">Se lee en paralelo solo para comparar</text>
+  <text class="ds" x="64" y="382">Se retira cuando Gravix lo reemplace</text>
+
+  <rect class="box" x="48" y="425" width="344" height="90" rx="9"/>
+  <text class="t" x="64" y="450">ChirpStack 10.0.6.35 · MQTT</text>
+  <text class="d" x="64" y="472">122 sensores LoRaWAN: temperatura, puertas, CO₂</text>
+  <text class="ds" x="64" y="492">Se guardan; las funciones de Gravix son solo de energía</text>
+
+  <rect class="ext" x="48" y="535" width="344" height="110" rx="9"/>
+  <text class="t" x="64" y="560">api-SIASA 10.0.6.33 (servidor de la sede)</text>
+  <text class="d" x="64" y="582">Envía HOY los correos de alarma (datos del AS-P)</text>
+  <text class="d" x="64" y="601">El Centro de mando la lee en solo lectura</text>
+  <text class="ds" x="64" y="624">Gravix prepara los mismos correos sin enviarlos</text>
+
+  <rect class="box" x="48" y="665" width="344" height="80" rx="9"/>
+  <text class="t" x="64" y="690">Ingeniero en la sede (navegador)</text>
+  <text class="d" x="64" y="712">Web local del Gravix: http://&lt;IP de la VM&gt;:5173</text>
+  <text class="ds" x="64" y="731">Buscar equipos, ficha, umbrales</text>
+
+  <rect class="note" x="48" y="770" width="344" height="310" rx="9"/>
+  <text class="ts" x="64" y="796">Red que necesita cada sede</text>
+  <text class="d" x="64" y="822">VM → medidores y gateways · 502/TCP</text>
+  <text class="d" x="64" y="844">VM → ChirpStack · 1883/TCP (MQTT)</text>
+  <text class="d" x="64" y="866">VM → InfluxDB central · 8086/TCP (réplica)</text>
+  <text class="d" x="64" y="888">Central → VM · 3010/TCP (consultas)</text>
+  <text class="d" x="64" y="910">Navegador → VM · 5173/TCP (web local)</text>
+  <text class="ts" x="64" y="944">Qué pasa si se cae el enlace</text>
+  <text class="d" x="64" y="968">La sede sigue leyendo, guardando y</text>
+  <text class="d" x="64" y="986">generando alarmas (como el AS-P).</text>
+  <text class="d" x="64" y="1010">Al volver, la réplica envía lo pendiente</text>
+  <text class="d" x="64" y="1028">en orden y el Centro de mando la</text>
+  <text class="d" x="64" y="1046">vuelve a consultar.</text>
+
+  <!-- ===================== 2 · VM DE LA SEDE ===================== -->
+  <rect class="panel" x="430" y="100" width="720" height="1000" rx="12"/>
+  <text class="ptitle" x="450" y="126">2 · VM DE LA SEDE · docker compose gravix-sede (Ubuntu 24.04)</text>
+
+  <!-- agentes -->
+  <rect class="agent" x="450" y="145" width="330" height="95" rx="10"/>
+  <text class="t" x="466" y="170">agente2 · igss-escuintla (general)</text>
+  <text class="d" x="466" y="192">Agente Go 0.5.5 · AS-P (14) + LoRaWAN (122)</text>
+  <text class="d" x="466" y="210">eventos propios (CO₂, puertas, carga alta)</text>
+  <text class="ds" x="466" y="229">Temporal: la meta es un solo recolector</text>
+
+  <rect class="agent" x="800" y="145" width="330" height="95" rx="10"/>
+  <text class="t" x="816" y="170">agente · igss-escuintla-directo</text>
+  <text class="d" x="816" y="192">Agente Go 0.5.5 · energía directa (14 medidores)</text>
+  <text class="d" x="816" y="210">config remota · búsqueda de equipos</text>
+  <text class="ds" x="816" y="229">guarda 3 días en disco si Gravix no responde</text>
+
+  <!-- backend -->
+  <rect class="key" x="450" y="265" width="680" height="205" rx="10"/>
+  <text class="tag" x="466" y="288" fill="#1d4ed8">BACKEND</text>
+  <text class="t" x="540" y="288">Gravix API · NestJS 10 + Fastify · GRAVIX_MODO=sede · :3010</text>
+  <rect class="chip" x="466" y="302" width="158" height="46" rx="7"/><text class="ts" x="476" y="321">devices</text><text class="ds" x="476" y="339">agent-sync (recibe)</text>
+  <rect class="chip" x="632" y="302" width="158" height="46" rx="7"/><text class="ts" x="642" y="321">agents</text><text class="ds" x="642" y="339">config remota, búsqueda</text>
+  <rect class="chip" x="798" y="302" width="158" height="46" rx="7"/><text class="ts" x="808" y="321">timeseries</text><text class="ds" x="808" y="339">historial, huecos, normas</text>
+  <rect class="chip" x="964" y="302" width="150" height="46" rx="7"/><text class="ts" x="974" y="321">alarmas</text><text class="ds" x="974" y="339">reglas y correos</text>
+  <rect class="chip" x="466" y="356" width="158" height="46" rx="7"/><text class="ts" x="476" y="375">sede</text><text class="ds" x="476" y="393">API para el central</text>
+  <rect class="chip" x="632" y="356" width="158" height="46" rx="7"/><text class="ts" x="642" y="375">influx-writer</text><text class="ds" x="642" y="393">lecturas, alarmas, correos</text>
+  <rect class="chip" x="798" y="356" width="158" height="46" rx="7"/><text class="ts" x="808" y="375">comparativo</text><text class="ds" x="808" y="393">opcional (prueba)</text>
+  <rect class="chip" x="964" y="356" width="150" height="46" rx="7"/><text class="ts" x="974" y="375">auth · users</text><text class="ds" x="974" y="393">access · api-keys</text>
+  <text class="d" x="466" y="426">Prisma → PostgreSQL/TimescaleDB · HTTP line protocol → InfluxDB</text>
+  <text class="d" x="466" y="446">Claves desde el .env: agente (rol agent) y centro (rol viewer)</text>
+  <text class="ds" x="466" y="462">Retención SEDE_RETENCION_DIAS=60 · motor de alarmas como api-SIASA (modo paralelo)</text>
+
+  <!-- frontend + soporte -->
+  <rect class="front" x="450" y="495" width="330" height="95" rx="10"/>
+  <text class="tag" x="466" y="517" fill="#0369a1">FRONTEND</text>
+  <text class="t" x="546" y="517">web local · nginx :5173</text>
+  <text class="d" x="466" y="539">React 18 + Vite · modo sede (VITE_GRAVIX_MODO)</text>
+  <text class="d" x="466" y="557">Equipos, Piloto Gravix, Usuarios</text>
+  <text class="ds" x="466" y="576">nginx pasa /api/v1 y /ws a la API</text>
+
+  <rect class="box" x="800" y="495" width="330" height="95" rx="10"/>
+  <text class="t" x="816" y="520">Telegraf · Redis · Mosquitto</text>
+  <text class="d" x="816" y="542">Telegraf: consumo de contenedores (10 s)</text>
+  <text class="d" x="816" y="560">y tamaño de las bases (5 min)</text>
+  <text class="ds" x="816" y="579">Redis y Mosquitto: internos de la API</text>
+
+  <!-- datos -->
+  <rect class="dbx" x="450" y="615" width="330" height="230" rx="10"/>
+  <text class="tag" x="466" y="638" fill="#4338ca">BASE PRINCIPAL</text>
+  <text class="t" x="466" y="660">TimescaleDB · PostgreSQL 16 + 2.31</text>
+  <text class="d" x="466" y="684">readings · energía, 60 días</text>
+  <text class="ds" x="476" y="701">bloques de 1 día, comprime a los 7 días</text>
+  <text class="d" x="466" y="723">device_readings · sensores, 60 días</text>
+  <text class="d" x="466" y="745">devices · agent_configs (fichas, config)</text>
+  <text class="d" x="466" y="767">alarma_eventos · alarma_correos · config</text>
+  <text class="d" x="466" y="789">reading_gaps · site_events</text>
+  <text class="d" x="466" y="811">users · role_permissions · api_keys</text>
+  <text class="ds" x="466" y="832">Fuente de la verdad de la sede</text>
+
+  <rect class="ifx" x="800" y="615" width="330" height="230" rx="10"/>
+  <text class="tag" x="816" y="638" fill="#6d28d9">SERIES DE TIEMPO</text>
+  <text class="t" x="816" y="660">InfluxDB 2.8 de la sede · :8086</text>
+  <text class="d" x="816" y="684">telemetry · 60 días</text>
+  <text class="ds" x="826" y="701">lectura · alarma · correo</text>
+  <text class="d" x="816" y="723">monitoreo · 30 días (Telegraf)</text>
+  <text class="d" x="816" y="745">monitoreo_horas · 1 año (tarea por hora)</text>
+  <text class="d" x="816" y="767">Tableros: Consumo · Por hora ·</text>
+  <text class="d" x="816" y="785">Comparativo TimescaleDB vs InfluxDB</text>
+  <text class="ds" x="816" y="812" fill="#15803d" font-weight="700">Réplica al InfluxDB central →</text>
+  <text class="ds" x="816" y="830">cola en disco 5 GB (más de 2 meses)</text>
+
+  <rect class="opt" x="450" y="870" width="680" height="70" rx="10"/>
+  <text class="ts" x="466" y="894">Comparativo (perfil opcional, desde el 20/11): db-comparativo + influxdb-comparativo</text>
+  <text class="d" x="466" y="916">Dos bases vacías que reciben las mismas lecturas de energía para medir el consumo de cada una</text>
+
+  <rect class="note" x="450" y="960" width="680" height="120" rx="10"/>
+  <text class="ts" x="466" y="985">Qué queda dónde en la sede</text>
+  <text class="d" x="466" y="1008">TimescaleDB: todo (lecturas, fichas, configuración, usuarios, alarmas, huecos). Es la base de Gravix.</text>
+  <text class="d" x="466" y="1028">InfluxDB: solo series de tiempo (lecturas de energía, alarmas, correos) → viajan al central.</text>
+  <text class="d" x="466" y="1048">La configuración no es serie de tiempo: su copia es el respaldo nocturno de TimescaleDB.</text>
+  <text class="ds" x="466" y="1068">Instalación: generar-env.sh · docker compose · replica-central.sh (ver docs/gravix-sede.md)</text>
+
+  <!-- ===================== 3 · CENTRAL ===================== -->
+  <rect class="panel" x="1170" y="100" width="600" height="1000" rx="12"/>
+  <text class="ptitle" x="1190" y="126">3 · CENTRAL · Centro de mando (prueba: 192.168.70.4)</text>
+
+  <rect class="box" x="1190" y="145" width="560" height="70" rx="9"/>
+  <text class="t" x="1206" y="170">Operadores y administradores (navegador)</text>
+  <text class="d" x="1206" y="194">http://&lt;central&gt;:5173 · usuarios con perfil y sedes asignadas</text>
+
+  <rect class="front" x="1190" y="235" width="560" height="95" rx="10"/>
+  <text class="tag" x="1206" y="257" fill="#0369a1">FRONTEND</text>
+  <text class="t" x="1286" y="257">Centro de mando · React 18 + Vite · nginx :5173</text>
+  <text class="d" x="1206" y="279">Mapa, Telemetría 1/2/3, alertas, Piloto Gravix, Equipos, Alarmas y correos</text>
+  <text class="d" x="1206" y="297">axios + JWT (Bearer, refresco automático) · React Query</text>
+  <text class="ds" x="1206" y="316">WebSocket /ws?token=… · eventos device.state</text>
+
+  <rect class="key" x="1190" y="355" width="560" height="180" rx="10"/>
+  <text class="tag" x="1206" y="378" fill="#1d4ed8">BACKEND</text>
+  <text class="t" x="1280" y="378">API central · NestJS · GRAVIX_MODO=central · :3010</text>
+  <rect class="chip" x="1206" y="392" width="170" height="46" rx="7"/><text class="ts" x="1216" y="411">centro</text><text class="ds" x="1216" y="429">vista de la red, analítica</text>
+  <rect class="chip" x="1384" y="392" width="170" height="46" rx="7"/><text class="ts" x="1394" y="411">red · colector</text><text class="ds" x="1394" y="429">consulta sedes cada 15 s</text>
+  <rect class="chip" x="1562" y="392" width="172" height="46" rx="7"/><text class="ts" x="1572" y="411">paso de consultas</text><text class="ds" x="1572" y="429">GET a la sede · 409 cambios</text>
+  <rect class="chip" x="1206" y="446" width="170" height="46" rx="7"/><text class="ts" x="1216" y="465">Alarmas y correos</text><text class="ds" x="1216" y="483">fuente y config por sede</text>
+  <rect class="chip" x="1384" y="446" width="170" height="46" rx="7"/><text class="ts" x="1394" y="465">asistente</text><text class="ds" x="1394" y="483">voz y texto</text>
+  <rect class="chip" x="1562" y="446" width="172" height="46" rx="7"/><text class="ts" x="1572" y="465">auth · users</text><text class="ds" x="1572" y="483">access · api-keys · TEC 3</text>
+  <text class="ds" x="1206" y="518">Clave de cada sede cifrada (AES-256-GCM) · solo GET a las sedes</text>
+
+  <rect class="dbx" x="1190" y="560" width="560" height="130" rx="10"/>
+  <text class="t" x="1206" y="585">PostgreSQL 16 + TimescaleDB del central</text>
+  <text class="d" x="1206" y="609">red_grupos · red_sedes (URL + clave cifrada, fuente de alarmas)</text>
+  <text class="d" x="1206" y="629">centro_lecturas · foto por minuto de cada sede (kW, V, A)</text>
+  <text class="d" x="1206" y="649">usuarios, permisos · TEC 3 · historial de Escuintla previo al 20/11</text>
+  <text class="ds" x="1206" y="672">No guarda el detalle de las sedes Gravix: lo consulta</text>
+
+  <rect class="ifx" x="1190" y="715" width="560" height="150" rx="10"/>
+  <text class="tag" x="1206" y="738" fill="#6d28d9">RESPALDO DE LA RED</text>
+  <text class="t" x="1206" y="760">InfluxDB 2.8 CENTRAL · :8086 (prueba :8286)</text>
+  <text class="d" x="1206" y="784">Un bucket por sede: lectura · alarma · correo · 1 año</text>
+  <text class="d" x="1206" y="804">resumen: promedio / mínimo / máximo de 15 min de todas las sedes · 5 años</text>
+  <text class="d" x="1206" y="824">alta-sede.sh: bucket + clave que solo escribe su bucket + tarea</text>
+  <text class="ds" x="1206" y="848">Probado: corte de 3 min → al volver se sincronizó todo (6 793 lecturas)</text>
+
+  <rect class="ext" x="1190" y="890" width="560" height="70" rx="9"/>
+  <text class="t" x="1206" y="915">Respaldo nocturno de la configuración de cada sede</text>
+  <text class="d" x="1206" y="937">TimescaleDB sin lecturas (fichas, agentes, usuarios, alarmas) · PENDIENTE</text>
+
+  <rect class="ext" x="1190" y="985" width="560" height="95" rx="9"/>
+  <text class="t" x="1206" y="1010">Monitoreo central 10.30.10.27 · Telemetría 1</text>
+  <text class="d" x="1206" y="1032">10 sedes con AS-P + api-SIASA · GET /api/vista</text>
+  <text class="ds" x="1206" y="1054">Solo lectura: Nodivo no modifica nada ahí</text>
+
+  <!-- ===================== CONEXIONES ===================== -->
+  <!-- medidores -> agente directo -->
+  <path class="ln direct" d="M392 220H418V138H965V145" marker-end="url(#a-blue)"/>
+  <text class="lbl" x="560" y="141">Modbus TCP directo (502)</text>
+  <!-- AS-P -> agente2 -->
+  <path class="ln modbus" d="M392 350H425V200H450" marker-end="url(#a-blue)"/>
+  <!-- ChirpStack -> agente2 -->
+  <path class="ln mqtt" d="M392 465H437V225H450" marker-end="url(#a-org)"/>
+  <!-- ingeniero -> web local -->
+  <path class="ln web" d="M392 705H441V560H450" marker-end="url(#a-web)"/>
+  <!-- agentes -> backend -->
+  <path class="ln http" d="M615 240V265" marker-end="url(#a-blk)"/>
+  <path class="ln http" d="M965 240V265" marker-end="url(#a-blk)"/>
+  <text class="lbl" x="700" y="256">HTTP · POST /devices/agent-sync · x-api-key</text>
+  <!-- web local -> backend -->
+  <path class="ln web" d="M615 495V470" marker-end="url(#a-web)"/>
+  <!-- backend -> bases -->
+  <path class="ln db" d="M786 470V700H780" marker-end="url(#a-db)"/>
+  <path class="ln db" d="M794 470V740H800" marker-end="url(#a-db)"/>
+  <!-- réplica InfluxDB sede -> central -->
+  <path class="ln rep" d="M1130 810H1150V790H1190" marker-end="url(#a-rep)"/>
+  <!-- central -> sede (consultas) -->
+  <path class="ln cons" d="M1190 415H1160V440H1130" marker-end="url(#a-cons)"/>
+  <text class="lbl" x="1052" y="482">GET /sede/* cada 15 s</text>
+  <!-- central: navegador -> web -> api -> base -->
+  <path class="ln web" d="M1470 215V235" marker-end="url(#a-web)"/>
+  <path class="ln web" d="M1470 330V355" marker-end="url(#a-web)"/>
+  <text class="lbl" x="1482" y="347">/api/v1 + JWT · /ws</text>
+  <path class="ln db" d="M1470 535V560" marker-end="url(#a-db)"/>
+  <!-- central -> monitoreo central -->
+  <path class="ln bak" d="M1750 500H1784V1030H1750" marker-end="url(#a-gray)"/>
+  <!-- respaldo nocturno (pendiente) -->
+  <path class="ln bak" d="M450 830H440V1090H1160V925H1190" marker-end="url(#a-gray)"/>
+  <text class="lbl" x="700" y="1094">respaldo nocturno de la configuración (pendiente)</text>
+
+  <!-- ===================== LEYENDA ===================== -->
+  <rect x="30" y="1115" width="1740" height="70" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+  <text class="ts" x="48" y="1140">Leyenda</text>
+  <path class="ln direct" d="M48 1162H88"/><text class="d" x="96" y="1166">Modbus directo</text>
+  <path class="ln modbus" d="M210 1162H250"/><text class="d" x="258" y="1166">Modbus por el AS-P</text>
+  <path class="ln mqtt" d="M388 1162H428"/><text class="d" x="436" y="1166">MQTT LoRaWAN</text>
+  <path class="ln http" d="M548 1162H588"/><text class="d" x="596" y="1166">HTTP agente → Gravix</text>
+  <path class="ln web" d="M748 1162H788"/><text class="d" x="796" y="1166">Navegador / frontend → backend</text>
+  <path class="ln db" d="M996 1162H1036"/><text class="d" x="1044" y="1166">Escritura en base</text>
+  <path class="ln cons" d="M1168 1162H1208"/><text class="d" x="1216" y="1166">Central consulta a la sede</text>
+  <path class="ln rep" d="M1388 1162H1428"/><text class="d" x="1436" y="1166">Réplica InfluxDB (cola)</text>
+  <path class="ln bak" d="M1594 1162H1634"/><text class="d" x="1642" y="1166">Lectura / pendiente</text>
+</svg>
