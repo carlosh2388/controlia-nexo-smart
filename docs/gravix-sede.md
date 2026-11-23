@@ -427,6 +427,48 @@ Guatemala).
   TimescaleDB 1.5 GB e InfluxDB 512 MB, y subir `shared_buffers` a unos 512 MB.
 - La caché de 5.5 GB no es consumo real: es memoria libre que Linux usa como caché de disco.
 
+## 7d. Retención en la sede e InfluxDB central (23/11)
+
+Decisión del usuario:
+- **La sede guarda 2 meses de detalle.**
+- **Un InfluxDB central replica todo** (lecturas, alarmas y correos de cada sede) como respaldo y como
+  resumen de la red.
+- **Si se pierde el enlace, al volver se sincroniza solo.**
+
+```
+SEDE                                                         CENTRAL (deploy/central-influx)
+TimescaleDB: detalle 60 días (SEDE_RETENCION_DIAS)           InfluxDB central
+InfluxDB de la sede, bucket "telemetry" (60 días) ──réplica──► bucket <código de sede> (1 año)
+  measurements: lectura · alarma · correo     cola en disco      + tarea "Resumen 15 min <sede>"
+                                              5 GB               → bucket "resumen" (5 años)
+```
+
+| Pieza | Dónde | Cómo |
+| --- | --- | --- |
+| Retención de 2 meses | Gravix de sede, al arrancar (`sede.service.ts`) | Política de TimescaleDB `add_retention_policy('readings', 60 días)`, retención del bucket `telemetry` y limpieza diaria de `device_readings`. Se cambia con `SEDE_RETENCION_DIAS` |
+| Alarmas y correos en InfluxDB | `alarmas.service.ts` | Measurement `alarma` (tags `sede`, `evento`, `severidad`, `dispositivo`, `inventario`; campos `codigo`, `estado` abierta/cerrada, `titulo`, `mensaje`, `duracion_s`) y measurement `correo` (tags `tipo` y `enviado` si/no; campos `asunto`, `codigos`, `motivo`) |
+| InfluxDB central | `deploy/central-influx/docker-compose.yml` | Un bucket por sede con 1 año de detalle, y el bucket `resumen` con 5 años |
+| Alta de una sede | `deploy/central-influx/alta-sede.sh <código>` | Crea el bucket de la sede, **una clave que solo escribe y lee ese bucket** y la tarea de resumen de 15 min (promedio, mínimo y máximo). Deja `sedes/<código>.env` para la sede |
+| Réplica | `deploy/gravix-sede/replica-central.sh <archivo>` (en la sede) | **Réplica nativa de InfluxDB** con **cola en disco de 5 GB**, suficiente para más de 2 meses sin enlace. Si se cae el enlace, la sede encola y al volver envía en orden, aunque la VM se reinicie. Además copia el historial que ya existía |
+| Estado de la réplica | `/sede/salud` → `bases.replicaCentral` | Bytes en cola, último código y último error |
+
+**Requisito de red:** la VM de la sede debe poder **salir** al central por el puerto del InfluxDB central (8086).
+
+**En prueba (23/11):**
+- InfluxDB central en `http://192.168.70.4:8286`, en `/home/api/central-influx`.
+- Escuintla dada de alta y replicando.
+- El historial se copió completo: **13 264 295 lecturas y 4 alarmas, iguales en la sede y en el central**.
+
+**Recuperación de datos perdidos** (resumen; detalle en la respuesta del 23/11):
+
+| Falla | Estado |
+| --- | --- |
+| Gravix o la red entre el agente y Gravix caen, pero el agente sigue leyendo | ✅ El agente guarda 3 días en disco y reenvía con la hora real |
+| El enlace entre la sede y el central cae | ✅ Cola en disco de la réplica |
+| El agente no puede leer el medidor | ❌ Pendiente: **Fase C**. Hay que leer la memoria (data recorder) del **ION7400**, para un dato "recuperado", y estimar la energía de los **PM2130** con la diferencia de contador, para un dato "estimado". Primero hay que verificar en el equipo cómo se lee esa memoria |
+
+**Falta:** el respaldo nocturno de la configuración (TimescaleDB sin lecturas) al central.
+
 ## 8. Control de claves desde el Centro de mando
 
 Cada sede tiene sus propias claves y **el inventario completo se lleva en el Centro de mando**:

@@ -98,7 +98,7 @@ export class InfluxWriterService implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | null = null;
 
   constructor(
-    config: ConfigService,
+    private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {
     this.sede = config.get<string>("SEDE_CODIGO") || "";
@@ -173,6 +173,58 @@ export class InfluxWriterService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Lineas ya armadas (line protocol) para el InfluxDB de la sede: alarmas y correos de Gravix
+   * (measurements "alarma" y "correo"). Viajan al InfluxDB central con la misma replica que las lecturas.
+   */
+  escribir(lineas: string[]) {
+    if (this.principal && lineas.length) this.principal.agregar(lineas);
+  }
+
+  /** Ajusta la retencion del bucket principal (dias). La usa el Gravix de sede al arrancar (SEDE_RETENCION_DIAS). */
+  async asegurarRetencion(dias: number) {
+    const url = (this.config.get<string>("INFLUX_URL") || "").replace(/\/$/, "");
+    const token = this.config.get<string>("INFLUX_TOKEN") || "";
+    const org = this.config.get<string>("INFLUX_ORG") || "";
+    const bucket = this.config.get<string>("INFLUX_BUCKET") || "";
+    if (!url || !token || !org || !bucket) return null;
+    const h = { Authorization: `Token ${token}`, "Content-Type": "application/json" };
+    const r = await fetch(`${url}/api/v2/buckets?org=${encodeURIComponent(org)}&name=${encodeURIComponent(bucket)}`, { headers: h, signal: AbortSignal.timeout(5000) });
+    const b = ((await r.json()) as { buckets?: { id: string; retentionRules?: { everySeconds: number }[] }[] }).buckets?.[0];
+    if (!b) return null;
+    const segundos = dias * 86400;
+    if (b.retentionRules?.[0]?.everySeconds === segundos) return dias;
+    const p = await fetch(`${url}/api/v2/buckets/${b.id}`, { method: "PATCH", headers: h, body: JSON.stringify({ retentionRules: [{ type: "expire", everySeconds: segundos }] }), signal: AbortSignal.timeout(5000) });
+    if (!p.ok) throw new Error(`HTTP ${p.status}`);
+    this.log.log(`Retencion del bucket ${bucket} ajustada a ${dias} dias`);
+    return dias;
+  }
+
+  /** Estado de las replicas del InfluxDB de la sede hacia el central (cola en disco, ultimo envio). */
+  async estadoReplicas() {
+    const url = (this.config.get<string>("INFLUX_URL") || "").replace(/\/$/, "");
+    const token = this.config.get<string>("INFLUX_TOKEN") || "";
+    const org = this.config.get<string>("INFLUX_ORG") || "";
+    if (!url || !token || !org) return null;
+    try {
+      const h = { Authorization: `Token ${token}` };
+      const ro = await fetch(`${url}/api/v2/orgs?org=${encodeURIComponent(org)}`, { headers: h, signal: AbortSignal.timeout(5000) });
+      const orgId = ((await ro.json()) as { orgs?: { id: string }[] }).orgs?.[0]?.id;
+      if (!orgId) return null;
+      const r = await fetch(`${url}/api/v2/replications?orgID=${orgId}`, { headers: h, signal: AbortSignal.timeout(5000) });
+      const lista = ((await r.json()) as { replications?: Record<string, unknown>[] }).replications ?? [];
+      return lista.map((x) => ({
+        nombre: x.name,
+        colaBytes: x.currentQueueSizeBytes,
+        colaMaxBytes: x.maxQueueSizeBytes,
+        ultimoCodigo: x.latestResponseCode ?? null,
+        ultimoError: x.latestErrorMessage || null,
+      }));
+    } catch {
+      return null;
+    }
+  }
+
   private async tagsDe(deviceId: string): Promise<DeviceTags> {
     const c = this.tags.get(deviceId);
     if (c) return c;
@@ -185,6 +237,11 @@ export class InfluxWriterService implements OnModuleInit, OnModuleDestroy {
 }
 
 /** Escapa tags, claves de field y measurement del line protocol (coma, espacio, igual). */
-function esc(s: string) {
+export function esc(s: string) {
   return s.replace(/[,= ]/g, (c) => `\\${c}`);
+}
+
+/** Valor de field de texto en line protocol: entre comillas, escapando comillas y barras. */
+export function texto(s: unknown) {
+  return `"${String(s ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, " ")}"`;
 }

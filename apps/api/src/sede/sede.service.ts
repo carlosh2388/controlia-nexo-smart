@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Role } from "@prisma/client";
 import { createHash } from "node:crypto";
@@ -20,7 +20,7 @@ import { armarTelemetria, equiposDeAgentes, tipoDe, type DeviceMeta } from "../r
  *  - SEDE_CENTRO_KEY: rol viewer (solo lectura), la usa el Centro de mando.
  */
 @Injectable()
-export class SedeService implements OnModuleInit {
+export class SedeService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger("SedeService");
   readonly codigo: string;
   readonly nombre: string;
@@ -42,6 +42,54 @@ export class SedeService implements OnModuleInit {
   async onModuleInit() {
     await this.asegurarClave("SEDE_AGENT_KEY", `Agente Go ${this.codigo} (local)`, Role.agent);
     await this.asegurarClave("SEDE_CENTRO_KEY", "Centro de mando (consulta)", Role.viewer);
+    await this.asegurarRetencion();
+    // El historial de los demas equipos (device_readings) no es hypertable: se limpia una vez al dia.
+    this.timer = setInterval(() => void this.limpiarHistorialEquipos(), 86_400_000);
+  }
+
+  private timer: NodeJS.Timeout | null = null;
+
+  onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  /** Dias de detalle que guarda la sede (TimescaleDB e InfluxDB). El resto queda en el InfluxDB central. */
+  private get retencionDias() {
+    const n = Math.floor(Number(this.config.get<string>("SEDE_RETENCION_DIAS") || 60));
+    return Number.isFinite(n) && n >= 7 ? n : 60;
+  }
+
+  /** Retencion del detalle: politica de TimescaleDB en readings y del bucket de InfluxDB de la sede. */
+  private async asegurarRetencion() {
+    const dias = this.retencionDias;
+    try {
+      const filas = await this.prisma.$queryRaw<{ drop_after: string | null }[]>`
+        SELECT config->>'drop_after' AS drop_after FROM timescaledb_information.jobs
+        WHERE hypertable_name = 'readings' AND proc_name = 'policy_retention'`;
+      const actual = filas[0]?.drop_after ?? null;
+      if (actual !== `${dias} days`) {
+        if (actual) await this.prisma.$executeRawUnsafe(`SELECT remove_retention_policy('readings')`);
+        await this.prisma.$executeRawUnsafe(`SELECT add_retention_policy('readings', INTERVAL '${dias} days')`);
+        this.log.log(`Retencion de readings (TimescaleDB): ${dias} dias`);
+      }
+    } catch (e) {
+      this.log.warn(`No se pudo ajustar la retencion de TimescaleDB: ${(e as Error).message}`);
+    }
+    try {
+      await this.influx.asegurarRetencion(dias);
+    } catch (e) {
+      this.log.warn(`No se pudo ajustar la retencion de InfluxDB: ${(e as Error).message}`);
+    }
+    await this.limpiarHistorialEquipos();
+  }
+
+  private async limpiarHistorialEquipos() {
+    try {
+      const n = await this.prisma.$executeRawUnsafe(`DELETE FROM device_readings WHERE "recordedAt" < now() - INTERVAL '${this.retencionDias} days'`);
+      if (n) this.log.log(`device_readings: ${n} filas de mas de ${this.retencionDias} dias borradas`);
+    } catch (e) {
+      this.log.warn(`No se pudo limpiar device_readings: ${(e as Error).message}`);
+    }
   }
 
   private async asegurarClave(variable: string, nombre: string, role: Role) {
@@ -117,12 +165,13 @@ export class SedeService implements OnModuleInit {
 
   /** Estado de la instalacion: versiones, agentes, ultima lectura, huecos abiertos y disco. */
   async salud() {
-    const [agentes, equipos, ultima, huecos, disco] = await Promise.all([
+    const [agentes, equipos, ultima, huecos, disco, replicas] = await Promise.all([
       this.agents.list(),
       this.prisma.device.count({ where: { protocol: "modbus" } }),
       this.prisma.deviceState.findFirst({ where: { device: { protocol: "modbus" } }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true } }),
       this.prisma.readingGap.count({ where: { status: "open" } }),
       statfs("/").then((s) => ({ libreGb: Math.round(((s.bavail * s.bsize) / 1e9) * 10) / 10, totalGb: Math.round(((s.blocks * s.bsize) / 1e9) * 10) / 10 })).catch(() => null),
+      this.influx.estadoReplicas(),
     ]);
     return {
       sede: { codigo: this.codigo, nombre: this.nombre },
@@ -149,6 +198,8 @@ export class SedeService implements OnModuleInit {
       bases: {
         timescale: "principal",
         influx: this.influx.activo ? { ...this.influx.estado, pendientes: this.influx.pendientes } : "no configurado",
+        /** Replica del InfluxDB de la sede al InfluxDB central (cola en disco y ultimo envio). */
+        replicaCentral: replicas ?? "no configurada",
         comparativo: this.comparativo.activo || this.influx.estadoComparativo
           ? { timescaledb: this.comparativo.activo ? this.comparativo.estado : "no configurado", influxdb: this.influx.estadoComparativo ?? "no configurado" }
           : "no configurado",

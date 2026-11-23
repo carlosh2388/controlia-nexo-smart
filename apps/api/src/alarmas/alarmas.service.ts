@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from "@nestjs/common";
+import { InfluxWriterService, esc, texto } from "../timeseries/influx-writer.service";
 import { Prisma } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import type { Transporter } from "nodemailer";
@@ -109,7 +110,42 @@ export class AlarmasService implements OnModuleInit, OnModuleDestroy {
   private dbCola: Promise<unknown> = Promise.resolve();
   private evaluando = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly influx?: InfluxWriterService,
+  ) {}
+
+  // ------------------------------------------------------
+  //  Copia en InfluxDB (sede -> replica al InfluxDB central): measurements "alarma" y "correo"
+  // ------------------------------------------------------
+  private sedeTag() {
+    return esc(process.env.SEDE_CODIGO || this.cfg.sede);
+  }
+
+  /** Apertura o cierre de una alarma, con la hora del evento (inicio o fin). */
+  private influxAlarma(ev: Ev, estado: "abierta" | "cerrada") {
+    if (!this.influx) return;
+    const t = estado === "cerrada" ? ev.fin ?? Date.now() : ev.inicio;
+    const tags = [`sede=${this.sedeTag()}`, `evento=${esc(ev.evento)}`, `severidad=${esc(ev.severidad)}`];
+    if (ev.dispositivo) tags.push(`dispositivo=${esc(ev.dispositivo)}`);
+    if (ev.inventario) tags.push(`inventario=${esc(ev.inventario)}`);
+    const campos = [
+      `codigo=${texto(ev.codigo)}`,
+      `estado=${texto(estado)}`,
+      `titulo=${texto(GUIA[ev.evento]?.titulo ?? ev.evento)}`,
+      `mensaje=${texto(ev.detalle?.mensaje ?? "")}`,
+    ];
+    if (estado === "cerrada") campos.push(`duracion_s=${Math.max(0, Math.round((t - ev.inicio) / 1000))}i`);
+    this.influx.escribir([`alarma,${tags.join(",")} ${campos.join(",")} ${t}`]);
+  }
+
+  /** Correo preparado (modo paralelo) o enviado. */
+  private influxCorreo(item: ItemCorreo, enviado: boolean, motivo: string | null) {
+    if (!this.influx) return;
+    const tags = [`sede=${this.sedeTag()}`, `tipo=${esc(item.tipo)}`, `enviado=${enviado ? "si" : "no"}`];
+    const campos = [`asunto=${texto(item.asunto)}`, `codigos=${texto(this.codigosDe(item).join(" "))}`, `motivo=${texto(motivo ?? "")}`];
+    this.influx.escribir([`correo,${tags.join(",")} ${campos.join(",")} ${Date.now()}`]);
+  }
 
   async onModuleInit() {
     try {
@@ -447,6 +483,7 @@ export class AlarmasService implements OnModuleInit, OnModuleDestroy {
         await this.prisma.alarmaCorreo
           .create({ data: { tipo: item.tipo, asunto: item.asunto, codigos: this.codigosDe(item), para: this.cfg.correo.para || null, enviado: false, motivo: this.correoMotivoInactivo, texto: item.texto, html: item.html ?? null } })
           .catch((e) => this.log.warn(`No se guardo el correo preparado: ${(e as Error).message}`));
+        this.influxCorreo(item, false, this.correoMotivoInactivo);
         this.logEvento({ evento: "CORREO_PREPARADO_SIN_ENVIAR", tipo: item.tipo, asunto: item.asunto });
       }
       return;
@@ -469,6 +506,7 @@ export class AlarmasService implements OnModuleInit, OnModuleDestroy {
         await this.prisma.alarmaCorreo
           .create({ data: { tipo: item.tipo, asunto: item.asunto, codigos: this.codigosDe(item), para: this.cfg.correo.para, enviado: true, texto: item.texto, html: item.html ?? null } })
           .catch(() => undefined);
+        this.influxCorreo(item, true, null);
         this.logEvento({ evento: "CORREO_ENVIADO", tipo: item.tipo, asunto: item.asunto });
       } catch (e) {
         item.intentos += 1;
@@ -490,6 +528,7 @@ export class AlarmasService implements OnModuleInit, OnModuleDestroy {
     this.abiertos.set(k, ev);
     this.logEvento({ evento, accion: "abierto", severidad, codigo: ev.codigo, dispositivo, inventario, inicio: this.iso(inicio), ...detalle });
     this.guardarApertura(ev);
+    this.influxAlarma(ev, "abierta");
     if (severidad === "critico" || notificar) {
       if (diferir) this.pendientesMedidores.apertura.push(ev);
       else this.encolarCorreo({ ev, tipo: "apertura", asunto: this.asuntoEvento(ev, "apertura"), texto: this.textoEvento(ev, "apertura") });
@@ -509,6 +548,7 @@ export class AlarmasService implements OnModuleInit, OnModuleDestroy {
     ev.detalle = { ...ev.detalle, ...detalleExtra };
     this.logEvento({ evento, accion: "cerrado", codigo: ev.codigo, dispositivo, duracion_s: Math.round((ev.fin - ev.inicio) / 1000), ...detalleExtra });
     this.guardarCierre(ev);
+    this.influxAlarma(ev, "cerrada");
     if (ev.notificado && !silencioso) {
       if (diferir) this.pendientesMedidores.cierre.push(ev);
       else this.encolarCorreo({ ev, tipo: "cierre", asunto: this.asuntoEvento(ev, "cierre"), texto: this.textoEvento(ev, "cierre") });

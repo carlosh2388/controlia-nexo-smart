@@ -1,0 +1,37 @@
+# InfluxDB CENTRAL: replica de todas las sedes (lecturas de energia, alarmas y correos de Gravix).
+#  - Un bucket por sede (codigo de la sede), 1 ano de detalle: lo llena la replica nativa de InfluxDB
+#    que corre en cada sede (cola en disco: si se cae el enlace, al volver se sincroniza solo).
+#  - Bucket "resumen": promedio / minimo / maximo de 15 min de todas las sedes, 5 anos.
+# Alta de una sede: ./alta-sede.sh <codigo-sede>. Ver docs/gravix-sede.md (seccion InfluxDB central).
+#
+#   ./generar-env.sh && docker compose -p central-influx up -d
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+
+services:
+  influxdb-central:
+    image: influxdb:2.8
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${CENTRAL_INFLUX_ADMIN_PASSWORD:?falta CENTRAL_INFLUX_ADMIN_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${CENTRAL_INFLUX_ORG:-igss}
+      DOCKER_INFLUXDB_INIT_BUCKET: resumen
+      DOCKER_INFLUXDB_INIT_RETENTION: ${CENTRAL_RESUMEN_RETENCION:-43800h}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${CENTRAL_INFLUX_TOKEN:?falta CENTRAL_INFLUX_TOKEN}
+      TZ: America/Guatemala
+    ports:
+      - "${CENTRAL_INFLUX_PORT:-8086}:8086"
+    volumes:
+      - central_influx_data:/var/lib/influxdb2
+      - central_influx_config:/etc/influxdb2
+    logging: *logging
+
+volumes:
+  central_influx_data:
+  central_influx_config:

@@ -54,6 +54,8 @@ SMTP_CLAVE=
 ALERTAS_CORREO_DE=
 ALERTAS_CORREO_PARA=
 ALERTAS_CORREO_CC=
+# Dias de detalle que guarda la sede (TimescaleDB e InfluxDB). Lo anterior queda en el InfluxDB central.
+SEDE_RETENCION_DIAS=60
 # InfluxDB propio de la sede (copia de las lecturas). Web: http://<IP>:INFLUX_PORT, usuario admin.
 INFLUX_PORT=8086
 INFLUX_URL=http://influxdb:8086
