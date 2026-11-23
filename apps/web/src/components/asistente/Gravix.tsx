@@ -122,6 +122,31 @@ interface Prefs {
   vozNombre: string | null;
   /** Usar Gravix IA (modelo local o Claude, segun el servidor) cuando el servidor la tiene activada; false = solo analitica propia. */
   ia: boolean;
+  /** Forma de hablar: "formal" (de usted, neutra) o "carinosa" (voz colombiana que dice "amor"). */
+  estilo: Estilo;
+}
+type Estilo = "formal" | "carinosa";
+
+/* ---------- estilo cariñoso: mismo contenido, con trato de cariño ---------- */
+const APODOS = ["amor", "mi amor", "corazón", "mi vida"];
+let apodoN = 0;
+const apodo = () => APODOS[apodoN++ % APODOS.length];
+/** Primeras palabras que se pueden poner en minuscula sin dañar un nombre propio. */
+const INICIO_COMUN = /^(Tiene|Hay|Atención|No|Listo|Le|Todo|Abro|Abriendo|Estas|Estos|Esta|Este|Ya|Puedo|Perfecto|Claro|Con|De|En|La|El|Las|Los|IA)\b/;
+function carinoso(t: string): string {
+  if (/\b(amor|corazón|mi vida)\b/i.test(t)) return t;
+  // Saludo: "Buenas tardes, Chernandez." -> "Buenas tardes, mi amor."
+  const saludo = t.replace(/^(Buenos días|Buenas tardes|Buenas noches)(, [^.]+)?\./, "$1, mi amor.");
+  if (saludo !== t) return saludo;
+  if (t.startsWith("Atención:")) return `Ay, ${apodo()}, atención:${t.slice(9)}`;
+  const m = t.match(INICIO_COMUN);
+  if (m && m[1] !== "IA") {
+    const a = apodo();
+    return `${a.charAt(0).toUpperCase()}${a.slice(1)}, ${t.charAt(0).toLowerCase()}${t.slice(1)}`;
+  }
+  // Si no, al final de la primera frase: "¿Qué desea hacer hoy, amor?"
+  const fin = t.search(/[.!?](?=\s|$)/);
+  return fin > 0 ? `${t.slice(0, fin)}, ${apodo()}${t.slice(fin)}` : t;
 }
 
 /* ---------- reconocimiento de voz del navegador (tipos minimos) ---------- */
@@ -154,7 +179,7 @@ const Reconocimiento: ConstructorReconocedor | undefined =
 const IDIOMA = typeof navigator !== "undefined" && navigator.language?.toLowerCase().startsWith("es") ? navigator.language : "es-MX";
 
 const PREFS_KEY = "gravix.prefs";
-const PREFS_INI: Prefs = { voz: true, avisos: true, continua: false, vozNombre: null, ia: true };
+const PREFS_INI: Prefs = { voz: true, avisos: true, continua: false, vozNombre: null, ia: true, estilo: "formal" };
 function leerPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -232,7 +257,9 @@ function vocesEspanol(): SpeechSynthesisVoice[] {
  */
 const VOCES_PREFERIDAS = ["dalia", "paloma", "sabina", "renata", "elena", "helena", "laura", "elvira", "google español de estados unidos", "google español"];
 const ACENTOS = ["es-mx", "es-us", "es-419", "es-gt", "es-co", "es-es"];
-function puntaje(v: SpeechSynthesisVoice): number {
+/** Voces masculinas conocidas (para que el estilo cariñoso elija una voz de mujer). */
+const VOCES_HOMBRE = ["gonzalo", "jorge", "raul", "raúl", "pablo", "alvaro", "álvaro", "gerardo", "cecilio", "emilio", "alonso", "andres", "andrés", "tomas", "tomás", "mateo", "lorenzo", "federico", "carlos", "jaime", "sabino"];
+function puntaje(v: SpeechSynthesisVoice, estilo: Estilo = "formal"): number {
   const n = v.name.toLowerCase();
   let s = 0;
   if (/natural|online|neural/.test(n)) s += 100;
@@ -240,16 +267,27 @@ function puntaje(v: SpeechSynthesisVoice): number {
   if (i >= 0) s += 50 - i;
   const a = ACENTOS.indexOf(v.lang.toLowerCase());
   if (a >= 0) s += 20 - a * 2;
+  if (estilo === "carinosa") {
+    const hombre = VOCES_HOMBRE.some((x) => n.includes(x));
+    if (hombre) s -= 300;
+    // Colombiana: "Salome" (voz neuronal de Edge, es-CO) o cualquier voz de mujer es-CO.
+    if (v.lang.toLowerCase() === "es-co" && !hombre) s += 400;
+    if (n.includes("salome")) s += 100;
+  }
   return s;
 }
-function vozEspanol(nombre: string | null): SpeechSynthesisVoice | null {
+function vozEspanol(nombre: string | null, estilo: Estilo = "formal"): SpeechSynthesisVoice | null {
   const voces = vocesEspanol();
   if (nombre) {
     const v = voces.find((x) => x.name === nombre);
     if (v) return v;
   }
-  return [...voces].sort((a, b) => puntaje(b) - puntaje(a))[0] ?? null;
+  return [...voces].sort((a, b) => puntaje(b, estilo) - puntaje(a, estilo))[0] ?? null;
 }
+const FRASE_PRUEBA: Record<Estilo, string> = {
+  formal: "Buenos días. Soy Gravix, asistente del Centro de mando.",
+  carinosa: "Hola, mi amor. Soy Gravix. Tiene una sede desconectada, ¿quiere que se la muestre?",
+};
 
 export default function Gravix(props: Props) {
   const p = useRef(props);
@@ -308,7 +346,9 @@ export default function Gravix(props: Props) {
     speechSynthesis.addEventListener?.("voiceschanged", cargar);
     return () => speechSynthesis.removeEventListener?.("voiceschanged", cargar);
   }, []);
-  const vozActual = vozEspanol(prefs.vozNombre);
+  const vozActual = vozEspanol(prefs.vozNombre, prefs.estilo);
+  /** Aplica el estilo elegido al texto (lo que se escribe y lo que se dice es lo mismo). */
+  const tono = (t: string) => (prefsRef.current.estilo === "carinosa" ? carinoso(t) : t);
 
   const hablar = (t: string, forzar = false) => {
     if ((!prefsRef.current.voz && !forzar) || typeof speechSynthesis === "undefined") return;
@@ -322,14 +362,15 @@ export default function Gravix(props: Props) {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(t.replace(/[«»]/g, ""));
       u.lang = "es-MX";
-      const v = vozEspanol(prefsRef.current.vozNombre);
+      const carino = prefsRef.current.estilo === "carinosa";
+      const v = vozEspanol(prefsRef.current.vozNombre, prefsRef.current.estilo);
       if (v) {
         u.voice = v;
         u.lang = v.lang;
-      }
-      // Tono formal: pausado y con altura normal (ni grave ni aguda).
-      u.rate = 0.95;
-      u.pitch = 1.05;
+      } else if (carino) u.lang = "es-CO";
+      // Formal: pausado y con altura normal. Cariñosa: un poco mas aguda y suave.
+      u.rate = carino ? 0.97 : 0.95;
+      u.pitch = carino ? 1.12 : 1.05;
       u.onstart = () => setHablando(true);
       u.onend = () => setHablando(false);
       u.onerror = () => setHablando(false);
@@ -370,7 +411,8 @@ export default function Gravix(props: Props) {
   const abiertoRef = useRef(abierto);
   abiertoRef.current = abierto;
 
-  const decir = (t: string, boton?: Mensaje["boton"], atajos?: string[], tarjetas?: HallazgoRiesgo[], fuente?: string) => {
+  const decir = (texto0: string, boton?: Mensaje["boton"], atajos?: string[], tarjetas?: HallazgoRiesgo[], fuente?: string) => {
+    const t = tono(texto0);
     agregar("gravix", t, boton, tarjetas, fuente);
     pendienteRef.current = boton?.accion ?? null;
     if (atajos) setSugerencias(atajos);
@@ -1049,10 +1091,11 @@ export default function Gravix(props: Props) {
     vistos.current = new Set(p.current.alarmas.map((a) => a.codigo));
     if (!nuevas.length) return;
     const a = nuevas[0];
-    const t =
+    const t = tono(
       nuevas.length === 1
         ? `Atención: alarma crítica en ${a.sedeNombre}. ${a.titulo}${a.dispositivo ? ` en ${a.dispositivo}` : ""}.`
-        : `Atención: ${nuevas.length} alarmas críticas nuevas. La primera en ${a.sedeNombre}: ${a.titulo}.`;
+        : `Atención: ${nuevas.length} alarmas críticas nuevas. La primera en ${a.sedeNombre}: ${a.titulo}.`,
+    );
     const accion: Accion = { tipo: "alertas", sedeId: nuevas.length === 1 ? a.sedeId : null };
     if (prefsRef.current.avisos) pitido(true);
     setGlobo({ texto: t, accion });
@@ -1061,6 +1104,33 @@ export default function Gravix(props: Props) {
     hablar(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codigos]);
+
+  /* ---------- aviso de sede que deja de responder ---------- */
+  const caidasVistas = useRef<Set<string> | null>(null);
+  const caidas = props.vista.sedes.filter((s) => s.sin_respuesta).map((s) => s.id).sort().join("|");
+  useEffect(() => {
+    if (!p.current.conDatos) return;
+    const ahora = p.current.vista.sedes.filter((s) => s.sin_respuesta);
+    if (!caidasVistas.current) {
+      caidasVistas.current = new Set(ahora.map((s) => s.id));
+      return;
+    }
+    const nuevas = ahora.filter((s) => !caidasVistas.current!.has(s.id));
+    caidasVistas.current = new Set(ahora.map((s) => s.id));
+    if (!nuevas.length) return;
+    const t = tono(
+      nuevas.length === 1
+        ? `Tiene una sede desconectada: ${nuevas[0].nombre} dejó de responder. ¿Quiere que se la muestre?`
+        : `Tiene ${nuevas.length} sedes desconectadas: ${nuevas.map((s) => s.nombre).join(", ")}. ¿Quiere verlas?`,
+    );
+    const accion: Accion = nuevas.length === 1 ? ({ tipo: "sede", sedeId: nuevas[0].id, estado: true } as Accion) : ({ tipo: "alertas", sedeId: null } as Accion);
+    if (prefsRef.current.avisos) pitido(true);
+    setGlobo({ texto: t, accion });
+    agregar("gravix", t, { label: nuevas.length === 1 ? "Ver sede" : "Ver alertas", accion });
+    pendienteRef.current = accion;
+    hablar(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caidas]);
   useEffect(() => {
     if (!globo) return;
     const id = window.setTimeout(() => setGlobo(null), 25_000);
@@ -1258,6 +1328,29 @@ export default function Gravix(props: Props) {
                 Usar IA
               </label>
             )}
+            <div className="flex w-full items-center gap-2 pt-1">
+              <label htmlFor="gx-estilo" className="shrink-0">Estilo</label>
+              <select
+                id="gx-estilo"
+                value={prefs.estilo}
+                onChange={(e) => {
+                  const estilo = e.target.value as Estilo;
+                  // Al cambiar de estilo se vuelve a la voz recomendada (en cariñosa: mujer colombiana).
+                  setPrefs({ estilo, vozNombre: null });
+                  prefsRef.current = { ...prefsRef.current, estilo, vozNombre: null };
+                  hablar(FRASE_PRUEBA[estilo], true);
+                }}
+                className="min-h-[30px] min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 text-[11.5px] text-slate-200"
+              >
+                <option value="formal">Formal</option>
+                <option value="carinosa">Cariñosa · voz colombiana</option>
+              </select>
+            </div>
+            {prefs.estilo === "carinosa" && vozActual && vozActual.lang.toLowerCase() !== "es-co" && (
+              <p className="w-full text-[11px] text-amber-300">
+                Este navegador no tiene voz colombiana; usa {vozActual.name.replace(/^Microsoft\s+/, "").replace(/\s*-\s*Spanish.*$/i, "")}. Abra Nodivo en Microsoft Edge para escuchar a «Salome» (Colombia).
+              </p>
+            )}
             {voces.length > 0 && (
               <div className="flex w-full items-center gap-2 pt-1">
                 <label htmlFor="gx-voz" className="shrink-0">Voz</label>
@@ -1267,15 +1360,15 @@ export default function Gravix(props: Props) {
                   onChange={(e) => {
                     setPrefs({ vozNombre: e.target.value || null });
                     prefsRef.current = { ...prefsRef.current, vozNombre: e.target.value || null };
-                    hablar("Buenos días. Soy Gravix, asistente del Centro de mando.", true);
+                    hablar(FRASE_PRUEBA[prefsRef.current.estilo], true);
                   }}
                   className="min-h-[30px] min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 text-[11.5px] text-slate-200"
                 >
-                  {[...voces].sort((x, y) => puntaje(y) - puntaje(x)).map((v) => (
+                  {[...voces].sort((x, y) => puntaje(y, prefs.estilo) - puntaje(x, prefs.estilo)).map((v) => (
                     <option key={v.name} value={v.name}>{v.name.replace(/^Microsoft\s+/, "").replace(/\s*-\s*Spanish.*$/i, "")} · {v.lang}</option>
                   ))}
                 </select>
-                <button type="button" onClick={() => hablar("Buenos días. Soy Gravix, asistente del Centro de mando.", true)} className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800">Probar</button>
+                <button type="button" onClick={() => hablar(FRASE_PRUEBA[prefs.estilo], true)} className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800">Probar</button>
               </div>
             )}
           </div>
