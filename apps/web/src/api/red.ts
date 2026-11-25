@@ -176,6 +176,31 @@ export function useRed() {
   });
 }
 
+/** Vista 3D: lugar de cada equipo en el plano (pixeles) y norte real ("__norte"). */
+export interface PlanoSede {
+  sede: string;
+  puntos: Record<string, [number, number]>;
+}
+
+export function usePlanoSede(id: string, activo: boolean) {
+  return useQuery({
+    queryKey: ["red", "plano", id],
+    queryFn: async () => (await apiClient.get<PlanoSede>(`/red/sedes/${encodeURIComponent(id)}/plano`)).data,
+    enabled: activo,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+}
+
+export function useGuardarPunto(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (p: { clave: string; x: number; y: number }) => (await apiClient.put<PlanoSede>(`/red/sedes/${encodeURIComponent(id)}/plano`, p)).data,
+    onSuccess: (data) => qc.setQueryData(["red", "plano", id], data),
+  });
+}
+
 function useInvalidar() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: ["red"] });

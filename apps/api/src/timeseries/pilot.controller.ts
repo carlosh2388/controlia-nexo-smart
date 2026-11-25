@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query, Res, UseGuards, Version } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query, Res, UseGuards, Version } from "@nestjs/common";
 import { Role } from "@prisma/client";
 import type { FastifyReply } from "fastify";
 import { AuthGuard } from "../auth/guards/auth.guard";
@@ -7,7 +7,7 @@ import { Roles } from "../auth/decorators/roles.decorator";
 import { ActionGuard, RequireAction } from "../access/action.guard";
 import { buildXlsx } from "../common/xlsx";
 import { PilotService } from "./pilot.service";
-import { CompareQueryDto, CumplimientoQueryDto, DirectConnectionDto, ExcelQueryDto, GapsQueryDto, ProbarLecturaDto, PronosticoQueryDto, SeriesQueryDto, UmbralesDto } from "./dto/pilot.dto";
+import { CompareQueryDto, CumplimientoQueryDto, DirectConnectionDto, ExcelQueryDto, GapsQueryDto, HistorialRangoDto, ProbarLecturaDto, PronosticoQueryDto, SeriesQueryDto, UmbralesDto } from "./dto/pilot.dto";
 import { QualityService } from "./quality.service";
 import { NORMAS, type Limites } from "./normas";
 
@@ -103,6 +103,20 @@ export class PilotController {
   @Get("devices/:id/gaps")
   gaps(@Param("id") id: string, @Query() query: GapsQueryDto) {
     return this.pilot.gaps(id, query.days ?? 7);
+  }
+
+  /** Historial por rango de fechas (JSON). Lo pide la exportacion del central; en una sede se reenvia aqui. */
+  @Version("1")
+  @Roles(...HUMANS)
+  @RequireAction("excel")
+  @Get("devices/:id/historial")
+  historial(@Param("id") id: string, @Query() q: HistorialRangoDto) {
+    const desde = new Date(q.desde);
+    const hasta = new Date(q.hasta);
+    if (!(hasta > desde)) throw new BadRequestException("La fecha final debe ser mayor que la inicial");
+    if (hasta.getTime() - desde.getTime() > 400 * 86_400_000) throw new BadRequestException("El rango máximo es de 400 días");
+    const metrics = q.metrics.split(",").map((m) => m.trim()).filter(Boolean).slice(0, 500);
+    return this.pilot.historialRango(id, metrics, desde, hasta, q.step);
   }
 
   /** Historial del equipo en Excel: varias variables, una columna por variable (y la del EBO si hay pareja). */

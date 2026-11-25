@@ -1,6 +1,6 @@
 import { BadRequestException, BadGatewayException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { GrupoDto, ProbarGravixDto, SedeDto } from "./dto/red.dto";
+import { GrupoDto, PlanoPuntoDto, ProbarGravixDto, SedeDto } from "./dto/red.dto";
 import { armarTelemetria, equiposDeAgentes } from "./telemetria";
 import { GravixService } from "./gravix.service";
 
@@ -24,6 +24,17 @@ export class RedService {
       s.origen === "gravix" ? { ...s, claveFinal: this.gravix.finalDeClave(apiKeyEnc), estado: this.gravix.estadoDe(s.id) } : s,
     );
     return { grupos, sedes };
+  }
+
+  async plano(sede: string) {
+    const filas = await this.prisma.planoPunto.findMany({ where: { sede }, select: { clave: true, x: true, y: true } });
+    return { sede, puntos: Object.fromEntries(filas.map((f) => [f.clave, [f.x, f.y]])) };
+  }
+
+  async guardarPunto(sede: string, dto: PlanoPuntoDto, usuario: string) {
+    const datos = { x: dto.x, y: dto.y, usuario };
+    await this.prisma.planoPunto.upsert({ where: { sede_clave: { sede, clave: dto.clave } }, create: { sede, clave: dto.clave, ...datos }, update: datos });
+    return this.plano(sede);
   }
 
   async crearGrupo(dto: GrupoDto) {

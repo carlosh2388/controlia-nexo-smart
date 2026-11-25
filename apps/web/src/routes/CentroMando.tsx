@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import InteractiveChart, { type ChartSeries } from "../components/charts/InteractiveChart";
 import type { Access } from "../api/access";
+import { useDevices } from "../api/devices";
+import { coldChainChannels, doorCode, doorsByCode, str, toSedeDevices, wiseGroup, type SedeDevice } from "../utils/sedes";
+import { AirCard, DoorTile, EnvCard, LoraCard, WiseCard } from "../components/sedes/Cards";
+import SedeTrendModal from "../components/sedes/SedeTrendModal";
 import { downloadFile } from "../api/access";
 import {
   useCentroEventos,
@@ -22,11 +26,13 @@ import "../components/centro/centro.css";
 import { NormasCumplimiento, Prediccion } from "../components/centro/Calidad";
 import { Analitica } from "../components/centro/Analitica";
 import { ArmonicosPanel } from "../components/gravix/Armonicos";
-import { GRUPO_INICIAL, conAgentes, usePilotDevicesMany, useRed, webDeSede, type RedGrupo, type RedSede } from "../api/red";
+import { GRUPO_INICIAL, conAgentes, useGuardarPunto, usePilotDevicesMany, usePlanoSede, useRed, webDeSede, type RedGrupo, type RedSede } from "../api/red";
 import { BotonJsonV1, EditarSede, GestionGrupos, NuevaSede } from "../components/red/RedAdmin";
 import { AlarmasCorreos as ModuloAlarmasCorreos } from "../components/red/AlarmasCorreos";
 import { PublicarGravix } from "../components/asistente/GravixGlobal";
-import type { Accion as AccionGravix } from "../components/asistente/comandos";
+import ArquitecturaGravix from "../components/centro/ArquitecturaGravix";
+import ExportarHistorial, { type EquipoExportable } from "../components/centro/ExportarHistorial";
+import { VISTAS_ADMIN, type Accion as AccionGravix } from "../components/asistente/comandos";
 
 /**
  * Centro de mando (mockup aprobado "Diseño final"): las 10 sedes del IGSS en una sola pantalla.
@@ -101,6 +107,74 @@ interface Equipo {
 
 /** Leido directo del equipo (Gravix en Escuintla o Agente Go de una sede nueva). */
 const esDirecto = (e: Equipo) => !!e.pilotDirect || !!e.directo;
+
+/* ---------- panel del plano 3D ---------- */
+const PANEL3D_KEY = "nodivo.panel3d";
+function leerPanel3d() {
+  try {
+    return localStorage.getItem(PANEL3D_KEY) === "plegado";
+  } catch {
+    return false;
+  }
+}
+function guardarPanel3d(plegado: boolean) {
+  try {
+    localStorage.setItem(PANEL3D_KEY, plegado ? "plegado" : "abierto");
+  } catch {
+    /* sin almacenamiento: dura solo esta visita */
+  }
+}
+
+/* ---------- arbol plegable ---------- */
+const ARBOL_KEY = "nodivo.arbol";
+function leerArbolAbierto() {
+  try {
+    return localStorage.getItem(ARBOL_KEY) !== "plegado";
+  } catch {
+    return true;
+  }
+}
+function guardarArbolAbierto(abierto: boolean) {
+  try {
+    localStorage.setItem(ARBOL_KEY, abierto ? "abierto" : "plegado");
+  } catch {
+    /* sin almacenamiento: dura solo esta visita */
+  }
+}
+/** Siglas de cada sede sin repetir: "Villa Nueva" = VN, "Palín" = PA; si chocan se agrega una letra. */
+function siglasSedes(sedes: { id: string; nombre: string }[]): Map<string, string> {
+  const usadas = new Set<string>();
+  const out = new Map<string, string>();
+  for (const s of sedes) {
+    const [a = "S", b = ""] = s.nombre.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9 ]/g, " ").split(" ").filter(Boolean);
+    const opciones = b ? [a[0] + b[0], a[0] + b.slice(0, 2), a.slice(0, 2) + b[0]] : [a.slice(0, 2), a.slice(0, 3)];
+    let x = opciones.find((o) => !usadas.has(o));
+    for (let n = 2; !x; n++) if (!usadas.has(`${a[0]}${n}`)) x = `${a[0]}${n}`;
+    usadas.add(x);
+    out.set(s.id, x);
+  }
+  return out;
+}
+
+/** Nombre de una metrica para el Excel: "Potencia activa total (kW)". */
+const EBO_LABEL: Record<string, string> = { "ebo:kw": "Potencia (kW)", "ebo:v": "Voltaje promedio (V)", "ebo:a": "Corriente promedio (A)" };
+const etiquetaMetrica = (m: string) => EBO_LABEL[m] ?? (METRIC_LABEL[m] ? `${METRIC_LABEL[m][0]}${METRIC_LABEL[m][1] ? ` (${METRIC_LABEL[m][1]})` : ""}` : m);
+
+/** Equipos que se pueden exportar: los leidos por Agente Go con todas sus metricas; los de Telemetria 1 con kW, V y A. */
+function exportables(lista: Equipo[]): EquipoExportable[] {
+  return lista.flatMap((e): EquipoExportable[] => {
+    const dev = e.pilotDirect ?? e.pilot;
+    const base = { key: e.key, sedeId: e.sedeId, sedeNombre: e.sedeNombre, nombre: e.nombre, inventario: e.inventario, kind: e.kind };
+    if (dev) {
+      const claves = Object.keys(dev.readings ?? {});
+      const metricas = claves.filter((k) => typeof dev.readings[k] === "number" && !k.startsWith("harm_"));
+      const armonicos = e.kind === "ion" && claves.some((k) => k.startsWith("harm_"));
+      return [{ ...base, ref: `p:${dev.id}`, metricas, origen: e.pilotDirect || e.directo ? "directo" : "Agente Go", armonicos }];
+    }
+    if (e.central) return [{ ...base, ref: `c:${e.sedeId}:${e.central.id}`, metricas: ["ebo:kw", "ebo:v", "ebo:a"], origen: "EBO", armonicos: false }];
+    return [];
+  });
+}
 
 /* ---------------- sedes nuevas (Nodivo + Agentes Go) unidas a las del monitoreo central ---------------- */
 
@@ -365,15 +439,120 @@ export default function CentroMando({ access }: { access: Access }) {
 
   const equipos = useEquipos(vistaUnida, pilot.data?.devices ?? [], pilotDir.data?.devices ?? [], nuevasDevs);
   const [sedeId, setSedeId] = useState<string | null>(null);
+  const [sedePlano, setSedePlano] = useState("");
+  const visorPlano = useRef<HTMLIFrameElement>(null);
+  const { data: dispositivosSede } = useDevices();
+  const sensoresPlano = useMemo(() => toSedeDevices(dispositivosSede ?? [], GRAVIX_KEY)
+    .filter((d) => ["door", "env", "wise", "air", "lora", "radio"].includes(d.kind)), [dispositivosSede]);
+  const [sensorPlanoId, setSensorPlanoId] = useState<string | null>(null);
+  const [tendenciaPlanoId, setTendenciaPlanoId] = useState<string | null>(null);
+  const sensorPlano = sensoresPlano.find((sensor) => sensor.id === sensorPlanoId);
+  const tendenciaPlano = sensoresPlano.find((sensor) => sensor.id === tendenciaPlanoId);
+  const puertasPlano = useMemo(() => doorsByCode(sensoresPlano.filter((sensor) => sensor.kind === "door")), [sensoresPlano]);
+  const codigosFrioPlano = useMemo(() => new Set(sensoresPlano
+    .filter((sensor) => sensor.kind === "wise" && !["pump", "heating"].includes(wiseGroup(sensor)))
+    .flatMap((sensor) => coldChainChannels(sensor).map((canal) => canal.code.toUpperCase()).filter(Boolean))), [sensoresPlano]);
+  const inventarioPlano = JSON.stringify(sensoresPlano.filter(
+    (sensor) => sensor.kind !== "door" || !codigosFrioPlano.has(doorCode(sensor)),
+  ).map((sensor) => ({
+    id: sensor.id, nombre: sensor.name, area: sensor.area, modelo: sensor.model,
+    codigo: str(sensor.attrs.tag_code_inventory ?? sensor.attrs.code_inventory),
+  })));
+  const [planoAmpliado, setPlanoAmpliado] = useState(false);
+  const [avisoPlano, setAvisoPlano] = useState("");
+  useEffect(() => {
+    const abrirDesdePlano = (event: MessageEvent) => {
+      if (event.origin !== "null" || event.source !== visorPlano.current?.contentWindow) return;
+      const data = event.data;
+      if (data?.tipo === "nodivo:abrir-sensor-3d" && typeof data.id === "string") {
+        setSensorPlanoId(data.id);
+        return;
+      }
+      if (data?.tipo === "nodivo:cerrar-ampliacion-3d") {
+        setPlanoAmpliado(false);
+        return;
+      }
+      if (data?.tipo === "nodivo:sede-3d" && typeof data.sede === "string") {
+        setSedePlano(data.sede === ESCUINTLA ? ESCUINTLA : "");
+        return;
+      }
+      if (data?.tipo === "nodivo:panel-3d") {
+        guardarPanel3d(!!data.plegado);
+        return;
+      }
+      if (data?.tipo === "nodivo:guardar-punto" && esAdmin && typeof data.clave === "string" && Number.isFinite(data.x) && Number.isFinite(data.y)) {
+        guardarPuntoRef.current({ clave: data.clave, x: data.x, y: data.y });
+        return;
+      }
+      if (data?.tipo !== "nodivo:abrir-equipo-3d" || typeof data.inventario !== "string") return;
+      const coincidencias = (equipos.get(ESCUINTLA) ?? []).filter(
+        (equipo) => equipo.kind === data.clase && equipo.inventario === data.inventario,
+      );
+      const equipo = coincidencias.length === 1 ? coincidencias[0] : coincidencias.find(
+        (candidato) => candidato.nombre === data.nombre,
+      );
+      setAvisoPlano(equipo ? "" : "El equipo del plano todavía no está vinculado a una ficha.");
+      if (equipo) {
+        setTabEquipo("equipo");
+        setAbierto(equipo);
+      }
+    };
+    window.addEventListener("message", abrirDesdePlano);
+    return () => window.removeEventListener("message", abrirDesdePlano);
+  }, [equipos, esAdmin]);
   const [sobre, setSobre] = useState<string | null>(null);
   const [abierto, setAbierto] = useState<Equipo | null>(null);
   /** Pestaña con la que abre la ventana del equipo (Gravix puede pedir una; el clic normal abre "Equipo"). */
   const [tabEquipo, setTabEquipo] = useState<Pestana>("equipo");
   const [filtro, setFiltro] = useState<"todos" | DeviceKind>("todos");
   const [arbolMovil, setArbolMovil] = useState(false);
+  /** Arbol abierto o plegado a la izquierda (solo en pantalla ancha); lo recuerda el navegador. */
+  const [arbolVisible, setArbolVisible] = useState(leerArbolAbierto);
+  /** Nombre que sale al instante junto a un icono del arbol plegado. */
+  const [tipArbol, setTipArbol] = useState<{ t: string; x: number; y: number } | null>(null);
   /** Sede cuyos equipos estan desplegados en el arbol (clic en la misma sede = abrir / cerrar). */
   const [desplegada, setDesplegada] = useState<string | null>(null);
-  const [vistaRed, setVistaRed] = useState<"mapa" | "incidentes" | "ranking" | "normas" | "prediccion" | "analitica" | "alarmas">("mapa");
+  const [vistaRed, setVistaRed] = useState<"mapa" | "sedes3d" | "incidentes" | "ranking" | "normas" | "prediccion" | "analitica" | "alarmas" | "arquitectura" | "exportar">("mapa");
+  useEffect(() => {
+    if (vistaRed !== "sedes3d" || sedeId) setPlanoAmpliado(false);
+  }, [vistaRed, sedeId]);
+  // Plano 3D: lugares guardados en el servidor y estado real de cada equipo.
+  const planoSede = usePlanoSede(ESCUINTLA, vistaRed === "sedes3d");
+  const guardarPunto = useGuardarPunto(ESCUINTLA);
+  const guardarPuntoRef = useRef<(p: { clave: string; x: number; y: number }) => void>(() => {});
+  guardarPuntoRef.current = (p) =>
+    guardarPunto.mutate(p, {
+      onSuccess: () => setAvisoPlano(""),
+      onError: (e) => {
+        setAvisoPlano(`No se guardó el cambio: ${extractErrorMessage(e)}`);
+        enviarPlanoRef.current();
+      },
+    });
+  const estadoPlano = JSON.stringify({
+    admin: esAdmin,
+    panel: leerPanel3d(),
+    puntos: planoSede.data?.puntos ?? null,
+    energia: (equipos.get(ESCUINTLA) ?? []).map((e) => ({ inventario: e.inventario, clase: e.kind, nombre: e.nombre, ok: e.ok, texto: e.estadoTxt })),
+    sensores: Object.fromEntries(sensoresPlano.map((s) => [s.id, s.online])),
+  });
+  const enviarPlanoRef = useRef<() => void>(() => {});
+  enviarPlanoRef.current = () => {
+    const w = visorPlano.current?.contentWindow;
+    w?.postMessage({ tipo: "nodivo:sensores-3d", inventario: inventarioPlano }, "*");
+    w?.postMessage({ tipo: "nodivo:estado-3d", estado: estadoPlano }, "*");
+    w?.postMessage({ tipo: "nodivo:ir-3d", sede: sedePlano }, "*");
+  };
+  useEffect(() => {
+    enviarPlanoRef.current();
+  }, [estadoPlano, inventarioPlano, sedePlano]);
+  useEffect(() => {
+    if (!planoAmpliado || abierto || sensorPlanoId) return;
+    const cerrarConEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPlanoAmpliado(false);
+    };
+    document.addEventListener("keydown", cerrarConEscape);
+    return () => document.removeEventListener("keydown", cerrarConEscape);
+  }, [planoAmpliado, abierto, sensorPlanoId]);
   const [sala, setSala] = useState(false);
   /** Centro de alertas (modal de la campana): de toda la red o de una sede, con una alerta elegida. */
   const [alertas, setAlertas] = useState<{ sede: string | null; sel: string | null } | null>(null);
@@ -394,6 +573,7 @@ export default function CentroMando({ access }: { access: Access }) {
     );
 
   const v = vistaUnida;
+  const sigla = siglasSedes(v.sedes);
   /** Sedes del arbol agrupadas por fase (en el orden de los grupos); las sin grupo al final. */
   const arbol: { g: RedGrupo | null; sedes: CentroSede[] }[] = grupos.length
     ? [
@@ -409,9 +589,26 @@ export default function CentroMando({ access }: { access: Access }) {
     setFiltro("todos");
     setSobre(null);
   };
-  /** Clic en una sede del arbol: la abre y despliega; si ya esta abierta, despliega / pliega sus equipos. */
+  const alternarArbol = () => {
+    setTipArbol(null);
+    setArbolVisible(!arbolVisible);
+    guardarArbolAbierto(!arbolVisible);
+  };
+  const arbolMini = () => !arbolVisible && window.matchMedia("(min-width: 1024px)").matches;
+  const conTip = (t: string) => {
+    const ver = (e: React.SyntheticEvent<HTMLElement>) => {
+      if (!arbolMini()) return;
+      const c = e.currentTarget.getBoundingClientRect();
+      setTipArbol({ t, x: c.right + 16, y: c.top + c.height / 2 });
+    };
+    const quitar = () => setTipArbol(null);
+    return { onMouseEnter: ver, onFocus: ver, onMouseLeave: quitar, onBlur: quitar };
+  };
+  /** Clic en una sede del arbol (plegado: solo la abre): la abre y despliega; si ya esta abierta, despliega / pliega sus equipos. */
   const clicSedeArbol = (id: string) => {
-    if (sedeId === id) setDesplegada((d) => (d === id ? null : id));
+    setTipArbol(null);
+    if (arbolMini()) abrirSede(id);
+    else if (sedeId === id) setDesplegada((d) => (d === id ? null : id));
     else abrirSede(id);
   };
   const abrirEquipo = (sedeIdEq: string, ref: string | null) => {
@@ -428,7 +625,7 @@ export default function CentroMando({ access }: { access: Access }) {
         setAlertas({ sede: a.sedeId, sel: null });
         break;
       case "vista":
-        if (a.vista === "alarmas" && !esAdmin) break;
+        if (VISTAS_ADMIN.has(a.vista) && !esAdmin) break;
         setAlertas(null);
         setAbierto(null);
         setSedeId(null);
@@ -476,10 +673,15 @@ export default function CentroMando({ access }: { access: Access }) {
 
   return (
     <div className="cm flex flex-col gap-4">
-      <div className="grid gap-4 lg:grid-cols-[250px_minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[auto_minmax(0,1fr)]">
         {/* ---------- arbol del sistema ---------- */}
-        <aside aria-label="Árbol del sistema" className="panel flex flex-col gap-1 p-3 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
-          <div className="flex items-center justify-between px-1 pb-1">
+        <aside id="cm-arbol-sistema" aria-label="Árbol del sistema" className={`panel flex flex-col gap-1 p-3 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto arbol ${arbolVisible ? "" : "arbol-mini"}`} onScroll={() => setTipArbol(null)}>
+          <button type="button" onClick={alternarArbol} aria-expanded={arbolVisible} aria-controls="cm-arbol-sistema" aria-label={arbolVisible ? "Plegar el árbol del sistema" : "Abrir el árbol del sistema"} {...conTip("Abrir el árbol del sistema")} className="hidden min-h-[38px] shrink-0 items-center gap-2 overflow-hidden rounded-lg border border-transparent pl-[7px] pr-2 text-left hover:bg-slate-800/60 lg:flex">
+            <span className="arbol-ficha !bg-transparent text-sky-300"><svg className="giro" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 6l-6 6 6 6M19 6l-6 6 6 6" /></svg></span>
+            <span className="tx eyebrow flex-1 !tracking-[0.04em]">Árbol del sistema</span>
+            <span className="tx text-[11px] text-slate-400">{v.sedes.length} sedes</span>
+          </button>
+          <div className="flex items-center justify-between px-1 pb-1 lg:hidden">
             <span className="eyebrow">Árbol del sistema</span>
             <span className="text-xs text-slate-500">{v.sedes.length} sedes</span>
           </div>
@@ -487,8 +689,19 @@ export default function CentroMando({ access }: { access: Access }) {
             {arbolMovil ? "Ocultar sedes y equipos" : "Ver sedes y equipos"} <span>{arbolMovil ? "▴" : "▾"}</span>
           </button>
           <div className={`${arbolMovil ? "flex" : "hidden"} flex-col gap-1 lg:flex`}>
-            <button type="button" onClick={() => setSedeId(null)} className={`flex min-h-[38px] items-center gap-2 rounded-lg px-2.5 text-left text-sm font-semibold ${!sede ? "bg-slate-800 text-white" : "text-slate-200 hover:bg-slate-800/60"}`}>
-              <span aria-hidden="true">◎</span> Red IGSS · mapa
+            <button
+              type="button"
+              onClick={() => {
+                setTipArbol(null);
+                // En una sede vuelve al mapa; ya en el mapa, pliega o abre el arbol (solo pantalla ancha).
+                if (sede) setSedeId(null);
+                else if (window.matchMedia("(min-width: 1024px)").matches) alternarArbol();
+              }}
+              {...conTip(sede ? "Volver al mapa" : "Red IGSS · mapa (abrir el árbol)")}
+              className={`flex min-h-[42px] shrink-0 items-center gap-2 overflow-hidden rounded-lg border pl-[7px] pr-2 text-left text-sm font-semibold ${!sede ? "border-sky-900 bg-slate-800 text-white" : "border-transparent text-slate-200 hover:bg-slate-800/60"}`}
+            >
+              <span className="arbol-ficha !bg-blue-700 text-white"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /></svg></span>
+              <span className="tx">Red IGSS · mapa</span>
             </button>
             {arbol.map(({ g, sedes: delGrupo }) => {
               const gk = g?.id ?? "__sin";
@@ -501,18 +714,19 @@ export default function CentroMando({ access }: { access: Access }) {
                     type="button"
                     onClick={() => setPlegados((p) => { const n = new Set(p); if (n.has(gk)) n.delete(gk); else n.add(gk); return n; })}
                     aria-expanded={!plegado}
-                    title={`${delGrupo.length} sedes · ${enGrupo} equipos`}
-                    className="flex min-h-[32px] items-center gap-2 rounded-md px-1.5 text-left text-[11px] font-extrabold uppercase tracking-[0.08em] text-slate-300 hover:bg-slate-800/60"
+                    title={arbolVisible ? `${delGrupo.length} sedes · ${enGrupo} equipos` : undefined}
+                    {...conTip(`${g?.nombre ?? "Sin grupo"} · ${delGrupo.length} ${delGrupo.length === 1 ? "sede" : "sedes"} · ${enGrupo} equipos`)}
+                    className="arbol-grupo flex min-h-[32px] items-center gap-2 rounded-md px-1.5 text-left text-[11px] font-extrabold uppercase tracking-[0.08em] text-slate-300 hover:bg-slate-800/60"
                   >
-                    <span className="w-2.5 text-slate-500" aria-hidden="true">{plegado ? "▸" : "▾"}</span>
+                    <span className="solo-abierto w-2.5 text-slate-500" aria-hidden="true">{plegado ? "▸" : "▾"}</span>
                     <span className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ background: g?.color ?? "#475569" }} />
-                    <span className="flex-1 truncate">{g?.nombre ?? "Sin grupo"}</span>
+                    <span className="solo-abierto flex-1 truncate">{g?.nombre ?? "Sin grupo"}</span>
                     <span className="mono text-[11px] font-medium normal-case tracking-normal text-slate-500">{delGrupo.length}</span>
                   </button>
                 )}
-                {!plegado && delGrupo.length === 0 && <span className="ml-6 py-1.5 text-xs text-slate-600">Sin sedes todavía</span>}
+                {!plegado && delGrupo.length === 0 && <span className="solo-abierto ml-6 py-1.5 text-xs text-slate-600">Sin sedes todavía</span>}
                 {!plegado && (
-                <div className={grupos.length ? "ml-[13px] flex flex-col border-l border-dashed pl-1" : "flex flex-col"} style={grupos.length ? { borderColor: `${g?.color ?? "#475569"}55` } : undefined}>
+                <div className={grupos.length ? "arbol-rama ml-[13px] flex flex-col border-l border-dashed pl-1" : "flex flex-col"} style={grupos.length ? { borderColor: `${g?.color ?? "#475569"}55` } : undefined}>
             {delGrupo.map((s) => {
               const lista = equipos.get(s.id) ?? [];
               const en = lista.filter((e) => e.ok).length;
@@ -521,20 +735,23 @@ export default function CentroMando({ access }: { access: Access }) {
               const nueva = nuevasDevs.has(s.id);
               return (
                 <div key={s.id} className="flex flex-col">
-                  <div className={`group flex items-center rounded-lg ${elegida ? "bg-slate-800" : "hover:bg-slate-800/60"}`}>
-                  <button type="button" onClick={() => clicSedeArbol(s.id)} aria-expanded={abiertoS} title={abiertoS ? "Clic para ocultar sus equipos" : "Clic para ver sus equipos"} className="flex min-h-[38px] min-w-0 flex-1 items-center gap-2 rounded-lg pl-3 pr-2 text-left text-sm">
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: COLOR[s.nivel], boxShadow: `0 0 8px ${COLOR[s.nivel]}` }} />
-                    <span className="min-w-0 flex-1 truncate font-semibold text-slate-100">{s.nombre}</span>
-                    {s.id === ESCUINTLA && pilot.data?.devices.length ? <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-emerald-300">GRAVIX</span> : null}
-                    {nueva && <span className="rounded bg-sky-950 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-sky-300">AGENTE</span>}
-                    <span className={`mono text-[11px] ${en < lista.length ? "text-rose-300" : "text-slate-400"}`}>{s.sin_respuesta ? "—" : `${en}/${lista.length}`}</span>
+                  <div
+                    className={`group flex items-center rounded-lg border ${elegida ? "bg-slate-800" : "hover:bg-slate-800/60"}`}
+                    style={s.nivel === "ok" ? { borderColor: "transparent" } : { borderColor: `${COLOR[s.nivel]}66`, background: elegida ? undefined : `${COLOR[s.nivel]}14` }}
+                  >
+                  <button type="button" onClick={() => clicSedeArbol(s.id)} aria-expanded={abiertoS} title={!arbolVisible ? undefined : abiertoS ? "Clic para ocultar sus equipos" : "Clic para ver sus equipos"} {...conTip(`${s.nombre} · ${s.sin_respuesta ? "sin respuesta" : `${en}/${lista.length} en línea · ${NIVEL_TXT[s.nivel].toLowerCase()}`}`)} className="flex min-h-[38px] min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg pl-[7px] pr-2 text-left text-sm">
+                    <span className="arbol-ficha" aria-hidden="true">{sigla.get(s.id)}<span className="arbol-punto" style={{ background: COLOR[s.nivel], boxShadow: `0 0 8px ${COLOR[s.nivel]}` }} /></span>
+                    <span className="tx min-w-0 flex-1 truncate font-semibold text-slate-100">{s.nombre}</span>
+                    {s.id === ESCUINTLA && pilot.data?.devices.length ? <span className="tx rounded bg-emerald-950 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-emerald-300">GRAVIX</span> : null}
+                    {nueva && <span className="tx rounded bg-sky-950 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-sky-300">AGENTE</span>}
+                    <span className={`tx mono text-[11px] ${en < lista.length ? "text-rose-300" : "text-slate-400"}`}>{s.sin_respuesta ? "—" : `${en}/${lista.length}`}</span>
                   </button>
                   {esAdmin && nueva && (
-                    <button type="button" onClick={() => setEditarSede({ id: s.id })} aria-label={`Editar o quitar ${s.nombre}`} title="Editar o quitar la sede" className="mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-400 hover:bg-slate-700 hover:text-white">⋯</button>
+                    <button type="button" onClick={() => setEditarSede({ id: s.id })} aria-label={`Editar o quitar ${s.nombre}`} title="Editar o quitar la sede" className="solo-abierto mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-400 hover:bg-slate-700 hover:text-white">⋯</button>
                   )}
                   </div>
                   {abiertoS && (
-                    <div className="ml-6 flex flex-col border-l border-dashed border-slate-700 pb-1.5 pl-3">
+                    <div className="solo-abierto ml-6 flex flex-col border-l border-dashed border-slate-700 pb-1.5 pl-3">
                       {(["ion", "pm", "gen"] as const).map((k) => {
                         const items = lista.filter((e) => e.kind === k);
                         if (!items.length) return null;
@@ -563,19 +780,23 @@ export default function CentroMando({ access }: { access: Access }) {
               );
             })}
             {esAdmin && (
-              <div className="mt-3 flex gap-1.5">
-                <button type="button" onClick={() => setNuevaSede({})} className="flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-dashed border-sky-700 bg-sky-950/30 text-[13px] font-bold text-sky-200 hover:bg-sky-950/60">
-                  <span aria-hidden="true">＋</span> Nueva sede
+              <div className="arbol-pie mt-3 flex gap-1.5">
+                <button type="button" onClick={() => setNuevaSede({})} aria-label="Nueva sede" {...conTip("Nueva sede")} className="flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-dashed border-sky-700 bg-sky-950/30 text-[13px] font-bold text-sky-200 hover:bg-sky-950/60">
+                  <span aria-hidden="true">＋</span> <span className="texto-pie">Nueva sede</span>
                 </button>
-                <button type="button" onClick={() => setVerGrupos(true)} title="Crear, renombrar y ordenar los grupos (Telemetría 1, 2, 3…)" className="min-h-[40px] rounded-lg border border-dashed border-slate-700 px-3 text-[13px] font-semibold text-slate-300 hover:bg-slate-800">Grupos</button>
+                <button type="button" onClick={() => setVerGrupos(true)} aria-label="Grupos" title={arbolVisible ? "Crear, renombrar y ordenar los grupos (Telemetría 1, 2, 3…)" : undefined} {...conTip("Grupos")} className="grid min-h-[40px] place-items-center rounded-lg border border-dashed border-slate-700 px-3 text-[13px] font-semibold text-slate-300 hover:bg-slate-800">
+                  <svg className="icono-pie" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></svg>
+                  <span className="texto-pie">Grupos</span>
+                </button>
               </div>
             )}
-            <div className="mt-2 flex flex-col gap-1 border-t border-slate-800 px-1 pt-3 text-[11px] text-slate-500">
+            <div className="solo-abierto mt-2 flex flex-col gap-1 border-t border-slate-800 px-1 pt-3 text-[11px] text-slate-500">
               <span><b className="rounded bg-emerald-950 px-1 text-[9px] text-emerald-300">DIR</b> Leído directo del equipo (Gravix / Agente Go)</span>
               <span><b className="rounded bg-slate-800 px-1 text-[9px] text-slate-300">EBO</b> Vía EBO AS-P → api-SIASA</span>
             </div>
           </div>
         </aside>
+        {tipArbol && !arbolVisible && <div role="tooltip" className="arbol-tip" style={{ left: tipArbol.x, top: tipArbol.y }}>{tipArbol.t}</div>}
 
         {/* ---------- area de trabajo ---------- */}
         <div className="flex min-w-0 flex-col gap-4">
@@ -598,20 +819,57 @@ export default function CentroMando({ access }: { access: Access }) {
             <Campana alarmas={activasRed} onClick={() => setAlertas({ sede: null, sel: null })} />
           </nav>
 
-          <FranjaEstado vista={v} alarmas={activasRed} onAlertas={() => setAlertas({ sede: null, sel: null })} />
+          <FranjaEstado vista={v} alarmas={activasRed} gravix={(pilotDir.data?.devices.filter((d) => d.updatedAt).length ?? 0) + [...nuevasDevs.values()].flat().filter((d) => d.updatedAt).length} onAlertas={() => setAlertas({ sede: null, sel: null })} />
 
           {!sede ? (
             <>
               <div role="tablist" aria-label="Vista de la red" className="flex w-fit flex-wrap gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1">
-                {([["mapa", "Mapa en vivo"], ["incidentes", "Línea de tiempo de incidentes"], ["ranking", "Ranking de sedes"], ["normas", "Normas y cumplimiento"], ["prediccion", "Predicción"], ["analitica", "Analítica"], ...(esAdmin ? ([["alarmas", "Alarmas y correos"]] as const) : [])] as const).map(([k, t]) => (
-                  <button key={k} type="button" role="tab" aria-selected={vistaRed === k} onClick={() => setVistaRed(k)} className={`min-h-[36px] rounded-lg px-3.5 text-[13px] font-bold ${vistaRed === k ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"}`}>{t}</button>
+                {([["mapa", "Mapa en vivo"], ["sedes3d", "Sedes en 3D"], ["incidentes", "Línea de tiempo de incidentes"], ["ranking", "Ranking de sedes"], ["normas", "Normas y cumplimiento"], ["prediccion", "Predicción"], ["analitica", "Analítica"], ...(esAdmin ? ([["alarmas", "Alarmas y correos"], ["exportar", "Exportar historial"], ["arquitectura", "Arquitectura"]] as const) : [])] as const).map(([k, t]) => (
+                  <button key={k} type="button" role="tab" aria-selected={vistaRed === k} onClick={() => setVistaRed(k)} className={`min-h-[38px] rounded-lg px-3.5 text-[13px] font-bold transition-colors ${vistaRed === k ? "tab-activa" : "text-slate-300 hover:bg-slate-800"}`}>{t}</button>
                 ))}
               </div>
-              {vistaRed === "mapa" && (
+              {(vistaRed === "mapa" || vistaRed === "sedes3d") && (
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-                  <Mapa vista={v} equipos={equipos} sobre={sobre} setSobre={setSobre} onAbrir={abrirSede} grupos={grupos} grupoDe={grupoDe} onAbrirEquipo={setAbierto} />
+                  {vistaRed === "mapa" ? (
+                    <Mapa vista={v} equipos={equipos} sobre={sobre} setSobre={setSobre} onAbrir={abrirSede} grupos={grupos} grupoDe={grupoDe} onAbrirEquipo={setAbierto} />
+                  ) : (
+                    <section className={`panel flex min-w-0 flex-col p-3 ${planoAmpliado ? "fixed inset-3 z-50 shadow-2xl sm:inset-6" : ""}`} aria-label="Sedes en 3D" role={planoAmpliado ? "dialog" : undefined} aria-modal={planoAmpliado || undefined}>
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <label className="flex flex-wrap items-center gap-2 text-sm text-slate-200">
+                        Sede
+                        <select value={sedePlano} onChange={(event) => { setSedePlano(event.target.value); setAvisoPlano(""); }} className="min-h-[44px] rounded-lg border border-slate-700 bg-slate-900 px-3">
+                          <option value="">Mapa de Guatemala</option>
+                          {v.sedes.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                        </select>
+                      </label>
+                        {(!sedePlano || sedePlano === ESCUINTLA || planoAmpliado) && (
+                          <button type="button" onClick={() => setPlanoAmpliado((valor) => !valor)} aria-expanded={planoAmpliado} className="flex min-h-[44px] items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-bold text-slate-100 hover:border-sky-600">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">{planoAmpliado ? <path d="M6 6l12 12M18 6L6 18" /> : <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />}</svg>
+                            {planoAmpliado ? "Cerrar" : "Ampliar"}
+                          </button>
+                        )}
+                      </div>
+                      {!sedePlano || sedePlano === ESCUINTLA ? (
+                        <>
+                          <p className="mb-2 text-xs text-slate-400">Selecciona un equipo para abrir su ficha. Los WISE de cadena de frío incluyen las puertas vinculadas. Las ubicaciones aproximadas se marcan por confirmar.</p>
+                          <p role="status" className="text-sm text-amber-300">{avisoPlano}</p>
+                          <iframe
+                            ref={visorPlano}
+                            onLoad={() => enviarPlanoRef.current()}
+                            title="Mapa y plano 3D de Escuintla"
+                            src={`${import.meta.env.BASE_URL}sedes-3d/escuintla.html`}
+                            sandbox="allow-scripts"
+                            className={`w-full rounded-xl border border-slate-800 ${planoAmpliado ? "min-h-0 flex-1" : "h-[75vh] min-h-[540px]"}`}
+                          />
+                        </>
+                      ) : (
+                        <p className="rounded-xl border border-slate-800 p-4 text-sm text-slate-300">Esta sede todavía no tiene un plano 3D cargado.</p>
+                      )}
+                    </section>
+                  )}
+                  {vistaRed === "sedes3d" && planoAmpliado && <div className="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm" onClick={() => setPlanoAmpliado(false)} aria-hidden="true" />}
                   <div className="flex flex-col gap-4">
-                    <Disponibilidad vista={v} gravix={(pilotDir.data?.devices.filter((d) => d.updatedAt).length ?? 0) + [...nuevasDevs.values()].flat().filter((d) => d.updatedAt).length} />
+                    <TarjetaGravix vista={v} alarmas={activasRed} onAlertas={() => setAlertas({ sede: null, sel: null })} />
                     <Actividad vista={v} onIr={(id) => abrirSede(id)} />
                   </div>
                 </div>
@@ -630,6 +888,19 @@ export default function CentroMando({ access }: { access: Access }) {
               )}
               {vistaRed === "alarmas" && esAdmin && (
                 <ModuloAlarmasCorreos sedes={v.sedes.map((s) => ({ id: s.id, nombre: s.nombre, grupo: grupoDe(s.id), gravix: filasRed.some((f) => f.id === s.id && f.origen === "gravix") }))} />
+              )}
+              {vistaRed === "exportar" && esAdmin && (
+                <ExportarHistorial
+                  sedes={v.sedes.map((s) => ({ id: s.id, nombre: s.nombre, color: grupoDe(s.id)?.color ?? null }))}
+                  equipos={exportables(v.sedes.flatMap((s) => equipos.get(s.id) ?? []))}
+                  etiqueta={etiquetaMetrica}
+                />
+              )}
+              {vistaRed === "arquitectura" && esAdmin && (
+                <ArquitecturaGravix
+                  sedesGravix={filasRed.filter((f) => f.origen === "gravix")}
+                  sedesTelemetria1={v.sedes.filter((s) => { const o = filasRed.find((f) => f.id === s.id)?.origen; return o !== "gravix" && o !== "nodivo"; }).length}
+                />
               )}
             </>
           ) : (
@@ -696,14 +967,52 @@ export default function CentroMando({ access }: { access: Access }) {
       )}
 
       {abierto && <VentanaEquipo key={`${abierto.key}-${tabEquipo}`} equipo={abierto} equiposSede={equipos.get(abierto.sedeId) ?? []} access={access} tabInicial={tabEquipo} onCerrar={cerrarEquipo} />}
+      {sensorPlano && !tendenciaPlano && (
+        <FichaSensorPlano sensor={sensorPlano} puertas={puertasPlano} onTrend={(sensor) => setTendenciaPlanoId(sensor.id)} onClose={() => setSensorPlanoId(null)} />
+      )}
+      {tendenciaPlano && (
+        <SedeTrendModal key={tendenciaPlano.id} device={tendenciaPlano} buildingKey={GRAVIX_KEY} outage={false} tick={0} onClose={() => setTendenciaPlanoId(null)} />
+      )}
       {sala && <SalaControl vista={v} equipos={equipos} onSalir={() => setSala(false)} />}
-      <PublicarGravix datos={{ vista: v, equipos, alarmas: activasRed.map((a) => ({ ...a, titulo: EVENTO_TXT[a.evento] ?? a.titulo })), esAdmin, sedeActual: sede?.id ?? null, grupos, grupoDe: (id) => grupoDe(id)?.id ?? null }} ejecutar={ejecutarGravix} />
+      <PublicarGravix datos={{ vista: v, equipos, alarmas: activasRed.map((a) => ({ ...a, titulo: EVENTO_TXT[a.evento] ?? a.titulo })), esAdmin, sedeActual: sede?.id ?? null, grupos, grupoDe: (id) => grupoDe(id)?.id ?? null, vistaActual: vistaRed }} ejecutar={ejecutarGravix} />
 
     </div>
   );
 }
 
 /* ---------------- alertas: campana, franja de estado y centro de alertas ---------------- */
+function FichaSensorPlano({ sensor, puertas, onTrend, onClose }: {
+  sensor: SedeDevice;
+  puertas: Map<string, SedeDevice[]>;
+  onTrend: (sensor: SedeDevice) => void;
+  onClose: () => void;
+}) {
+  const dialogo = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    dialogo.current?.showModal();
+  }, []);
+
+  const props = { d: sensor, onTrend };
+  return (
+    <dialog
+      ref={dialogo}
+      aria-labelledby="cm-ficha-lorawan"
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(32rem,calc(100%-2rem))] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-950 p-4 text-slate-100 backdrop:bg-slate-950/75"
+    >
+      <header className="mb-3 flex items-center justify-between gap-3">
+        <h2 id="cm-ficha-lorawan" className="font-semibold">Ficha LoRaWAN</h2>
+        <button type="button" onClick={onClose} className="min-h-[44px] rounded-lg border border-slate-700 px-3 text-sm hover:bg-slate-800">Cerrar</button>
+      </header>
+      {sensor.kind === "wise" ? <WiseCard {...props} doors={puertas} />
+        : sensor.kind === "air" ? <AirCard {...props} />
+        : sensor.kind === "env" ? <EnvCard {...props} />
+        : sensor.kind === "door" ? <DoorTile {...props} />
+        : <LoraCard {...props} />}
+    </dialog>
+  );
+}
+
 interface Alarma {
   codigo: string;
   evento: string;
@@ -767,30 +1076,70 @@ function Campana({ alarmas, onClick }: { alarmas: Alarma[]; onClick: () => void 
   );
 }
 
-/** Franja delgada de estado (reemplaza el banner fijo de alertas). */
-function FranjaEstado({ vista, alarmas, onAlertas }: { vista: CentroVista; alarmas: Alarma[]; onAlertas: () => void }) {
+/** Tarjetas de estado general (salud, sedes, criticas, advertencias, lectura directa). */
+function FranjaEstado({ vista, alarmas, gravix, onAlertas }: { vista: CentroVista; alarmas: Alarma[]; gravix: number; onAlertas: () => void }) {
   const t = vista.totales;
-  const crit = alarmas.filter((a) => a.severidad === "critico").length;
-  const adv = alarmas.filter((a) => a.severidad !== "critico").length;
-  const pill = "flex min-h-[32px] items-center gap-2 rounded-full border px-3 text-[12.5px]";
+  const crit = alarmas.filter((a) => a.severidad === "critico");
+  const adv = alarmas.filter((a) => a.severidad !== "critico");
+  const pct = t.medidores ? Math.round((t.medidores_ok / t.medidores) * 100) : 0;
+  const colorPct = pct >= 98 ? "#22c55e" : pct >= 90 ? "#f59e0b" : "#ef4444";
+  const c = 2 * Math.PI * 46;
+  const SEG: Record<string, string> = { ok: "#22c55e", advertencia: "#f59e0b", critico: "#ef4444", sin_respuesta: "#ef4444" };
+  const nombres = (l: Alarma[]) => [...new Set(l.map((a) => a.sedeNombre))].slice(0, 2).join(", ") + (new Set(l.map((a) => a.sedeNombre)).size > 2 ? "…" : "");
   return (
-    <div aria-label="Estado general" className="flex flex-wrap items-center gap-2">
-      <span className={`${pill} border-slate-800 bg-slate-900/70 text-slate-300`}><b className="mono text-slate-100">{t.sedes_responden}/{t.sedes}</b> sedes respondiendo</span>
-      <span className={`${pill} border-slate-800 bg-slate-900/70 text-slate-300`}><b className={`mono ${t.medidores_fuera ? "text-rose-300" : "text-slate-100"}`}>{t.medidores_ok}/{t.medidores}</b> medidores en línea</span>
-      {crit ? (
-        <button type="button" onClick={onAlertas} className={`${pill} border-rose-900 bg-rose-950/40 font-semibold text-rose-200 hover:bg-rose-950/70`}>
-          <span className="h-2 w-2 rounded-full bg-rose-500" /> {crit} {crit === 1 ? "crítica" : "críticas"} · ver
+    <div aria-label="Estado general" className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
+      <div className="kpi !flex-row items-center !gap-4" style={{ background: "linear-gradient(160deg,#0e1a30,#0b1220)" }}>
+        <svg width="72" height="72" viewBox="0 0 112 112" role="img" aria-label={`Salud de la red: ${pct} por ciento de medidores en línea`} className="shrink-0">
+          <circle cx="56" cy="56" r="46" fill="none" stroke="#1C2740" strokeWidth="11" />
+          <circle className="anillo-dibujo" cx="56" cy="56" r="46" fill="none" stroke={colorPct} strokeWidth="11" strokeLinecap="round" strokeDasharray={`${(pct / 100) * c} ${c}`} transform="rotate(-90 56 56)" style={{ ["--total" as string]: `${(pct / 100) * c}` }} />
+          <text x="56" y="64" textAnchor="middle" fill="#e8eef8" fontSize="24" fontWeight="800" fontFamily="monospace">{pct}%</text>
+        </svg>
+        <div className="flex flex-col gap-1">
+          <span className="kpi-titulo">Salud de la red</span>
+          <b className="text-[17px] text-slate-100">{t.medidores_ok}/{t.medidores} medidores</b>
+          <span className={`text-[12px] ${t.medidores_fuera ? "text-rose-300" : "text-emerald-300"}`}>{t.medidores_fuera ? `${t.medidores_fuera} fuera de línea` : "todos en línea"}</span>
+        </div>
+      </div>
+      <div className="kpi" style={{ animationDelay: ".05s" }}>
+        <span className="kpi-titulo">Sedes respondiendo</span>
+        <b className="kpi-valor text-slate-100">{t.sedes_responden}<span className="text-[19px] text-slate-500">/{t.sedes}</span></b>
+        <div className="grid gap-[3px]" style={{ gridTemplateColumns: `repeat(${Math.max(1, vista.sedes.length)}, minmax(0, 1fr))` }}>
+          {vista.sedes.map((s) => <span key={s.id} title={s.nombre} className="h-1.5 rounded-full" style={{ background: SEG[s.nivel] }} />)}
+        </div>
+      </div>
+      {crit.length ? (
+        <button type="button" onClick={onAlertas} className="kpi text-left" style={{ animationDelay: ".1s", borderColor: "rgba(239,68,68,.55)", background: "linear-gradient(160deg,rgba(239,68,68,.14),#0b1220 70%)" }}>
+          <span className="kpi-titulo !text-rose-300">Alarmas críticas</span>
+          <b className="kpi-valor text-rose-400">{crit.length}</b>
+          <span className="text-[12px] text-rose-200">{nombres(crit)} · ver detalle →</span>
         </button>
       ) : (
-        <span className={`${pill} border-slate-800 bg-slate-900/70 text-slate-300`}><span className="h-2 w-2 rounded-full bg-emerald-500" /> 0 críticas</span>
+        <div className="kpi" style={{ animationDelay: ".1s" }}>
+          <span className="kpi-titulo">Alarmas críticas</span>
+          <b className="kpi-valor text-emerald-300">0</b>
+          <span className="flex items-center gap-1.5 text-[12px] text-slate-400">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M5 12l5 5L20 7" /></svg>Sin críticas en la red
+          </span>
+        </div>
       )}
-      {adv ? (
-        <button type="button" onClick={onAlertas} className={`${pill} border-amber-900 bg-amber-950/30 font-semibold text-amber-200 hover:bg-amber-950/60`}>
-          <span className="h-2 w-2 rounded-full bg-amber-400" /> {adv} {adv === 1 ? "advertencia" : "advertencias"} · ver
+      {adv.length ? (
+        <button type="button" onClick={onAlertas} className="kpi text-left" style={{ animationDelay: ".15s", borderColor: "rgba(245,158,11,.5)", background: "linear-gradient(160deg,rgba(245,158,11,.12),#0b1220 70%)" }}>
+          <span className="kpi-titulo !text-amber-300">Advertencias</span>
+          <b className="kpi-valor text-amber-400">{adv.length}</b>
+          <span className="text-[12px] text-amber-100">{nombres(adv)} · ver detalle →</span>
         </button>
       ) : (
-        <span className={`${pill} border-slate-800 bg-slate-900/70 text-slate-300`}><span className="h-2 w-2 rounded-full bg-emerald-500" /> 0 advertencias</span>
+        <div className="kpi" style={{ animationDelay: ".15s" }}>
+          <span className="kpi-titulo">Advertencias</span>
+          <b className="kpi-valor text-emerald-300">0</b>
+          <span className="text-[12px] text-slate-400">Sin advertencias</span>
+        </div>
       )}
+      <div className="kpi" style={{ animationDelay: ".2s" }}>
+        <span className="kpi-titulo">Lectura directa Gravix</span>
+        <b className="kpi-valor text-sky-300">{gravix}</b>
+        <span className="text-[12px] text-slate-400">medidores sin AS-P · {t.reconexiones} reconexiones (1 h)</span>
+      </div>
     </div>
   );
 }
@@ -985,8 +1334,38 @@ const W = 640, H = 420, LON0 = -91.95, LON1 = -90.25, LAT0 = 13.8, LAT1 = 14.8;
 const px = (lon: number) => ((lon - LON0) / (LON1 - LON0)) * W;
 const py = (lat: number) => ((LAT1 - lat) / (LAT1 - LAT0)) * H;
 const COSTA: [number, number][] = [[-91.95, 14.33], [-91.82, 14.25], [-91.7, 14.18], [-91.58, 14.11], [-91.45, 14.05], [-91.3, 13.98], [-91.15, 13.93], [-90.98, 13.92], [-90.82, 13.92], [-90.65, 13.9], [-90.48, 13.89], [-90.25, 13.82]];
-const costaD = COSTA.map(([lo, la], i) => `${i ? "L" : "M"}${px(lo).toFixed(1)} ${py(la).toFixed(1)}`).join(" ");
-const tierraD = `M0 0 L${W} 0 L${W} ${py(13.82).toFixed(1)} ${COSTA.slice().reverse().map(([lo, la]) => `L${px(lo).toFixed(1)} ${py(la).toFixed(1)}`).join(" ")} Z`;
+const costaPx: [number, number][] = COSTA.map(([lo, la]) => [px(lo), py(la)]);
+/** Altura de la costa (px) en una x del mapa. */
+const yCosta = (x: number) => {
+  const i = Math.max(0, costaPx.findIndex(([cx]) => cx >= x) - 1);
+  const [x0, y0] = costaPx[i];
+  const [x1, y1] = costaPx[Math.min(i + 1, costaPx.length - 1)];
+  return x1 === x0 ? y0 : y0 + ((x - x0) / (x1 - x0)) * (y1 - y0);
+};
+/** Curva suave por los puntos (Catmull-Rom convertida a Bezier). */
+const curva = (pts: [number, number][]) => {
+  let d = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] ?? pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] ?? p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return d;
+};
+const costaD = curva(costaPx);
+const tierraD = `${costaD} L${W} 0 L0 0 Z`;
+/** Olas: lineas onduladas paralelas a la costa, cada una mas lejos, mas tenue y mas lenta. */
+const OLAS = [
+  { dy: 8, amp: 1.4, largo: 26, op: 0.7, seg: 7 },
+  { dy: 18, amp: 2.2, largo: 34, op: 0.48, seg: 10 },
+  { dy: 31, amp: 3, largo: 44, op: 0.3, seg: 14 },
+  { dy: 48, amp: 3.8, largo: 56, op: 0.18, seg: 19 },
+].map((o, k) => {
+  const pts: [number, number][] = [];
+  for (let x = 0; x <= W + 0.1; x += 14) pts.push([x, yCosta(x) + o.dy + o.amp * Math.sin((x / o.largo) * Math.PI + k * 1.7)]);
+  return { ...o, d: curva(pts) };
+});
 const CENTRAL = { x: px(-90.42), y: py(14.7) };
 const ETQ: Record<string, [number, number]> = { gineco: [16, -2], villanueva: [16, 2], amatitlan: [-16, -6], palin: [16, 10], escuintla: [16, 16], santalucia: [0, 32], gomera: [16, 0], tiquisate: [0, 30], mazatenango: [0, -30], retalhuleu: [0, 30] };
 
@@ -1130,7 +1509,7 @@ function Mapa({ vista, equipos, sobre, setSobre, onAbrir, grupos, grupoDe, onAbr
       </div>
       <div
         ref={cajaRef}
-        className="mapa"
+        className={`mapa ${ampliado ? "mapa-lleno" : ""}`}
         style={ampliado ? { width: "min(100%, calc((100vh - 9.5rem) * 1.5238))", margin: "0 auto" } : undefined}
         onPointerDown={onDown}
         onPointerMove={onMove}
@@ -1143,19 +1522,30 @@ function Mapa({ vista, equipos, sobre, setSobre, onAbrir, grupos, grupoDe, onAbr
             <linearGradient id="cmMar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#0B2540" /><stop offset="1" stopColor="#06182B" /></linearGradient>
             <radialGradient id="cmTierra" cx="70%" cy="10%" r="90%"><stop offset="0" stopColor="#15213A" /><stop offset="1" stopColor="#0E1627" /></radialGradient>
             <pattern id="cmRej" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#1A2742" strokeWidth="1" /></pattern>
+            <radialGradient id="cmHalo" cx={CENTRAL.x / W} cy={CENTRAL.y / H} r=".38"><stop offset="0" stopColor="#3b82f6" stopOpacity=".28" /><stop offset="1" stopColor="#3b82f6" stopOpacity="0" /></radialGradient>
           </defs>
           <rect width={W} height={H} fill="url(#cmMar)" />
           <path d={tierraD} fill="url(#cmTierra)" />
           <path d={tierraD} fill="url(#cmRej)" opacity=".55" />
-          <path d={costaD} fill="none" stroke="#2f6fb5" strokeWidth="2.2" vectorEffect="non-scaling-stroke" />
-          <path d={costaD} fill="none" stroke="#2f6fb5" strokeWidth="1" strokeDasharray="3 5" opacity=".6" transform="translate(0 7)" vectorEffect="non-scaling-stroke" />
-          <text x={px(-91.5)} y={H - 16} fill="#2f6fb5" fontSize="11" letterSpacing="5" fontFamily="monospace">OCÉANO PACÍFICO</text>
+          <rect width={W} height={H} fill="url(#cmHalo)" />
+          {/* Mar: olas que se mueven y un brillo que recorre la costa */}
+          {OLAS.map((o, i) => (
+            <path key={i} className="ola" d={o.d} fill="none" stroke="#38bdf8" strokeOpacity={o.op} strokeWidth="1.2" strokeLinecap="round" vectorEffect="non-scaling-stroke" style={{ animationDuration: `${o.seg}s, ${4 + i * 1.5}s`, animationDelay: `-${i * 1.3}s, -${i}s` }} />
+          ))}
+          <path d={costaD} fill="none" stroke="#38bdf8" strokeOpacity=".18" strokeWidth="7" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          <path d={costaD} fill="none" stroke="#3b82f6" strokeWidth="2.2" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          <path className="brillo-costa" d={costaD} fill="none" stroke="#bae6fd" strokeWidth="2.6" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          <text className={`mar-texto ${ampliado ? "mar-svg" : ""}`} x={px(-91.5)} y={H - 16} fill="#38bdf8" fontSize="11" letterSpacing="6" fontFamily="monospace">OCÉANO PACÍFICO</text>
           {[["Volcán de Fuego", -90.88, 14.47], ["Volcán de Agua", -90.74, 14.47]].map(([n, lo, la]) => (
             <path key={n as string} d={`M${px(lo as number) - 7} ${py(la as number) + 5} L${px(lo as number)} ${py(la as number) - 6} L${px(lo as number) + 7} ${py(la as number) + 5} Z`} fill="#22324f" stroke="#3a4d70"><title>{n as string}</title></path>
           ))}
           <path className="flujo" d={lineas((s) => s.nivel === "ok")} fill="none" stroke="#22c55e" strokeWidth="1.4" opacity=".75" vectorEffect="non-scaling-stroke" />
           <path className="flujo" d={lineas((s) => s.nivel === "advertencia")} fill="none" stroke="#f59e0b" strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
           <path className="flujo" d={lineas((s) => s.nivel === "critico")} fill="none" stroke="#ef4444" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
+          {/* paquetes de luz que viajan de cada sede que responde hacia el monitoreo central */}
+          {sedes.filter((s) => !s.sin_respuesta).map((s, i) => (
+            <path key={`p-${s.id}`} className="paquete" d={lineas((x) => x.id === s.id)} fill="none" stroke={s.nivel === "ok" ? "#86efac" : s.nivel === "advertencia" ? "#fcd34d" : "#fca5a5"} strokeWidth="2.6" strokeLinecap="round" vectorEffect="non-scaling-stroke" style={{ animationDelay: `-${(i * 0.7) % 3.2}s`, animationDuration: `${2.6 + (i % 4) * 0.5}s` }} />
+          ))}
           <path d={lineas((s) => s.nivel === "sin_respuesta")} fill="none" stroke="#ef4444" strokeWidth="1.4" strokeDasharray="2 6" opacity=".6" vectorEffect="non-scaling-stroke" />
           {ramas.map((b) => (
             <line key={b.e.key} x1={b.x0} y1={b.y0} x2={b.x} y2={b.y} stroke={b.e.ok ? TIPO_COLOR[b.e.kind] : "#ef4444"} strokeWidth="1.6" opacity=".85" vectorEffect="non-scaling-stroke" className="rama-linea" />
@@ -1164,6 +1554,14 @@ function Mapa({ vista, equipos, sobre, setSobre, onAbrir, grupos, grupoDe, onAbr
         <div className="pointer-events-none absolute flex items-center gap-2" style={{ ...P(CENTRAL.x - 18, CENTRAL.y), transform: "translate(-100%, -50%)" }}>
           <span className="flex flex-col items-end"><strong className="text-[13px] text-slate-100">Monitoreo central</strong><span className="mono text-[10px] text-slate-400">Ciudad de Guatemala</span></span>
           <span className="grid h-[26px] w-[26px] place-items-center rounded-md bg-blue-500 shadow-[0_0_14px_rgba(59,130,246,.6)]"><span className="h-2.5 w-2.5 rounded-sm border-2 border-white" /></span>
+        </div>
+        {/* Ampliado el mapa llena el recuadro: el rotulo va fuera del dibujo para que no se estire. */}
+        {ampliado && <span className="mar-rotulo mono" style={P(px(-91.5), H - 20)} aria-hidden="true">OCÉANO PACÍFICO</span>}
+        {/* recuadro de flujo de datos (no tapa el arrastre: solo informa) */}
+        <div className="pointer-events-none absolute left-3 top-3 hidden flex-col gap-1 rounded-lg border border-slate-800 bg-[#090f1c]/85 px-3 py-2 sm:flex">
+          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">Flujo de datos</span>
+          <span className="mono text-[12px] text-slate-100">{sedes.filter((s) => !s.sin_respuesta).length} de {sedes.length} rutas activas</span>
+          <span className={`mono text-[11px] ${vista.atrasado ? "text-amber-300" : "text-emerald-300"}`}>↑ actualizado {hace(vista.recibido)}</span>
         </div>
         {sedes.map((s) => {
           const x = px(s.lon!), y = py(s.lat!);
@@ -1191,7 +1589,9 @@ function Mapa({ vista, equipos, sobre, setSobre, onAbrir, grupos, grupoDe, onAbr
               aria-label={`${s.nombre}${g ? ` (${g.nombre})` : ""}: ${NIVEL_TXT[s.nivel]}, ${sub}. ${desplegada ? "Plegar sus equipos" : "Desplegar sus equipos"}`}
             >
               <span className="absolute -left-[26px] -top-[26px] h-[52px] w-[52px] rounded-full" style={{ background: `radial-gradient(circle, ${COLOR[s.nivel]}88, transparent 70%)` }} />
-              {alarma && <span className="onda" />}
+              {/* pulso: todas las sedes laten con su color; advertencia y alarma, con doble onda */}
+              <span className="onda" style={{ borderColor: COLOR[s.nivel], animationDuration: alarma ? "1.6s" : "2.4s", animationDelay: `-${(s.nombre.length % 7) * 0.3}s` }} />
+              {(alarma || s.nivel === "advertencia") && <span className="onda" style={{ borderColor: COLOR[s.nivel], animationDuration: alarma ? "1.6s" : "2.4s", animationDelay: alarma ? "-.8s" : "-1.2s" }} />}
               {g && <span className="absolute -left-[13px] -top-[13px] h-[26px] w-[26px] rounded-full" style={{ border: `2.5px solid ${g.color}`, boxShadow: desplegada ? `0 0 0 4px ${g.color}44` : undefined }} />}
               <span className="punto absolute -left-[9px] -top-[9px] grid h-[18px] w-[18px] place-items-center rounded-full" style={{ background: COLOR[s.nivel], boxShadow: sobre === s.id ? "0 0 0 3px #fff" : undefined }}>
                 <span className="h-1.5 w-1.5 rounded-full bg-[#052e16]" />
@@ -1309,24 +1709,61 @@ function Mapa({ vista, equipos, sobre, setSobre, onAbrir, grupos, grupoDe, onAbr
   );
 }
 
-function Disponibilidad({ vista, gravix }: { vista: CentroVista; gravix: number }) {
+/** Envia una orden a Gravix (el asistente global la procesa como si se hubiera dicho). */
+const ordenGravix = (texto: string) => window.dispatchEvent(new CustomEvent("gravix:orden", { detail: { texto } }));
+const ATAJOS_GRAVIX = ["¿Qué puede fallar?", "Equipos fuera de línea", "Generadores en marcha", "Consumo de energía", "Estado por telemetría"];
+
+/** Tarjeta de Gravix en el panel derecho: resumen hablado, alertas, microfono y preguntas rapidas. */
+function TarjetaGravix({ vista, alarmas, onAlertas }: { vista: CentroVista; alarmas: Alarma[]; onAlertas: () => void }) {
   const t = vista.totales;
-  const pct = t.medidores ? Math.round((t.medidores_ok / t.medidores) * 100) : 0;
-  const c = 2 * Math.PI * 46;
-  const color = pct >= 98 ? "#22c55e" : pct >= 90 ? "#f59e0b" : "#ef4444";
+  const crit = alarmas.filter((a) => a.severidad === "critico");
+  const adv = alarmas.filter((a) => a.severidad !== "critico");
+  const sedesDe = (l: Alarma[]) => [...new Set(l.map((a) => a.sedeNombre))];
+  const lista = (n: string[]) => (n.length <= 1 ? n.join("") : `${n.slice(0, -1).join(", ")} y ${n[n.length - 1]}`);
+  let msg = `${t.sedes_responden} de ${t.sedes} sedes responden`;
+  msg += crit.length ? ` y hay ${crit.length} ${crit.length === 1 ? "alarma crítica" : "alarmas críticas"} en ${lista(sedesDe(crit))}.` : " y no hay alarmas críticas.";
+  if (adv.length) {
+    const s = sedesDe(adv);
+    msg += ` ${lista(s)} ${s.length === 1 ? "tiene" : "tienen"} ${adv.length} ${adv.length === 1 ? "advertencia" : "advertencias"}.`;
+  }
+  if (alarmas.length) msg += " ¿Quiere que se las muestre?";
   return (
-    <section aria-label="Disponibilidad" className="panel flex flex-wrap items-center gap-4 p-4">
-      <svg width="104" height="104" viewBox="0 0 112 112" role="img" aria-label={`${pct} por ciento de medidores en línea`}>
-        <circle cx="56" cy="56" r="46" fill="none" stroke="#1C2740" strokeWidth="12" />
-        <circle cx="56" cy="56" r="46" fill="none" stroke={color} strokeWidth="12" strokeLinecap="round" strokeDasharray={`${(pct / 100) * c} ${c}`} transform="rotate(-90 56 56)" />
-        <text x="56" y="58" textAnchor="middle" fill="#e8eef8" fontSize="22" fontWeight="700" fontFamily="monospace">{pct}%</text>
-        <text x="56" y="75" textAnchor="middle" fill="#96a6c0" fontSize="10">{t.medidores_ok}/{t.medidores} en línea</text>
-      </svg>
-      <div className="grid flex-1 grid-cols-2 gap-3">
-        <div><b className="mono block text-lg text-slate-100">{t.sedes_responden}/{t.sedes}</b><small className="text-slate-400">sedes respondiendo</small></div>
-        <div><b className={`mono block text-lg ${t.medidores_fuera ? "text-rose-300" : "text-slate-100"}`}>{t.medidores_fuera}</b><small className="text-slate-400">fuera de línea</small></div>
-        <div><b className="mono block text-lg text-emerald-300">{gravix}</b><small className="text-slate-400">leídos directo (Gravix)</small></div>
-        <div><b className={`mono block text-lg ${t.reconexiones > 10 ? "text-amber-300" : "text-slate-100"}`}>{t.reconexiones}</b><small className="text-slate-400">reconexiones (1 h)</small></div>
+    <section aria-label="Gravix, asistente" className="panel flex flex-col gap-3 p-4" style={{ borderColor: "#1e4b73", background: "linear-gradient(160deg,#0d2340,#0b1220 70%)" }}>
+      <div className="flex items-center gap-3">
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full font-extrabold text-white" style={{ background: "radial-gradient(circle at 35% 30%,#7dd3fc,#2563eb 60%,#1e3a8a)", boxShadow: "0 0 22px rgba(56,189,248,.55)" }}>G</span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <b className="text-[14px] text-slate-100">Gravix</b>
+          <span className="text-[11px] text-slate-400">Asistente de voz del Centro de mando</span>
+        </span>
+        <span className="voz-gravix flex h-5 items-end gap-[3px]" aria-hidden="true">
+          {[0, 0.2, 0.5, 0.7, 0.35].map((d) => <span key={d} style={{ animationDelay: `-${d}s` }} />)}
+        </span>
+      </div>
+      <p className="m-0 rounded-xl border border-sky-500/25 bg-sky-500/[.08] p-3 text-[13px] leading-relaxed text-sky-100">{msg}</p>
+      <div className="flex gap-2">
+        {alarmas.length > 0 ? (
+          <button type="button" onClick={onAlertas} className="min-h-[40px] flex-1 rounded-lg bg-sky-500 text-[13px] font-bold text-slate-950 hover:bg-sky-400">
+            Ver {crit.length ? "alertas" : adv.length === 1 ? "advertencia" : "advertencias"}
+          </button>
+        ) : (
+          <button type="button" onClick={() => ordenGravix("¿Qué puede fallar?")} className="min-h-[40px] flex-1 rounded-lg bg-sky-500 text-[13px] font-bold text-slate-950 hover:bg-sky-400">
+            ¿Qué puede fallar?
+          </button>
+        )}
+        <button type="button" onClick={() => ordenGravix("¿Cómo está la red?")} aria-label="Escuchar el resumen de la red" title="Escuchar el resumen" className="grid min-h-[40px] w-11 place-items-center rounded-lg border border-[#1e4b73] bg-[#0b1220] text-sky-300 hover:bg-slate-800">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 5L6 9H3v6h3l5 4z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></svg>
+        </button>
+        <button type="button" onClick={() => window.dispatchEvent(new Event("gravix:escuchar"))} aria-label="Hablar con Gravix" title="Hablar con Gravix" className="grid min-h-[40px] w-11 place-items-center rounded-lg border border-[#1e4b73] bg-[#0b1220] text-sky-300 hover:bg-slate-800">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v5" /></svg>
+        </button>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">Preguntas rápidas</span>
+        <div className="flex flex-wrap gap-1.5">
+          {ATAJOS_GRAVIX.map((q) => (
+            <button key={q} type="button" onClick={() => ordenGravix(q)} className="min-h-[30px] rounded-full border border-slate-700 bg-slate-900/70 px-2.5 text-[11.5px] text-slate-200 hover:border-sky-500 hover:text-white">{q}</button>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -1335,18 +1772,23 @@ function Disponibilidad({ vista, gravix }: { vista: CentroVista; gravix: number 
 function Actividad({ vista, onIr }: { vista: CentroVista; onIr: (sede: string) => void }) {
   const col: Record<string, string> = { critico: "#ef4444", sin_respuesta: "#ef4444", advertencia: "#f59e0b", info: "#8ab8ff", ok: "#22c55e" };
   return (
-    <section aria-label="Actividad en vivo" className="panel flex max-h-[420px] flex-col gap-1 overflow-y-auto p-4">
-      <span className="eyebrow">Actividad en vivo</span>
+    <section aria-label="Actividad en vivo" className="panel flex max-h-[560px] flex-col gap-2 p-4">
+      <span className="flex items-center justify-between">
+        <span className="eyebrow">Actividad en vivo</span>
+        <span className="latido h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#22c55e]" aria-hidden="true" />
+      </span>
       {vista.actividad.length === 0 && <p className="py-4 text-sm text-slate-500">Sin actividad en los últimos días</p>}
-      {vista.actividad.slice(0, 40).map((a) => (
-        <button key={a.id} type="button" onClick={() => onIr(a.sede_id)} className="flex items-start gap-2.5 border-t border-slate-800/80 py-2 text-left">
-          <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: col[a.tipo] }} />
-          <span className="flex flex-col gap-0.5">
-            <span className="text-[13px] text-slate-200"><b>{a.sede}</b> · {a.titulo}</span>
-            <span className="mono text-[11px] text-slate-500">{hace(a.t)}</span>
-          </span>
-        </button>
-      ))}
+      <ol className="linea-tiempo m-0 flex list-none flex-col overflow-y-auto pr-1">
+        {vista.actividad.slice(0, 40).map((a, i) => (
+          <li key={a.id} className="hito entrar" style={{ animationDelay: `${Math.min(i, 8) * 0.04}s` }}>
+            <span className="hito-punto" style={{ background: col[a.tipo] }} aria-hidden="true" />
+            <button type="button" onClick={() => onIr(a.sede_id)} className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-2 text-left hover:bg-slate-800/60">
+              <span className="text-[13px] text-slate-200"><b>{a.sede}</b> · {a.titulo}</span>
+              <span className="mono text-[11px] text-slate-500">{hace(a.t)}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }

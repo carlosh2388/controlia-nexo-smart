@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useAccess } from "../../api/access";
+import type { PilotDevice } from "../../api/pilot";
+import { useGravixBus } from "../../store/gravix.store";
+import { interpretarIngeniero, resolver, ventanaDe, type Analisis, type Consulta, type Informe } from "./ingeniero";
+import { InformeTurno, PasosAnalisis, RespuestaAnalisis } from "./PanelAnalisis";
 import { useCentroAnalitica, type CentroAnalitica, type CentroVista, type HallazgoRiesgo } from "../../api/centro";
-import { buscarEquipo, buscarSede, interpretar, MENU, normalizar, PESTANA_NOMBRE, quitarDespertar, usaContexto, type Accion, type Pestana, type PestanaEquipo, type VistaRed } from "./comandos";
+import { buscarEquipo, buscarSede, interpretar, MENU, normalizar, PESTANA_NOMBRE, quitarDespertar, usaContexto, VISTAS_ADMIN, type Accion, type Pestana, type PestanaEquipo, type VistaRed } from "./comandos";
 import { useAuthStore } from "../../store/auth.store";
 import { apiClient } from "../../api/client";
 
@@ -52,7 +57,10 @@ export interface GravixEquipo {
   ok: boolean;
   kind: "ion" | "pm" | "gen";
   /** Ultima lectura del monitoreo central o del Agente Go (kW, fuente, voltaje). */
-  central: { estado: string; lectura: { kw: number | null; fuente: "comercial" | "generador" | null; v_prom: number | null } | null } | null;
+  central: { id?: string; estado: string; lectura: { kw: number | null; fuente: "comercial" | "generador" | null; v_prom: number | null } | null } | null;
+  /** Lectura del equipo por Agente Go: por el AS-P y directa. */
+  pilot?: PilotDevice | null;
+  pilotDirect?: PilotDevice | null;
 }
 
 /** De que se esta hablando y que dato espera Gravix. */
@@ -101,6 +109,8 @@ interface Props {
   irPestana: (p: Pestana) => void;
   /** false = todavia no hay datos del Centro de mando (otra pestaña de inicio). */
   conDatos: boolean;
+  /** Vista de la red abierta en el Centro de mando. */
+  vistaActual: VistaRed;
 }
 
 interface Mensaje {
@@ -112,9 +122,15 @@ interface Mensaje {
   tarjetas?: HallazgoRiesgo[];
   /** Quien respondio cuando fue la IA ("IA local · qwen3.5:4b"). */
   fuente?: string;
+  /** Respuesta de analisis (conclusion, puntos, fuente y siguientes pasos). */
+  analisis?: Analisis;
 }
 
 interface Prefs {
+  /** Panel fijo a la derecha en pantallas anchas. */
+  fijo: boolean;
+  /** Abrir la ventana que corresponde a cada pregunta. */
+  ventanas: boolean;
   voz: boolean;
   avisos: boolean;
   continua: boolean;
@@ -124,27 +140,76 @@ interface Prefs {
   ia: boolean;
   /** Forma de hablar: "formal" (de usted, neutra) o "carinosa" (voz colombiana que dice "amor"). */
   estilo: Estilo;
+  /** Pais de la voz ("es-CO" = Colombia); null = el que recomiende Gravix. */
+  pais: string | null;
 }
 type Estilo = "formal" | "carinosa";
+/** Paises que se ofrecen en "Voz" (Colombia siempre aparece, aunque el navegador no la tenga). */
+const PAISES: Record<string, string> = {
+  "es-co": "Colombia",
+  "es-mx": "México",
+  "es-gt": "Guatemala",
+  "es-us": "Estados Unidos",
+  "es-419": "Latinoamérica",
+  "es-ar": "Argentina",
+  "es-cl": "Chile",
+  "es-pe": "Perú",
+  "es-ve": "Venezuela",
+  "es-es": "España",
+};
+const nombrePais = (lang: string) => PAISES[lang.toLowerCase()] ?? lang;
+/** Voces neuronales (suenan naturales); las demas son las del sistema, mas roboticas. */
+const esNatural = (v: SpeechSynthesisVoice) => /natural|online|neural|google/i.test(v.name);
+const nombreVoz = (v: SpeechSynthesisVoice) =>
+  v.name.replace(/^Microsoft\s+/, "").replace(/\s*Online\s*\(Natural\)/i, "").replace(/\s*-\s*Spanish.*$/i, "").replace(/^Google\s+/, "Google ");
 
-/* ---------- estilo cariñoso: mismo contenido, con trato de cariño ---------- */
-const APODOS = ["amor", "mi amor", "corazón", "mi vida"];
+/* ---------- estilo cariñoso: mismo contenido, hablado como una mujer colombiana ---------- */
+const APODOS = ["mor", "mi amor", "bebé", "mor", "mi vida", "corazón", "mi cielo"];
 let apodoN = 0;
 const apodo = () => APODOS[apodoN++ % APODOS.length];
+/** Va alternando expresiones para que no suene repetida. */
+let giroN = 0;
+const giro = (opciones: string[]) => opciones[giroN++ % opciones.length];
+const minuscula = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+const mayuscula = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+/** Expresiones colombianas que reemplazan frases neutras (en cualquier parte del texto). */
+const MODISMOS: [RegExp, string][] = [
+  [/¿Qué desea hacer hoy\?/g, "¿Qué más pues, en qué le colaboro hoy?"],
+  [/¿Desea algo más\?/g, "¿Qué más le provoca? Para eso estoy."],
+  [/^Con gusto\./, "Ay, con mucho gusto, mor."],
+  [/Todo en orden\./g, "Todo bien, todo bonito."],
+  [/Aquí estaré si me necesita\./g, "Aquí estoy pendiente, para lo que necesite. Un besito."],
+  [/^Disculpe,/, "Ay, qué pena con usted, mor,"],
+  [/^Entendido\./, "Hágale pues, de una."],
+  [/un momento/g, "un momentico"],
+  [/un rato/g, "un ratico"],
+  [/\bpoco\b/g, "poquito"],
+  [/^Hasta luego/, "Chao pues, mor, que esté muy bien"],
+];
+/** Ya trae un trato de cariño (no se agrega otro). */
+const TIENE_APODO = /(^|[^\wáéíóú])(amor|mor|corazón|mi vida|mi cielo|bebé)(?![\wáéíóú])/i;
 /** Primeras palabras que se pueden poner en minuscula sin dañar un nombre propio. */
-const INICIO_COMUN = /^(Tiene|Hay|Atención|No|Listo|Le|Todo|Abro|Abriendo|Estas|Estos|Esta|Este|Ya|Puedo|Perfecto|Claro|Con|De|En|La|El|Las|Los|IA)\b/;
-function carinoso(t: string): string {
-  if (/\b(amor|corazón|mi vida)\b/i.test(t)) return t;
-  // Saludo: "Buenas tardes, Chernandez." -> "Buenas tardes, mi amor."
-  const saludo = t.replace(/^(Buenos días|Buenas tardes|Buenas noches)(, [^.]+)?\./, "$1, mi amor.");
-  if (saludo !== t) return saludo;
-  if (t.startsWith("Atención:")) return `Ay, ${apodo()}, atención:${t.slice(9)}`;
-  const m = t.match(INICIO_COMUN);
-  if (m && m[1] !== "IA") {
-    const a = apodo();
-    return `${a.charAt(0).toUpperCase()}${a.slice(1)}, ${t.charAt(0).toLowerCase()}${t.slice(1)}`;
+const INICIO_CUENTO = /^(Tiene|Hay|Todos|Todo|Estas|Estos|Esta|Este|Ya|Su|Analicé|Estado)\b/;
+function carinoso(texto: string): string {
+  let t = texto;
+  for (const [de, a] of MODISMOS) t = t.replace(de, a);
+  if (TIENE_APODO.test(t)) return t;
+  // Saludo segun la hora: "¿Quiubo, mor? Buenos días, ¿cómo amaneció?"
+  const saludo = t.match(/^(Buenos días|Buenas tardes|Buenas noches)(, [^.]+)?\./);
+  if (saludo) {
+    const cola = saludo[1] === "Buenos días" ? "buenos días, ¿cómo amaneció?" : saludo[1] === "Buenas tardes" ? "buenas tardes, ¿cómo le ha ido?" : "buenas noches, ¿cómo le fue hoy?";
+    const quien = saludo[1] === "Buenas noches" ? "bebé" : "mor";
+    return `¿Quiubo, ${quien}? Ay, ${cola}${t.slice(saludo[0].length)}`;
   }
-  // Si no, al final de la primera frase: "¿Qué desea hacer hoy, amor?"
+  // Avisos urgentes
+  if (t.startsWith("Atención:")) return `¡Uy, ${apodo()}, ojo pues! ${mayuscula(t.slice(9).trim())}`;
+  if (/^Tiene (una|\d+) sedes? desconectadas?/.test(t)) return `Ay, ${apodo()}, qué pena con usted, pero ${minuscula(t)}`;
+  // Cuando abre algo: "¡Hágale pues, mor! Le abro Escuintla."
+  if (/^(Abro|Le abro|Le muestro|Vuelvo|Listo)\b/.test(t)) return `${giro(["¡Hágale pues", "¡De una", "¡Claro que sí"])}, ${apodo()}! ${t}`;
+  if (/^No\b/.test(t)) return `Ay, ${apodo()}, ${minuscula(t)}`;
+  if (/^(Todavía|Primero)\b/.test(t)) return `Ay, ${apodo()}, espéreme un momentico: ${minuscula(t)}`;
+  if (INICIO_CUENTO.test(t)) return `${giro(["Le cuento", "Mire", "Vea pues"])}, ${apodo()}: ${minuscula(t)}`;
+  // Si no, al final de la primera frase: "¿Qué telemetría, mi vida?"
   const fin = t.search(/[.!?](?=\s|$)/);
   return fin > 0 ? `${t.slice(0, fin)}, ${apodo()}${t.slice(fin)}` : t;
 }
@@ -179,7 +244,7 @@ const Reconocimiento: ConstructorReconocedor | undefined =
 const IDIOMA = typeof navigator !== "undefined" && navigator.language?.toLowerCase().startsWith("es") ? navigator.language : "es-MX";
 
 const PREFS_KEY = "gravix.prefs";
-const PREFS_INI: Prefs = { voz: true, avisos: true, continua: false, vozNombre: null, ia: true, estilo: "formal" };
+const PREFS_INI: Prefs = { voz: true, avisos: true, continua: false, vozNombre: null, ia: true, estilo: "formal", pais: null, fijo: true, ventanas: true };
 function leerPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -197,6 +262,7 @@ function guardarPrefs(p: Prefs) {
 }
 
 const VISTA_TXT: Record<VistaRed, string> = {
+  sedes3d: "Sedes en 3D",
   mapa: "el mapa en vivo",
   incidentes: "la línea de tiempo de incidentes",
   ranking: "el ranking de sedes",
@@ -204,6 +270,8 @@ const VISTA_TXT: Record<VistaRed, string> = {
   prediccion: "la predicción",
   analitica: "la analítica: métricas por sede, últimas 24 horas y riesgos",
   alarmas: "alarmas y correos",
+  exportar: "la exportación de historial",
+  arquitectura: "la arquitectura de la solución",
 };
 const PESTANA_TXT: Record<PestanaEquipo, string> = {
   equipo: "",
@@ -276,22 +344,56 @@ function puntaje(v: SpeechSynthesisVoice, estilo: Estilo = "formal"): number {
   }
   return s;
 }
-function vozEspanol(nombre: string | null, estilo: Estilo = "formal"): SpeechSynthesisVoice | null {
+/** Voces del pais elegido (todas si no hay pais o el navegador no tiene ninguna de ese pais). */
+function vocesDePais(voces: SpeechSynthesisVoice[], pais: string | null): SpeechSynthesisVoice[] {
+  if (!pais) return voces;
+  const delPais = voces.filter((v) => v.lang.toLowerCase() === pais.toLowerCase());
+  return delPais.length ? delPais : voces;
+}
+function vozEspanol(nombre: string | null, estilo: Estilo = "formal", pais: string | null = null): SpeechSynthesisVoice | null {
   const voces = vocesEspanol();
   if (nombre) {
     const v = voces.find((x) => x.name === nombre);
     if (v) return v;
   }
-  return [...voces].sort((a, b) => puntaje(b, estilo) - puntaje(a, estilo))[0] ?? null;
+  // Primero voces naturales (neuronales) del pais elegido; en cariñosa, de mujer.
+  const valor = (v: SpeechSynthesisVoice) => puntaje(v, estilo) + (esNatural(v) ? 1000 : 0);
+  return [...vocesDePais(voces, pais)].sort((a, b) => valor(b) - valor(a))[0] ?? null;
 }
 const FRASE_PRUEBA: Record<Estilo, string> = {
   formal: "Buenos días. Soy Gravix, asistente del Centro de mando.",
-  carinosa: "Hola, mi amor. Soy Gravix. Tiene una sede desconectada, ¿quiere que se la muestre?",
+  carinosa: "¿Quiubo, mor? ¿Qué más pues? Soy Gravix. Ay, qué pena con usted, pero tiene una sede desconectada. ¿Quiere que se la muestre?",
 };
 
 export default function Gravix(props: Props) {
   const p = useRef(props);
-  p.current = props;
+  /** Pantallas por las que se paso (para "deshacer"). */
+  const lugares = useRef<{ pestana: Pestana; sede: string | null; vista: VistaRed }[]>([]);
+  const [nLugares, setNLugares] = useState(0);
+  const recordarLugar = () => {
+    const l = { pestana: props.pestanaActual, sede: props.sedeActual, vista: props.vistaActual };
+    const u = lugares.current[lugares.current.length - 1];
+    if (u && u.pestana === l.pestana && u.sede === l.sede && u.vista === l.vista) return;
+    lugares.current = [...lugares.current.slice(-9), l];
+    setNLugares(lugares.current.length);
+  };
+  p.current = {
+    ...props,
+    ejecutar: (a) => {
+      if (a.tipo !== "cerrar") recordarLugar();
+      props.ejecutar(a);
+    },
+    irPestana: (x) => {
+      recordarLugar();
+      props.irPestana(x);
+    },
+  };
+  const acceso = useAccess();
+  const setPreExportar = useGravixBus((s) => s.setPreExportar);
+  const [informe, setInforme] = useState<Informe | null>(null);
+  const cerrarInforme = useCallback(() => setInforme(null), []);
+  const [pasos, setPasos] = useState<string[] | null>(null);
+  const [verAjustes, setVerAjustes] = useState(false);
 
   const [abierto, setAbierto] = useState(false);
   const [mensajes, setMensajes] = useState<Mensaje[]>([]);
@@ -346,7 +448,11 @@ export default function Gravix(props: Props) {
     speechSynthesis.addEventListener?.("voiceschanged", cargar);
     return () => speechSynthesis.removeEventListener?.("voiceschanged", cargar);
   }, []);
-  const vozActual = vozEspanol(prefs.vozNombre, prefs.estilo);
+  const vozActual = vozEspanol(prefs.vozNombre, prefs.estilo, prefs.pais);
+  /** Paises para elegir: Colombia siempre, y los que tenga el navegador. */
+  const paisesVoz = [...new Set(["es-co", ...voces.map((v) => v.lang.toLowerCase())])];
+  const sinVozDelPais = !!prefs.pais && !voces.some((v) => v.lang.toLowerCase() === prefs.pais!.toLowerCase());
+  const naturalDelPais = !!prefs.pais && voces.some((v) => v.lang.toLowerCase() === prefs.pais!.toLowerCase() && esNatural(v));
   /** Aplica el estilo elegido al texto (lo que se escribe y lo que se dice es lo mismo). */
   const tono = (t: string) => (prefsRef.current.estilo === "carinosa" ? carinoso(t) : t);
 
@@ -363,14 +469,15 @@ export default function Gravix(props: Props) {
       const u = new SpeechSynthesisUtterance(t.replace(/[«»]/g, ""));
       u.lang = "es-MX";
       const carino = prefsRef.current.estilo === "carinosa";
-      const v = vozEspanol(prefsRef.current.vozNombre, prefsRef.current.estilo);
+      const v = vozEspanol(prefsRef.current.vozNombre, prefsRef.current.estilo, prefsRef.current.pais);
       if (v) {
         u.voice = v;
         u.lang = v.lang;
-      } else if (carino) u.lang = "es-CO";
-      // Formal: pausado y con altura normal. Cariñosa: un poco mas aguda y suave.
-      u.rate = carino ? 0.97 : 0.95;
-      u.pitch = carino ? 1.12 : 1.05;
+      } else if (prefsRef.current.pais) u.lang = prefsRef.current.pais;
+      else if (carino) u.lang = "es-CO";
+      // Formal: pausado y con altura normal. Cariñosa: mas lenta y suave, sin subir el tono.
+      u.rate = carino ? 0.9 : 0.95;
+      u.pitch = carino ? 1.0 : 1.05;
       u.onstart = () => setHablando(true);
       u.onend = () => setHablando(false);
       u.onerror = () => setHablando(false);
@@ -410,15 +517,30 @@ export default function Gravix(props: Props) {
   const minimizar = useRef(false);
   const abiertoRef = useRef(abierto);
   abiertoRef.current = abierto;
+  /** Panel fijo y visible: no se minimiza al abrir pantallas. */
+  const anclado = () => prefsRef.current.fijo && abiertoRef.current && window.matchMedia("(min-width: 1440px)").matches;
+  useEffect(() => {
+    document.body.classList.toggle("gravix-fijo", abierto && prefs.fijo);
+    return () => document.body.classList.remove("gravix-fijo");
+  }, [abierto, prefs.fijo]);
+  /** La ventana de la pregunta ya se abrio: la respuesta no vuelve a ofrecer abrirla. */
+  const yaAbrio = useRef(false);
 
   const decir = (texto0: string, boton?: Mensaje["boton"], atajos?: string[], tarjetas?: HallazgoRiesgo[], fuente?: string) => {
+    if (yaAbrio.current) {
+      yaAbrio.current = false;
+      const limpio = texto0.replace(/\s*¿(?:Abro|Las abro|Quiere ver)[^?]*\?\s*$/, "");
+      if (limpio !== texto0) boton = undefined;
+      texto0 = limpio;
+    }
     const t = tono(texto0);
     agregar("gravix", t, boton, tarjetas, fuente);
     pendienteRef.current = boton?.accion ?? null;
     if (atajos) setSugerencias(atajos);
     hablar(t);
     // Si abrio una pantalla, o si el panel esta cerrado, la respuesta se ve en un globo junto al orbe.
-    if (minimizar.current || !abiertoRef.current) {
+    if (anclado()) minimizar.current = false;
+    else if (minimizar.current || !abiertoRef.current) {
       minimizar.current = false;
       setAbierto(false);
       setGlobo({ texto: t, aviso: true });
@@ -762,6 +884,7 @@ export default function Gravix(props: Props) {
         ejecutar(a);
         return decir(`Abro el centro de alertas${a.sedeId ? ` de ${nombreSede(a.sedeId)}` : ""}.`);
       case "vista":
+        if (a.vista !== "alarmas" && VISTAS_ADMIN.has(a.vista) && !esAdmin) return decir("Esa pantalla solo está disponible para administradores.", undefined, MENU);
         if (a.vista === "alarmas" && !esAdmin) return decir("Alarmas y correos solo está disponible para administradores. Puedo abrirle el centro de alertas.", { label: "Abrir alertas", accion: { tipo: "alertas", sedeId: null } });
         ejecutar(a);
         return decir(`Le muestro ${VISTA_TXT[a.vista]}.`);
@@ -807,6 +930,84 @@ export default function Gravix(props: Props) {
     }
   };
 
+  /* ---------- ingeniero de turno: abre la ventana y responde con datos calculados ---------- */
+  const deshacer = () => {
+    const l = lugares.current.pop();
+    setNLugares(lugares.current.length);
+    setInforme(null);
+    if (!l) return decir("No hay una pantalla anterior.", undefined, MENU);
+    if (l.pestana !== "centro") props.irPestana(l.pestana);
+    else {
+      if (props.pestanaActual === "centro") props.ejecutar({ tipo: "cerrar" });
+      props.ejecutar(l.sede ? { tipo: "sede", sedeId: l.sede, estado: false } : l.vista === "mapa" ? { tipo: "inicio" } : { tipo: "vista", vista: l.vista });
+    }
+    decir("Regreso a la pantalla anterior.", undefined, MENU);
+  };
+  /** Numero de consulta: si llega otra, la anterior ya no abre ventanas ni responde. */
+  const turno = useRef(0);
+  const analizar = async (q: Consulta) => {
+    const mio = ++turno.current;
+    const vigente = () => turno.current === mio;
+    if (q.tipo === "deshacer") {
+      setPasos(null);
+      return deshacer();
+    }
+    pendienteRef.current = null;
+    if (q.tipo === "diagnostico") conv.current = { sedeId: q.sedeId, grupoId: null, esperando: null };
+    else if ("equipo" in q && q.equipo) conv.current = { sedeId: q.equipo.sedeId, grupoId: null, esperando: null };
+    setInforme(null);
+    setPasos(["Entendiendo la consulta"]);
+    let abrio = false;
+    try {
+      const { vista, equipos, alarmas, esAdmin } = p.current;
+      const r = await resolver(q, {
+        vista,
+        equipos,
+        alarmas,
+        esAdmin: esAdmin || acceso.data?.role === "admin",
+        puedeExcel: !!acceso.data?.actions.includes("excel"),
+        analitica: analiticaRef.current,
+        get: async (url, params) => (await apiClient.get(url, { params, timeout: 30_000 })).data,
+        potencia,
+        abrir: (a) => {
+          if (!vigente() || !prefsRef.current.ventanas && q.tipo !== "exportar" && q.tipo !== "arquitectura") return false;
+          if (a.tipo === "pestana") {
+            if (!p.current.pestanas.includes(a.pestana)) return false;
+            if (p.current.pestanaActual !== a.pestana) p.current.irPestana(a.pestana);
+          } else p.current.ejecutar(a);
+          abrio = true;
+          return true;
+        },
+        prepararExportacion: (x) => vigente() && setPreExportar(x),
+        mostrarInforme: (i) => {
+          if (!vigente()) return;
+          setInforme(i);
+          abrio = true;
+        },
+        paso: (t) => vigente() && setPasos((x) => [...(x ?? []), t]),
+      });
+      if (!vigente()) return;
+      if (abrio) minimizar.current = true;
+      setMensajes((m) => [...m.slice(-40), { id: ++idRef.current, de: "gravix", texto: r.titulo, analisis: r }]);
+      setSugerencias(r.sigue.length ? r.sigue : MENU);
+      // Por voz: la conclusion, la causa y que revisar; el resto queda escrito.
+      hablar([r.titulo, ...r.puntos.filter((x) => /^(Causa|Revisar|Atender|Máximo|Periodo|Por qué)/.test(x.k)).map((x) => `${x.k.replace(/\s*\(.*\)/, "")}: ${x.v}`)].join(" "));
+      if (anclado()) minimizar.current = false;
+      else if (minimizar.current || !abiertoRef.current) {
+        minimizar.current = false;
+        setAbierto(false);
+        setGlobo({ texto: r.titulo, aviso: true });
+      }
+    } catch (e) {
+      if (!vigente()) return;
+      const status = (e as { response?: { status?: number } }).response?.status;
+      minimizar.current = false;
+      decir(status === 403 ? "Su perfil no tiene permiso para consultar esos datos." : "No pude completar el análisis: la plataforma no entregó esos datos en este momento. Intente de nuevo o pídame «menú».", undefined, MENU);
+    } finally {
+      if (vigente()) setPasos(null);
+    }
+  };
+
   /** Procesa una frase (hablada o escrita). */
   const procesar = (frase: string) => {
     const limpia = frase.trim();
@@ -847,6 +1048,22 @@ export default function Gravix(props: Props) {
         accion = { ...accion, sedeId: c.sedeId, ...(c.grupoId ? { grupoId: c.grupoId } : {}) } as Accion;
       } else if (accion.tipo === "resumen" && c.sedeId) accion = { tipo: "sede", sedeId: c.sedeId, estado: true };
       else if (accion.tipo === "resumen" && c.grupoId) accion = { tipo: "grupo", grupoId: c.grupoId };
+    }
+    // Ingeniero de turno: si reconoce la consulta, responde con datos calculados y abre su ventana.
+    const consulta = interpretarIngeniero(orden, { sedes: vista.sedes.map((s) => ({ id: s.id, nombre: s.nombre })), equipos: [...equipos.values()].flat(), sedeActual, sedeConversada: c.sedeId });
+    if (consulta && (p.current.conDatos || consulta.tipo === "control" || consulta.tipo === "deshacer")) {
+      void analizar(consulta);
+      return;
+    }
+    turno.current++;
+    setPasos(null);
+    // Preguntas de siempre: se muestra ademas la ventana que corresponde.
+    const ventana = prefsRef.current.ventanas && p.current.conDatos ? ventanaDe(accion) : null;
+    yaAbrio.current = false;
+    if (ventana) {
+      p.current.ejecutar(ventana);
+      minimizar.current = true;
+      yaAbrio.current = true;
     }
     // Con Gravix IA activa, TODAS las preguntas las responde la IA; aqui solo se resuelven las ordenes
     // (abrir pantallas, sedes, equipos, pestañas, cortesias). Si la IA falla, responde el analisis propio.
@@ -1071,6 +1288,36 @@ export default function Gravix(props: Props) {
     iniciar(false);
   };
 
+  /*
+   * Ordenes desde otras partes de la web (tarjeta de Gravix del Centro de mando, buscador de la barra):
+   *  - "gravix:orden"    { texto }  abre el panel y procesa la frase como si se hubiera dicho.
+   *  - "gravix:escuchar"            abre el panel y enciende el microfono.
+   */
+  const escucharRef = useRef(pulsarMic);
+  escucharRef.current = pulsarMic;
+  useEffect(() => {
+    const orden = (e: Event) => {
+      const texto = (e as CustomEvent<{ texto?: string }>).detail?.texto?.trim();
+      if (!texto) return;
+      abiertoRef.current = true;
+      setAbierto(true);
+      setGlobo(null);
+      procesarRef.current(texto);
+    };
+    const escuchar = () => {
+      abiertoRef.current = true;
+      setAbierto(true);
+      setGlobo(null);
+      escucharRef.current();
+    };
+    window.addEventListener("gravix:orden", orden);
+    window.addEventListener("gravix:escuchar", escuchar);
+    return () => {
+      window.removeEventListener("gravix:orden", orden);
+      window.removeEventListener("gravix:escuchar", escuchar);
+    };
+  }, []);
+
   useEffect(() => {
     if (prefs.continua) iniciar(true);
     else if (recRef.current?.continuous) detener();
@@ -1214,7 +1461,7 @@ export default function Gravix(props: Props) {
       )}
 
       {abierto && (
-        <section aria-label="Asistente Gravix" className="gx-panel">
+        <section aria-label="Asistente Gravix" className={`gx-panel ${prefs.fijo ? "fijo" : ""}`}>
           <header className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
             <span className={`gx-orbe gx-orbe-mini ${estadoOrbe}`} aria-hidden="true" />
             <div className="min-w-0 flex-1">
@@ -1223,7 +1470,7 @@ export default function Gravix(props: Props) {
                 {iaDisponible && prefs.ia && <span title="Inteligencia artificial conectada: responde las preguntas" className="rounded bg-emerald-900 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wider text-emerald-200">{iaNombre} · conectada</span>}
               </strong>
               <span className="text-[11px] text-slate-400">
-                {pensando && "Consultando los datos… "}
+                {(pensando || pasos) && "Consultando los datos… "}
                 {escuchando
                   ? prefs.continua
                     ? "Escucha continua · diga «Gravix…»"
@@ -1232,19 +1479,25 @@ export default function Gravix(props: Props) {
                     ? "Hablando…"
                     : analitica.data
                       ? `Analizando ${analitica.data.equiposAnalizados} equipos · ${analitica.data.resumen.alto} riesgos altos`
-                      : "Su asistente de Nodivo-SIASA"}
+                      : "Asistente de operación"}
               </span>
             </div>
             {hablando && (
               <button type="button" onClick={callar} className="rounded-md px-2 py-1 text-xs text-slate-300 hover:bg-slate-800" title="Dejar de hablar">Silencio</button>
             )}
+            <span role="status" className={`shrink-0 rounded-full px-2 py-1 text-[10.5px] font-bold ${escuchando ? "bg-rose-950 text-rose-200" : pasos || pensando ? "bg-violet-950 text-violet-200" : hablando ? "bg-sky-950 text-sky-200" : "bg-emerald-950 text-emerald-300"}`}>
+              {escuchando ? "Escuchando" : pasos || pensando ? "Analizando" : hablando ? "Respondiendo" : "En línea"}
+            </span>
+            <button type="button" onClick={() => setVerAjustes((x) => !x)} aria-expanded={verAjustes} aria-label="Ajustes de Gravix" title="Ajustes de voz y panel" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-300 hover:bg-slate-800">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></svg>
+            </button>
             <button type="button" onClick={() => setAbierto(false)} aria-label="Cerrar Gravix" className="grid h-8 w-8 place-items-center rounded-lg text-slate-300 hover:bg-slate-800">✕</button>
           </header>
 
           <div ref={listaRef} className="flex flex-1 flex-col gap-2 overflow-y-auto px-4 py-3" aria-live="polite">
             {mensajes.map((m) => (
               <div key={m.id} className={m.de === "yo" ? "gx-msg gx-yo" : "gx-msg gx-el"}>
-                <p>{m.texto}</p>
+                {m.analisis ? <RespuestaAnalisis a={m.analisis} onFrase={(f) => { callar(); procesar(f); }} /> : <p>{m.texto}</p>}
                 {m.fuente && <span className="mt-1 inline-block rounded bg-sky-950 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">Respondió: {m.fuente}</span>}
                 {m.tarjetas?.map((h, i) => (
                   <TarjetaRiesgo
@@ -1263,11 +1516,15 @@ export default function Gravix(props: Props) {
               </div>
             ))}
             {parcial && <div className="gx-msg gx-yo opacity-60"><p>{parcial}…</p></div>}
+            {pasos && <PasosAnalisis pasos={pasos} />}
             {pensando && <div className="gx-msg gx-el"><p className="gx-pensando">Consultando con la IA<span>.</span><span>.</span><span>.</span></p></div>}
           </div>
 
           {/* Atajos en una sola fila desplazable: la conversacion conserva el espacio. */}
-          <div className="gx-atajos flex gap-1.5 overflow-x-auto px-4 pb-2 pt-1">
+          <div className="gx-atajos flex shrink-0 gap-1.5 overflow-x-auto px-4 pb-2 pt-1">
+            {nLugares > 0 && (
+              <button type="button" onClick={() => { callar(); procesar("Deshacer"); }} className="shrink-0 whitespace-nowrap rounded-full border border-sky-700 bg-sky-950/60 px-2.5 py-1 text-[11.5px] font-semibold text-sky-200 hover:bg-sky-900">Pantalla anterior</button>
+            )}
             {sugerencias.map((s) => (
               <button key={s} type="button" onClick={() => { callar(); procesar(s); }} className="shrink-0 whitespace-nowrap rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11.5px] text-slate-300 hover:border-sky-600 hover:text-white">{s}</button>
             ))}
@@ -1309,7 +1566,10 @@ export default function Gravix(props: Props) {
             <button type="submit" className="min-h-[44px] rounded-xl bg-sky-600 px-3 text-sm font-bold text-white hover:bg-sky-500">Ir</button>
           </form>
 
-          <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-800 px-4 py-2 text-[11.5px] text-slate-400">
+          <p className="m-0 px-4 pb-2 text-[11px] text-slate-400">Gravix consulta y prepara. No controla equipos ni cambia configuración.</p>
+          {verAjustes && <div className="flex max-h-[45%] shrink-0 flex-wrap gap-x-4 gap-y-1 overflow-y-auto border-t border-slate-800 px-4 py-2 text-[11.5px] text-slate-400">
+            <label className="flex items-center gap-1.5" title="Muestra la pantalla que corresponde a cada pregunta"><input type="checkbox" checked={prefs.ventanas} onChange={(e) => setPrefs({ ventanas: e.target.checked })} /> Abrir ventanas</label>
+            <label className="flex items-center gap-1.5" title="En pantallas anchas el panel queda a la derecha sin tapar la página"><input type="checkbox" checked={prefs.fijo} onChange={(e) => setPrefs({ fijo: e.target.checked })} /> Panel fijo</label>
             <label className="flex items-center gap-1.5"><input type="checkbox" checked={prefs.voz} onChange={(e) => { setPrefs({ voz: e.target.checked }); if (!e.target.checked) callar(); }} /> Voz de Gravix</label>
             <label className="flex items-center gap-1.5"><input type="checkbox" checked={prefs.avisos} onChange={(e) => setPrefs({ avisos: e.target.checked })} /> Avisos con sonido</label>
             <label className="flex items-center gap-1.5" title="Escucha siempre y responde cuando la frase empieza con «Gravix»">
@@ -1336,8 +1596,10 @@ export default function Gravix(props: Props) {
                 onChange={(e) => {
                   const estilo = e.target.value as Estilo;
                   // Al cambiar de estilo se vuelve a la voz recomendada (en cariñosa: mujer colombiana).
-                  setPrefs({ estilo, vozNombre: null });
-                  prefsRef.current = { ...prefsRef.current, estilo, vozNombre: null };
+                  // En cariñosa se propone Colombia como pais de la voz (se puede cambiar abajo).
+                  const pais = estilo === "carinosa" ? "es-co" : prefsRef.current.pais;
+                  setPrefs({ estilo, vozNombre: null, pais });
+                  prefsRef.current = { ...prefsRef.current, estilo, vozNombre: null, pais };
                   hablar(FRASE_PRUEBA[estilo], true);
                 }}
                 className="min-h-[30px] min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 text-[11.5px] text-slate-200"
@@ -1346,9 +1608,37 @@ export default function Gravix(props: Props) {
                 <option value="carinosa">Cariñosa · voz colombiana</option>
               </select>
             </div>
-            {prefs.estilo === "carinosa" && vozActual && vozActual.lang.toLowerCase() !== "es-co" && (
-              <p className="w-full text-[11px] text-amber-300">
-                Este navegador no tiene voz colombiana; usa {vozActual.name.replace(/^Microsoft\s+/, "").replace(/\s*-\s*Spanish.*$/i, "")}. Abra Nodivo en Microsoft Edge para escuchar a «Salome» (Colombia).
+            <div className="flex w-full items-center gap-2 pt-1">
+              <label htmlFor="gx-pais" className="shrink-0">País de la voz</label>
+              <select
+                id="gx-pais"
+                value={prefs.pais ?? ""}
+                onChange={(e) => {
+                  const pais = e.target.value || null;
+                  setPrefs({ pais, vozNombre: null });
+                  prefsRef.current = { ...prefsRef.current, pais, vozNombre: null };
+                  hablar(FRASE_PRUEBA[prefsRef.current.estilo], true);
+                }}
+                className="min-h-[30px] min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 text-[11.5px] text-slate-200"
+              >
+                <option value="">Automático</option>
+                {paisesVoz.map((l) => {
+                  const hay = voces.filter((v) => v.lang.toLowerCase() === l);
+                  const nota = !hay.length ? " (no está en este navegador)" : hay.some(esNatural) ? " · natural" : "";
+                  return (
+                    <option key={l} value={l}>
+                      {nombrePais(l)}{nota}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            {prefs.pais && (sinVozDelPais || !naturalDelPais) && (
+              <p className="w-full text-[11px] leading-snug text-amber-300">
+                {sinVozDelPais ? `Este navegador no trae voz de ${nombrePais(prefs.pais)}.` : `Las voces de ${nombrePais(prefs.pais)} de este navegador no son naturales (suenan a robot).`}{" "}
+                {prefs.pais.toLowerCase() === "es-co"
+                  ? "La voz natural de Colombia es «Salome»: abra Nodivo en Microsoft Edge (esta computadora necesita internet; es gratis y no requiere licencia)."
+                  : "Las voces naturales vienen en Microsoft Edge."}
               </p>
             )}
             {voces.length > 0 && (
@@ -1364,16 +1654,21 @@ export default function Gravix(props: Props) {
                   }}
                   className="min-h-[30px] min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2 text-[11.5px] text-slate-200"
                 >
-                  {[...voces].sort((x, y) => puntaje(y, prefs.estilo) - puntaje(x, prefs.estilo)).map((v) => (
-                    <option key={v.name} value={v.name}>{v.name.replace(/^Microsoft\s+/, "").replace(/\s*-\s*Spanish.*$/i, "")} · {v.lang}</option>
-                  ))}
+                  {[...vocesDePais(voces, prefs.pais)]
+                    .sort((x, y) => puntaje(y, prefs.estilo) + (esNatural(y) ? 1000 : 0) - puntaje(x, prefs.estilo) - (esNatural(x) ? 1000 : 0))
+                    .map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {nombreVoz(v)} · {nombrePais(v.lang)}{esNatural(v) ? " · natural" : " · robótica"}
+                      </option>
+                    ))}
                 </select>
                 <button type="button" onClick={() => hablar(FRASE_PRUEBA[prefs.estilo], true)} className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800">Probar</button>
               </div>
             )}
-          </div>
+          </div>}
         </section>
       )}
+      {informe && <InformeTurno informe={informe} onCerrar={cerrarInforme} onEscuchar={() => hablar(`Informe del turno. ${informe.resumen.map((r) => `${r.k}: ${r.v.replace("/", " de ")}`).join(". ")}. ${informe.secciones.slice(0, 3).map((s) => `${s.titulo}: ${s.filas.slice(0, 4).join(" ")}`).join(" ")}`, true)} />}
 
       <button type="button" onClick={abrirPanel} aria-label={abierto ? "Ocultar Gravix" : "Abrir Gravix, asistente del Centro de mando"} title="Gravix · asistente de voz" className={`gx-orbe ${estadoOrbe} ${props.alarmas.some((a) => a.severidad === "critico") ? "alerta" : ""}`}>
         <span className="gx-letra">G</span>

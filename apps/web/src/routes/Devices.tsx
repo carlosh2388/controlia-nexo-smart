@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   useDeleteDevice,
@@ -338,6 +338,20 @@ export default function Devices() {
   const [showHiddenPanel, setShowHiddenPanel] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<DeviceKindId>>(new Set());
   const [viewSel, setView] = useState<View | null>(null);
+  // Buscador de la barra superior (lo resuelve Gravix); Ctrl+K lo enfoca.
+  const [busquedaGlobal, setBusquedaGlobal] = useState("");
+  const busquedaRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (MODO_SEDE) return;
+    const atajo = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        busquedaRef.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", atajo);
+    return () => document.removeEventListener("keydown", atajo);
+  }, []);
   const { toasts, push } = useToasts();
   // Menu por perfil: pestañas que el perfil puede ver y la pantalla con la que abre (Centro de mando).
   const access = useAccess();
@@ -490,10 +504,14 @@ export default function Devices() {
 
   return (
     <div className="min-h-screen bg-slate-950">
-      <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-3">
+      <header className="sticky top-0 z-10 border-b border-[#16223a] bg-[#060a13]/85 backdrop-blur">
+        <div
+          className={`mx-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-3 ${
+            view === "building" || view === "gravix" || view === "centro" ? "max-w-[1920px]" : view === "sedes" || view === "usuarios" || view === "equipos" ? "max-w-[1360px]" : "max-w-6xl"
+          }`}
+        >
           <div className="flex min-w-0 items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-400 to-blue-600 text-white">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-blue-500 to-cyan-400 text-white shadow-[0_0_18px_rgba(56,189,248,.45)]">
               <ChipLogo className="h-5 w-5" />
             </div>
             <div className="min-w-0 leading-tight">
@@ -502,7 +520,33 @@ export default function Devices() {
             </div>
           </div>
 
-          <div className="hidden items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1.5 text-sm text-slate-300 md:flex">
+          {/* Buscador: la frase la resuelve Gravix (abre la sede, el equipo o la pestaña pedida). Ctrl+K enfoca. */}
+          {!MODO_SEDE && <form
+            role="search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const texto = busquedaGlobal.trim();
+              if (!texto) return;
+              window.dispatchEvent(new CustomEvent("gravix:orden", { detail: { texto } }));
+              setBusquedaGlobal("");
+            }}
+            className="order-last flex min-h-[40px] w-full items-center gap-2 rounded-[10px] border border-[#1f2d47] bg-[#0b1220] px-3 text-slate-400 focus-within:border-sky-500 md:order-none md:w-auto md:max-w-[420px] md:flex-1"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+            <label htmlFor="busqueda-global" className="sr-only">Buscar sede, equipo o pantalla</label>
+            <input
+              id="busqueda-global"
+              ref={busquedaRef}
+              type="search"
+              value={busquedaGlobal}
+              onChange={(e) => setBusquedaGlobal(e.target.value)}
+              placeholder="Buscar sede, equipo o inventario…"
+              className="min-w-0 flex-1 border-0 bg-transparent text-[13px] text-slate-100 outline-none placeholder:text-slate-500"
+            />
+            <kbd className="mono hidden rounded border border-[#1f2d47] px-1.5 text-[10px] text-slate-400 sm:inline">Ctrl K</kbd>
+          </form>}
+
+          <div className="hidden items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1.5 text-sm text-slate-300 xl:flex">
             <BuildingIcon className="h-4 w-4 text-sky-400" />
             <span className="font-medium text-slate-100">{BUILDING_CONTEXT.building}</span>
             <span className="text-slate-600">&middot;</span>
@@ -513,12 +557,18 @@ export default function Devices() {
             <div className="hidden sm:block">
               <LiveClock />
             </div>
-            <span className="hidden text-sm text-slate-400 lg:inline">
-              {user?.username} &middot; <span className="text-slate-500">{ROLE_LABEL[access.data?.role ?? user?.role ?? ""] ?? user?.role}</span>
+            <span className="hidden items-center gap-2 lg:flex">
+              <span className="grid h-8 w-8 place-items-center rounded-full bg-[#1e3a5f] text-[12px] font-bold text-slate-100" aria-hidden="true">
+                {(user?.username ?? "?").slice(0, 2).toUpperCase()}
+              </span>
+              <span className="flex flex-col leading-tight">
+                <b className="text-[13px] text-slate-100">{user?.username}</b>
+                <span className="text-[11px] text-slate-400">{ROLE_LABEL[access.data?.role ?? user?.role ?? ""] ?? user?.role}</span>
+              </span>
             </span>
             <button
               onClick={handleLogout}
-              className="flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-[#1f2d47] bg-[#0b1220] px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
             >
               <LogoutIcon className="h-3.5 w-3.5" />
               Salir

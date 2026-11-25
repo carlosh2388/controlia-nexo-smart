@@ -102,6 +102,47 @@
   backdrop-filter: blur(8px);
 }
 
+/* Panel fijo a la derecha (pantallas anchas): la pagina se corre y nada queda tapado. */
+.gx-gira {
+  animation: gx-gira 1s linear infinite;
+}
+@keyframes gx-gira {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (min-width: 1440px) {
+  .gx-panel.fijo {
+    position: fixed;
+    right: 16px;
+    top: 92px;
+    bottom: 16px;
+    width: 376px;
+    height: auto;
+  }
+  .gx-panel.fijo ~ .gx-orbe {
+    display: none;
+  }
+  body.gravix-fijo main {
+    margin-right: 400px;
+  }
+  body.gravix-fijo .cm-modal {
+    right: 400px;
+  }
+  body.gravix-fijo .cm .panel.fixed {
+    right: 412px;
+  }
+  /* La sala de control es a pantalla completa: ahi no se muestra el panel. */
+  body:has(.cm.fixed.inset-0) .gx-panel.fijo {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gx-gira {
+    animation: none;
+  }
+}
+
 .gx-msg {
   max-width: 88%;
   border-radius: 14px;

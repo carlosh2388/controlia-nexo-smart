@@ -6,7 +6,7 @@ import { Roles } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import type { AuthenticatedUser } from "../auth/auth.types";
 import { RedService } from "./red.service";
-import { AlarmasDto, GrupoDto, ProbarGravixDto, SedeDto } from "./dto/red.dto";
+import { AlarmasDto, GrupoDto, PlanoPuntoDto, ProbarGravixDto, SedeDto } from "./dto/red.dto";
 
 const HUMANS = [Role.admin, Role.operator, Role.viewer];
 
@@ -95,6 +95,21 @@ export class RedController {
   @Post("gravix/probar")
   probarGravix(@Body() dto: ProbarGravixDto) {
     return this.red.probarGravix(dto);
+  }
+
+  /** Vista 3D: lugar de cada equipo en el plano y norte real. Lo edita un administrador. */
+  @Version("1")
+  @Roles(...HUMANS)
+  @Get("sedes/:id/plano")
+  plano(@Param("id") id: string) {
+    return this.red.plano(id);
+  }
+
+  @Version("1")
+  @Roles(Role.admin)
+  @Put("sedes/:id/plano")
+  guardarPunto(@Param("id") id: string, @Body() dto: PlanoPuntoDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.red.guardarPunto(id, dto, user.username);
   }
 
   /** Respuesta de la sede en el formato v1 de Telemetria 1 (devices con su ficha y metricas). */

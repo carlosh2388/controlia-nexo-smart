@@ -19,6 +19,41 @@
 .cm .campana-ambar { animation: cm-anillo-ambar 2.4s ease-out infinite; }
 .cm .campana-roja { animation: cm-anillo-rojo 1.8s ease-out infinite; }
 
+/* mar del mapa: olas que avanzan y suben/bajan; un brillo recorre la costa */
+@keyframes cm-ola { to { stroke-dashoffset: -96; } }
+@keyframes cm-marea { from { transform: translateY(-1.5px); } to { transform: translateY(2.5px); } }
+@keyframes cm-brillo { from { stroke-dashoffset: 1400; } to { stroke-dashoffset: 0; } }
+@keyframes cm-mar-texto { 0%, 100% { opacity: .55; } 50% { opacity: .95; } }
+.cm .ola { stroke-dasharray: 26 10 6 6; animation-name: cm-ola, cm-marea; animation-timing-function: linear, ease-in-out; animation-iteration-count: infinite; animation-direction: normal, alternate; }
+.cm .brillo-costa { stroke-dasharray: 70 1330; opacity: .85; animation: cm-brillo 9s linear infinite; }
+.cm .mar-texto { animation: cm-mar-texto 5s ease-in-out infinite; }
+/* paquetes de datos sobre las rutas, tarjetas de resumen y linea de tiempo */
+/* diagrama unifilar de Gravix: flujo de datos por los cables, barras con corriente, sede que late */
+@keyframes uni-flujo { to { stroke-dashoffset: -32; } }
+@keyframes uni-barra { to { stroke-dashoffset: -40; } }
+@keyframes uni-latido { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+.cm .uni-flujo { stroke-dasharray: 10 6 2 14; animation: uni-flujo 1.2s linear infinite; }
+.cm .uni-barra { stroke-dasharray: 22 18; animation: uni-barra 2.4s linear infinite; opacity: .8; }
+.cm .uni-latido { animation: uni-latido 1.6s ease-in-out infinite; }
+.cm .uni-nodo:hover rect:first-child { fill: #12223f; }
+.cm .uni-nodo:focus { outline: none; }
+.cm .uni-nodo:focus-visible rect:first-child { stroke: #fff; stroke-width: 2.5; }
+@media (prefers-reduced-motion: reduce) { .cm .uni-flujo, .cm .uni-barra, .cm .uni-latido { animation: none; } }
+@keyframes cm-paquete { from { stroke-dashoffset: 560; } to { stroke-dashoffset: 0; } }
+@keyframes cm-anillo-dibujo { from { stroke-dashoffset: var(--total); } }
+@keyframes cm-barra-voz { 0%, 100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
+.cm .voz-gravix span { display: block; width: 3px; height: 20px; border-radius: 2px; background: #38bdf8; transform-origin: bottom; animation: cm-barra-voz 1s ease-in-out infinite; }
+.cm .paquete { stroke-dasharray: 6 554; animation: cm-paquete 3s linear infinite; }
+.cm .anillo-dibujo { animation: cm-anillo-dibujo 1.6s ease-out; }
+.cm .kpi { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; animation: cm-entrar .5s ease-out both; }
+.cm .kpi-titulo { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.cm .kpi-valor { font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace; font-size: 28px; font-weight: 700; line-height: 1; }
+.cm .tab-activa { background: linear-gradient(135deg, #2563eb, #0ea5e9); color: #fff; box-shadow: 0 4px 18px rgba(14, 165, 233, .35); }
+.cm .linea-tiempo { border-left: 2px solid #1a2742; margin-left: 6px; padding-left: 14px; }
+.cm .linea-tiempo .hito { position: relative; }
+.cm .linea-tiempo .hito-punto { position: absolute; left: -21px; top: 13px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--panel); }
+@media (prefers-reduced-motion: reduce) { .cm .ola, .cm .brillo-costa, .cm .mar-texto, .cm .paquete, .cm .onda, .cm .anillo-dibujo, .cm .kpi, .cm .voz-gravix span { animation: none; } .cm .brillo-costa, .cm .paquete { opacity: 0; } }
+
 .cm .mapa { position: relative; width: 100%; aspect-ratio: 640 / 420; border-radius: 12px; overflow: hidden; border: 1px solid #1a2742; }
 .cm .nodo { position: absolute; width: 0; height: 0; padding: 0; border: 0; background: none; cursor: pointer; }
 .cm .nodo:focus-visible .punto { outline: 2px solid #8ab8ff; outline-offset: 3px; }
@@ -54,3 +89,34 @@
 @media (prefers-reduced-motion: reduce) {
   .cm *, .cm-modal * { animation: none !important; transition: none !important; }
 }
+
+/* mapa ampliado: ocupa todo el recuadro (en pantallas horizontales) */
+.cm .mar-rotulo { display: none; }
+@media (min-aspect-ratio: 1/1) {
+  .cm .mapa.mapa-lleno { width: 100% !important; aspect-ratio: auto; flex: 1 1 0; min-height: 0; }
+  .cm .mapa-lleno .mar-svg { display: none; }
+  .cm .mapa-lleno .mar-rotulo { display: block; position: absolute; color: #38bdf8; font-size: 18px; letter-spacing: .5em; opacity: .75; pointer-events: none; white-space: nowrap; }
+}
+
+/* arbol del sistema plegable (solo pantalla ancha): se encoge a la izquierda y deja iconos y siglas */
+.cm .arbol-ficha { position: relative; flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: #16233f; color: #e6edf7; font-size: 11px; font-weight: 700; }
+.cm .arbol-punto { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--panel); }
+.cm .icono-pie { display: none; }
+.cm .arbol-tip { position: fixed; z-index: 60; transform: translateY(-50%); padding: 9px 13px; border-radius: 10px; background: #1b2c4d; border: 1px solid #4a6fa8; color: #fff; font-size: 13px; font-weight: 600; white-space: nowrap; box-shadow: 0 10px 28px rgba(0, 0, 0, .6); pointer-events: none; }
+@media (min-width: 1024px) {
+  .cm .arbol { width: 250px; overflow-x: hidden; transition: width .38s cubic-bezier(.4, 0, .2, 1); }
+  .cm .arbol .tx { white-space: nowrap; transition: opacity .22s ease .14s; }
+  .cm .arbol .giro { transition: transform .38s cubic-bezier(.4, 0, .2, 1); }
+  .cm .arbol-rama { transition: margin .38s cubic-bezier(.4, 0, .2, 1), padding .38s cubic-bezier(.4, 0, .2, 1); }
+  .cm .arbol-mini { width: 72px; scrollbar-width: none; }
+  .cm .arbol-mini::-webkit-scrollbar { display: none; }
+  .cm .arbol-mini .tx { opacity: 0; transition-delay: 0s; }
+  .cm .arbol-mini .giro { transform: rotate(180deg); }
+  .cm .arbol-mini .arbol-rama { margin-left: 0; padding-left: 0; border-left-width: 0; }
+  .cm .arbol-mini .arbol-grupo { justify-content: center; }
+  .cm .arbol-mini .solo-abierto, .cm .arbol-mini .texto-pie { display: none; }
+  .cm .arbol-mini .arbol-pie { flex-direction: column; }
+  .cm .arbol-mini .icono-pie { display: block; }
+  .cm .arbol-mini .arbol-pie button { padding-left: 0; padding-right: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .cm .arbol, .cm .arbol .tx, .cm .arbol .giro, .cm .arbol-rama { transition: none; } }

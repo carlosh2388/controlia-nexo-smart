@@ -544,3 +544,17 @@ model RedSede {
   @@index([grupoId])
   @@map("red_sedes")
 }
+
+/// Vista "Sedes en 3D": lugar de cada equipo en el plano de la sede (pixeles del plano).
+/// La clave "__norte" guarda en x los grados del norte real.
+model PlanoPunto {
+  sede      String
+  clave     String
+  x         Float
+  y         Float
+  usuario   String
+  updatedAt DateTime @updatedAt
+
+  @@id([sede, clave])
+  @@map("plano_puntos")
+}

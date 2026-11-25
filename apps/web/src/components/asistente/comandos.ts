@@ -4,7 +4,9 @@
  * Solo navega y lee: ninguna accion envia comandos a los equipos.
  */
 
-export type VistaRed = "mapa" | "incidentes" | "ranking" | "normas" | "prediccion" | "analitica" | "alarmas";
+export type VistaRed = "mapa" | "sedes3d" | "incidentes" | "ranking" | "normas" | "prediccion" | "analitica" | "alarmas" | "exportar" | "arquitectura";
+/** Vistas que solo abre un administrador. */
+export const VISTAS_ADMIN = new Set<VistaRed>(["alarmas", "exportar", "arquitectura"]);
 export type PestanaEquipo = "equipo" | "tendencias" | "calidad" | "comparativo" | "alarmas" | "bitacora" | "info";
 
 export interface SedeRef {

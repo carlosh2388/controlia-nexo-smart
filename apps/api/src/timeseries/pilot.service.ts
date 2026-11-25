@@ -310,6 +310,27 @@ export class PilotService {
     return { device, pairId: pair?.id ?? null, isDirect, rows, gaps: gaps.map((g) => this.gapDto(g)) };
   }
 
+  /**
+   * Historial de un equipo entre dos fechas, promediado cada `step` segundos (exportacion a Excel).
+   * Devuelve una fila por intervalo y metrica, con la peor calidad del intervalo (real/recuperada/estimada).
+   */
+  async historialRango(deviceId: string, metrics: string[], desde: Date, hasta: Date, step: number) {
+    const device = await this.ensureDevice(deviceId);
+    const rows = metrics.length
+      ? await this.prisma.$queryRaw<{ t: Date; metric: string; v: number; q: string }[]>`
+          SELECT time_bucket(make_interval(secs => ${step}::int), "time") AS t, metric, avg("value")::float AS v, min(quality::text) AS q
+          FROM readings
+          WHERE "deviceId" = ${device.id} AND metric = ANY(${metrics}) AND "time" >= ${desde} AND "time" < ${hasta}
+          GROUP BY t, metric ORDER BY t`
+      : [];
+    const meta = (device.metadata as DeviceMeta | null) ?? {};
+    return {
+      device: { id: device.id, name: device.name, model: meta.model ?? null, buildingKey: meta.agent?.buildingKey ?? null },
+      step,
+      rows: rows.map((r) => ({ t: r.t.toISOString(), m: r.metric, v: Math.round(r.v * 1000) / 1000, q: r.q })),
+    };
+  }
+
   async metadataOf(deviceId: string) {
     return (await this.ensureDevice(deviceId)).metadata;
   }

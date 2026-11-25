@@ -61,6 +61,7 @@ export default function GravixGlobal({ pestana, permitidas, irPestana }: { pesta
       sedeActual={pestana === "centro" ? d.sedeActual : null}
       grupos={d.grupos}
       grupoDe={d.grupoDe}
+      vistaActual={d.vistaActual ?? "mapa"}
       ejecutar={ejecutar}
       pestanas={[...permitidas]}
       pestanaActual={pestana}

@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsBoolean, IsIn, IsInt, IsIP, IsOptional, IsString, Max, MaxLength, Min } from "class-validator";
+import { IsBoolean, IsIn, IsInt, IsIP, IsISO8601, IsOptional, IsString, Max, MaxLength, Min } from "class-validator";
 
 /** GET /pilot/devices/:id/series */
 export class SeriesQueryDto {
@@ -53,6 +53,26 @@ export class ExcelQueryDto {
   @Type(() => Number)
   @IsIn([60, 900, 3600, 86400])
   step?: number;
+}
+
+/** GET /pilot/devices/:id/historial - historial por rango de fechas (lo usa la exportacion del central). */
+export class HistorialRangoDto {
+  /** Claves separadas por coma (ej. active_power_total,voltage_a_n,harm_v_a_03). Hasta 500 (armonicos incluidos). */
+  @IsString()
+  @MaxLength(8000)
+  metrics!: string;
+
+  /** Inicio y fin del rango (ISO 8601). */
+  @IsISO8601()
+  desde!: string;
+
+  @IsISO8601()
+  hasta!: string;
+
+  /** Un dato cada N segundos (promedio). */
+  @Type(() => Number)
+  @IsIn([60, 300, 900, 3600, 86400])
+  step!: number;
 }
 
 /** GET /pilot/:buildingKey/cumplimiento */

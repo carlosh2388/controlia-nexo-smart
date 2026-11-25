@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { ArrayMaxSize, IsArray, IsIn, IsInt, IsLatitude, IsLongitude, IsObject, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from "class-validator";
+import { ArrayMaxSize, IsArray, IsIn, IsInt, IsLatitude, IsLongitude, IsNumber, IsObject, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from "class-validator";
 
 /** POST /red/grupos y PATCH /red/grupos/:id */
 export class GrupoDto {
@@ -77,4 +77,21 @@ export class ProbarGravixDto {
   /** Sede ya guardada: si no viene apiKey se usa la suya. */
   @IsOptional() @IsString() @MaxLength(64)
   sedeId?: string;
+}
+
+/** PUT /red/sedes/:id/plano */
+export class PlanoPuntoDto {
+  @IsString()
+  @MaxLength(160)
+  clave!: string;
+
+  @IsNumber()
+  @Min(0)
+  @Max(20000)
+  x!: number;
+
+  @IsNumber()
+  @Min(0)
+  @Max(20000)
+  y!: number;
 }

@@ -13,6 +13,6 @@ import { ComparativoService } from "./comparativo.service";
   imports: [AuthModule, AgentsModule],
   controllers: [PilotController],
   providers: [GapDetectorService, TimeseriesService, PilotService, QualityService, InfluxWriterService, ComparativoService],
-  exports: [TimeseriesService, InfluxWriterService, ComparativoService],
+  exports: [TimeseriesService, InfluxWriterService, ComparativoService, PilotService],
 })
 export class TimeseriesModule {}
