@@ -1,6 +1,7 @@
 import { Navigate, Route, BrowserRouter, Routes } from "react-router-dom";
 import Login from "./routes/Login";
 import Devices from "./routes/Devices";
+import VersionNueva from "./components/VersionNueva";
 import { useAuthStore } from "./store/auth.store";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -12,6 +13,7 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 export default function App() {
   return (
     <BrowserRouter>
+      <VersionNueva />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route

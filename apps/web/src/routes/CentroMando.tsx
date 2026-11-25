@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import InteractiveChart, { type ChartSeries } from "../components/charts/InteractiveChart";
 import type { Access } from "../api/access";
 import { useDevices } from "../api/devices";
-import { coldChainChannels, doorCode, doorsByCode, str, toSedeDevices, wiseGroup, type SedeDevice } from "../utils/sedes";
+import { doorsByCode, str, toSedeDevices, type SedeDevice } from "../utils/sedes";
+import { resumenSensor } from "../utils/resumenSensor";
 import { AirCard, DoorTile, EnvCard, LoraCard, WiseCard } from "../components/sedes/Cards";
 import SedeTrendModal from "../components/sedes/SedeTrendModal";
 import { downloadFile } from "../api/access";
@@ -123,6 +124,14 @@ function guardarPanel3d(plegado: boolean) {
   } catch {
     /* sin almacenamiento: dura solo esta visita */
   }
+}
+
+/** Valor corto de un equipo de energia para el plano 3D. */
+function valorEnergia(e: Equipo) {
+  const r = (e.pilotDirect ?? e.art).readings ?? {};
+  const kw = numero(r, "active_power_total", "demand_total", "gen_kw_total_metering") ?? e.central?.lectura?.kw ?? null;
+  const v = promedio(r, ["voltage_a_n", "voltage_b_n", "voltage_c_n"]) ?? e.central?.lectura?.v_prom ?? null;
+  return [kw != null ? `${kw.toFixed(1)} kW` : "", v != null ? `${v.toFixed(1)} V` : ""].filter(Boolean).join(" · ");
 }
 
 /* ---------- arbol plegable ---------- */
@@ -441,7 +450,7 @@ export default function CentroMando({ access }: { access: Access }) {
   const [sedeId, setSedeId] = useState<string | null>(null);
   const [sedePlano, setSedePlano] = useState("");
   const visorPlano = useRef<HTMLIFrameElement>(null);
-  const { data: dispositivosSede } = useDevices();
+  const { data: dispositivosSede, isError: errorDispositivos } = useDevices();
   const sensoresPlano = useMemo(() => toSedeDevices(dispositivosSede ?? [], GRAVIX_KEY)
     .filter((d) => ["door", "env", "wise", "air", "lora", "radio"].includes(d.kind)), [dispositivosSede]);
   const [sensorPlanoId, setSensorPlanoId] = useState<string | null>(null);
@@ -449,14 +458,9 @@ export default function CentroMando({ access }: { access: Access }) {
   const sensorPlano = sensoresPlano.find((sensor) => sensor.id === sensorPlanoId);
   const tendenciaPlano = sensoresPlano.find((sensor) => sensor.id === tendenciaPlanoId);
   const puertasPlano = useMemo(() => doorsByCode(sensoresPlano.filter((sensor) => sensor.kind === "door")), [sensoresPlano]);
-  const codigosFrioPlano = useMemo(() => new Set(sensoresPlano
-    .filter((sensor) => sensor.kind === "wise" && !["pump", "heating"].includes(wiseGroup(sensor)))
-    .flatMap((sensor) => coldChainChannels(sensor).map((canal) => canal.code.toUpperCase()).filter(Boolean))), [sensoresPlano]);
-  const inventarioPlano = JSON.stringify(sensoresPlano.filter(
-    (sensor) => sensor.kind !== "door" || !codigosFrioPlano.has(doorCode(sensor)),
-  ).map((sensor) => ({
+  const inventarioPlano = JSON.stringify(sensoresPlano.map((sensor) => ({
     id: sensor.id, nombre: sensor.name, area: sensor.area, modelo: sensor.model,
-    codigo: str(sensor.attrs.tag_code_inventory ?? sensor.attrs.code_inventory),
+    codigo: str(sensor.attrs.tag_code_inventory ?? sensor.attrs.code_inventory ?? sensor.attrs.tag_code),
   })));
   const [planoAmpliado, setPlanoAmpliado] = useState(false);
   const [avisoPlano, setAvisoPlano] = useState("");
@@ -464,6 +468,10 @@ export default function CentroMando({ access }: { access: Access }) {
     const abrirDesdePlano = (event: MessageEvent) => {
       if (event.origin !== "null" || event.source !== visorPlano.current?.contentWindow) return;
       const data = event.data;
+      if (data?.tipo === "nodivo:listo-3d") {
+        enviarPlanoRef.current();
+        return;
+      }
       if (data?.tipo === "nodivo:abrir-sensor-3d" && typeof data.id === "string") {
         setSensorPlanoId(data.id);
         return;
@@ -532,8 +540,9 @@ export default function CentroMando({ access }: { access: Access }) {
     admin: esAdmin,
     panel: leerPanel3d(),
     puntos: planoSede.data?.puntos ?? null,
-    energia: (equipos.get(ESCUINTLA) ?? []).map((e) => ({ inventario: e.inventario, clase: e.kind, nombre: e.nombre, ok: e.ok, texto: e.estadoTxt })),
-    sensores: Object.fromEntries(sensoresPlano.map((s) => [s.id, s.online])),
+    energia: (equipos.get(ESCUINTLA) ?? []).map((e) => ({ inventario: e.inventario, clase: e.kind, nombre: e.nombre, ok: e.ok, texto: e.estadoTxt, valor: valorEnergia(e) })),
+    sensores: Object.fromEntries(sensoresPlano.map((s) => [s.id, resumenSensor(s)])),
+    error: errorDispositivos && !dispositivosSede ? "No se pudieron leer los sensores de la sede." : "",
   });
   const enviarPlanoRef = useRef<() => void>(() => {});
   enviarPlanoRef.current = () => {
@@ -851,7 +860,7 @@ export default function CentroMando({ access }: { access: Access }) {
                       </div>
                       {!sedePlano || sedePlano === ESCUINTLA ? (
                         <>
-                          <p className="mb-2 text-xs text-slate-400">Selecciona un equipo para abrir su ficha. Los WISE de cadena de frío incluyen las puertas vinculadas. Las ubicaciones aproximadas se marcan por confirmar.</p>
+                          <p className="mb-2 text-xs text-slate-400">Selecciona un equipo para abrir su ficha. Pasa el cursor sobre un equipo para ver su valor en vivo. Los WISE de cadena de frío incluyen las puertas vinculadas. Las posiciones vienen del plano de telemetría de SIASA (abril 2026).</p>
                           <p role="status" className="text-sm text-amber-300">{avisoPlano}</p>
                           <iframe
                             ref={visorPlano}
