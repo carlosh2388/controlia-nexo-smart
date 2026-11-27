@@ -18,6 +18,7 @@ import { FichaCampos, atributosDeFicha, faseSugerida, fichaVacia, sugerirDeviceI
 import { hace, perfilDe, servidores } from "../components/red/equiposUtil";
 import ConfigEquipos from "../components/red/ConfigEquipos";
 import AgenteGo from "../components/red/AgenteGo";
+import GestionAgente from "../components/red/GestionAgente";
 import { NuevaSede } from "../components/red/RedAdmin";
 import { useGuardarSede, useRed, useSedeDeAgente } from "../api/red";
 
@@ -28,7 +29,7 @@ import { useGuardarSede, useRed, useSedeDeAgente } from "../api/red";
  * Todo lo que toca un medidor real es solo lectura (función 03).
  */
 
-type Seccion = "agente" | "descubrir" | "topologia" | "config" | "agentes";
+type Seccion = "agente" | "descubrir" | "topologia" | "config" | "maneja" | "agentes";
 
 const MODELO_TXT: Record<string, string> = { ION7400: "Analizador ION7400", PM2130: "Medidor PM2130", generator: "Controlador de generador", "": "No identificado" };
 const PERFIL_DE: Record<string, string> = { ION7400: "ion7400-directo", PM2130: "pm2130-directo", generator: "generador-directo" };
@@ -49,7 +50,7 @@ export default function Equipos() {
   const sede = sedeDe(bk);
   const [crearSede, setCrearSede] = useState(false);
 
-  const tabs: [Seccion, string][] = [["agente", "Agente Go"], ["descubrir", "Descubrir y agregar"], ["topologia", "Topología en vivo"], ["config", "Configuración"], ["agentes", "Agentes"]];
+  const tabs: [Seccion, string][] = [["agente", "Agente Go"], ["descubrir", "Descubrir y agregar"], ["topologia", "Topología en vivo"], ["config", "Configuración"], ["maneja", "Equipos que maneja"], ["agentes", "Agentes"]];
   /** Agente → sede que ya lo usa (para no repetir un agente en dos sedes). */
   const agentesEnUso: Record<string, string> = { "igss-escuintla": "Escuintla", "igss-escuintla-directo": "Escuintla" };
   for (const s of red.data?.sedes ?? []) if (s.origen === "nodivo") for (const a of s.agentes) agentesEnUso[a] ??= s.nombre;
@@ -102,6 +103,7 @@ export default function Equipos() {
       {sec === "descubrir" && bk && <Descubrir bk={bk} remoto={!!agent?.hasConfig} />}
       {sec === "topologia" && bk && <Topologia bk={bk} remoto={!!agent?.hasConfig} />}
       {sec === "config" && bk && <ConfigEquipos key={bk} bk={bk} sedeNombre={sede?.nombre ?? null} />}
+      {sec === "maneja" && bk && <GestionAgente key={bk} bk={bk} esAdmin={esAdmin} />}
       {sec === "agentes" && (
         <div className="flex flex-col gap-8">
           <AgentDevices />

@@ -27,10 +27,14 @@ export class AgentSyncDeviceDto {
    * "on"/"off" para lo accionable (switches, climas); "online"/"offline" para sensores puros
    * (mismo valor que ya usan los sensores LoRaWAN existentes en Device.state.state - no tienen
    * un estado on/off real, solo reportan que estan transmitiendo).
+   *
+   * Un equipo de la API que maneja el agente ("nodivo:<id>") trae el mismo texto que guardaria el
+   * adaptador de la API (ej. "unavailable" de Home Assistant), por eso se acepta cualquier texto corto.
    */
   @IsOptional()
-  @IsIn(["on", "off", "online", "offline"])
-  state?: "on" | "off" | "online" | "offline";
+  @IsString()
+  @MaxLength(40)
+  state?: string;
 
   @IsOptional()
   @IsObject()

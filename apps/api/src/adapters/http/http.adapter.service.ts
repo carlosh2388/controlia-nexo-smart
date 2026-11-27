@@ -5,6 +5,8 @@ import { DeviceStateBus } from "../../state-bus/device-state-bus.service";
 import type { DeviceAdapter } from "../adapter.interface";
 import { AdapterRegistry } from "../adapter-registry.service";
 import type { HttpActionTemplateDto, HttpDeviceConfigDto } from "../../devices/dto/http-device-config.dto";
+import { GestionService } from "../agente/gestion.service";
+import type { OrdenAgente } from "../agente/ordenes-agente.service";
 
 interface HttpMetadata {
   http?: HttpDeviceConfigDto;
@@ -29,6 +31,7 @@ export class HttpAdapterService implements DeviceAdapter, OnModuleInit, OnModule
     private readonly prisma: PrismaService,
     private readonly stateBus: DeviceStateBus,
     private readonly registry: AdapterRegistry,
+    private readonly gestion: GestionService,
   ) {}
 
   async onModuleInit() {
@@ -59,11 +62,22 @@ export class HttpAdapterService implements DeviceAdapter, OnModuleInit, OnModule
     await this.request(device, template);
   }
 
+  /** La misma peticion de publishCommand, para que la haga un Agente_Go en la red del edificio. */
+  ordenPara(device: Device, action: CommandAction): OrdenAgente {
+    const config = this.readConfig(device);
+    if (!config) throw new Error(`Dispositivo "${device.name}" no tiene configuracion HTTP (httpConfig)`);
+    if (!device.httpBaseUrl) throw new Error(`Dispositivo "${device.name}" no tiene httpBaseUrl configurado`);
+    const t = action === CommandAction.on ? config.on : config.off;
+    return { tipo: "http", baseUrl: device.httpBaseUrl, method: t.method, path: t.path, headers: t.headers, body: t.body };
+  }
+
   private startPolling(device: Device) {
+    this.stopPolling(device.id);
+    // Lo lee un Agente_Go (salvo que el agente este caido: entonces la API lo retoma).
+    if (this.gestion.manejadoPor(device)) return;
     const config = this.readConfig(device);
     if (!config?.state || !config.pollIntervalMs) return;
 
-    this.stopPolling(device.id);
     const poll = async () => {
       try {
         const raw = await this.request(device, config.state!);
@@ -84,6 +98,7 @@ export class HttpAdapterService implements DeviceAdapter, OnModuleInit, OnModule
   private stopPolling(deviceId: string) {
     const existing = this.pollers.get(deviceId);
     if (existing) clearInterval(existing);
+    this.pollers.delete(deviceId);
   }
 
   private extractJson(raw: string, path: string): string {

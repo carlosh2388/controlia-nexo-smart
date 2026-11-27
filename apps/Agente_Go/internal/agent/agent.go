@@ -20,6 +20,7 @@ import (
 	"agente-go/internal/config"
 	"agente-go/internal/discovery"
 	"agente-go/internal/events"
+	"agente-go/internal/gestion"
 	"agente-go/internal/reporter"
 )
 
@@ -204,7 +205,7 @@ func (a *Agent) restartSection(p config.Protocols, name string) {
 
 	s := &section{errs: map[string]string{}}
 	a.sections[name] = s
-	srcs, err := buildSection(p, name)
+	srcs, err := buildSection(p, name, gestion.Entorno{APIURL: a.cfg.API.BaseURL, APIKey: a.cfg.API.APIKey, BuildingKey: a.cfg.BuildingKey})
 	if err != nil {
 		s.buildErr = err.Error()
 		log.Printf("[config] %s: %v", name, err)
@@ -274,11 +275,22 @@ func (a *Agent) updaterFor(name string, gen int) func([]discovery.Device) {
 			a.mu.Unlock()
 			return
 		}
+		cambio := false
 		for _, d := range devices {
+			// Equipos que el agente maneja en lugar de la API (luces, interruptores, aires): un
+			// cambio de encendido/apagado se manda enseguida, sin esperar el proximo sync.
+			if name == "gestion" && d.State != "" {
+				if prev, ok := a.snapshot[d.ExternalID]; !ok || prev.State != d.State {
+					cambio = true
+				}
+			}
 			a.snapshot[d.ExternalID] = d
 			a.owner[d.ExternalID] = name
 		}
 		a.mu.Unlock()
+		if cambio {
+			a.kickSync()
+		}
 
 		if a.engine == nil {
 			return

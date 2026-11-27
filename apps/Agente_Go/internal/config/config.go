@@ -60,6 +60,32 @@ type Protocols struct {
 	// Rangos de IP donde la web busca equipos (Buscar dispositivos en la red). El agente no lo usa
 	// para leer; se guarda aca solo para que viaje junto con el resto de la config.
 	Discovery map[string]interface{} `yaml:"discovery,omitempty"`
+	// Equipos que ya existen en la API central (Home Assistant, MQTT, LoRaWAN, BACnet) y que este
+	// agente lee y controla en lugar de la API. Cuales son lo decide la web (Agente Go > Equipos que
+	// maneja); aca solo van los brokers y el puente que el agente usa para llegar a ellos.
+	Gestion *GestionConfig `yaml:"gestion,omitempty"`
+}
+
+// GestionConfig: conexiones que usa el agente para los equipos que maneja en lugar de la API
+// central. El QUE leer (plantillas HTTP, topicos, devEui, puntos BACnet) lo manda la API en el plan.
+type GestionConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Broker de los equipos MQTT (Zigbee2MQTT, home/...): el mismo MQTT_URL de la API.
+	MQTT *GestionBroker `yaml:"mqtt,omitempty"`
+	// Broker de ChirpStack para los sensores LoRaWAN: el mismo LORAWAN_MQTT_URL de la API.
+	LoRaWAN *GestionBroker `yaml:"lorawan,omitempty"`
+	// Puente BACnet (apps/bacnet-bridge) para los aires: el mismo BACNET_BRIDGE_URL de la API.
+	BACnetBridgeURL   string `yaml:"bacnetBridgeUrl,omitempty"`
+	BACnetBridgeToken string `yaml:"bacnetBridgeToken,omitempty"`
+	// Seguridad extra: si tiene valores, el agente SOLO manda ordenes HTTP/BACnet a estos hosts (IP o
+	// nombre). Vacio = solo a los hosts de los equipos de su plan.
+	HostsPermitidos []string `yaml:"hostsPermitidos,omitempty"`
+}
+
+type GestionBroker struct {
+	BrokerURL string `yaml:"brokerUrl"`
+	Username  string `yaml:"username,omitempty"`
+	Password  string `yaml:"password,omitempty"`
 }
 
 type APIConfig struct {
@@ -256,6 +282,14 @@ func (p *Protocols) Normalize() error {
 		}
 		if p.MQTT.Enabled && p.MQTT.BrokerURL == "" {
 			return fmt.Errorf("mqtt.brokerUrl es obligatorio")
+		}
+	}
+	if g := p.Gestion; g != nil && g.Enabled {
+		if g.MQTT != nil && g.MQTT.BrokerURL == "" {
+			return fmt.Errorf("gestion.mqtt.brokerUrl es obligatorio")
+		}
+		if g.LoRaWAN != nil && g.LoRaWAN.BrokerURL == "" {
+			return fmt.Errorf("gestion.lorawan.brokerUrl es obligatorio")
 		}
 	}
 	if p.LoRaWAN != nil && p.LoRaWAN.Enabled && p.LoRaWAN.BrokerURL == "" {

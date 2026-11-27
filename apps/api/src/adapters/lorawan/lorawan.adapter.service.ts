@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { CommandAction, Device, DeviceKind, DeviceProtocol } from "@prisma/client";
+import { CommandAction, Device, DeviceKind, DeviceProtocol, Prisma } from "@prisma/client";
+import { GestionService } from "../agente/gestion.service";
 import mqtt, { MqttClient } from "mqtt";
 import { PrismaService } from "../../prisma/prisma.service";
 import { DeviceStateBus } from "../../state-bus/device-state-bus.service";
@@ -51,12 +52,14 @@ export class LorawanAdapterService implements DeviceAdapter, OnModuleInit, OnMod
   private readonly logger = new Logger("LorawanAdapter");
   private client?: MqttClient;
   private readonly devEuiToDeviceId = new Map<string, string>();
+  private readonly metadataDe = new Map<string, Prisma.JsonValue>();
 
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly stateBus: DeviceStateBus,
     private readonly registry: AdapterRegistry,
+    private readonly gestion: GestionService,
   ) {}
 
   async onModuleInit() {
@@ -104,6 +107,8 @@ export class LorawanAdapterService implements DeviceAdapter, OnModuleInit, OnMod
 
     const deviceId = await this.resolveDeviceId(devEui, parsed);
     if (!deviceId) return;
+    // Lo reporta un Agente_Go: no se duplica la lectura (salvo que el agente este caido).
+    if (this.gestion.manejadoPor({ metadata: this.metadataDe.get(deviceId) ?? null })) return;
 
     this.stateBus.emit({
       deviceId,
@@ -122,6 +127,7 @@ export class LorawanAdapterService implements DeviceAdapter, OnModuleInit, OnMod
     });
     if (existing) {
       this.devEuiToDeviceId.set(devEui, existing.id);
+      this.metadataDe.set(existing.id, existing.metadata);
       return existing.id;
     }
 
@@ -150,7 +156,11 @@ export class LorawanAdapterService implements DeviceAdapter, OnModuleInit, OnMod
     throw new Error("Los sensores LoRaWAN son de solo lectura; no aceptan comandos.");
   }
 
-  onDeviceRegistered(_device: Device): void {
+  onDeviceRegistered(device: Device): void {
     // Los sensores LoRaWAN se descubren solos por su devEui; no hay suscripcion por dispositivo.
+    // Solo se refresca la metadata guardada (cambio de gestor API <-> Agente_Go).
+    if (device.protocol === DeviceProtocol.lorawan && this.metadataDe.has(device.id)) {
+      this.metadataDe.set(device.id, device.metadata);
+    }
   }
 }

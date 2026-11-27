@@ -7,6 +7,8 @@ import { DeviceStateBus } from "../../state-bus/device-state-bus.service";
 import type { DeviceAdapter } from "../adapter.interface";
 import { AdapterRegistry } from "../adapter-registry.service";
 import type { MqttJsonConfigDto } from "../../devices/dto/mqtt-json-config.dto";
+import { GestionService } from "../agente/gestion.service";
+import type { OrdenAgente } from "../agente/ordenes-agente.service";
 
 interface MqttJsonMetadata {
   mqttJson?: MqttJsonConfigDto;
@@ -33,6 +35,7 @@ export class MqttAdapterService implements DeviceAdapter, OnModuleInit, OnModule
     private readonly prisma: PrismaService,
     private readonly stateBus: DeviceStateBus,
     private readonly registry: AdapterRegistry,
+    private readonly gestion: GestionService,
   ) {}
 
   async onModuleInit() {
@@ -91,6 +94,8 @@ export class MqttAdapterService implements DeviceAdapter, OnModuleInit, OnModule
     const raw = payload.toString().trim();
     const device = await this.prisma.device.findUnique({ where: { id: deviceId } });
     if (!device) return;
+    // Lo reporta un Agente_Go: no se duplica el estado (salvo que el agente este caido).
+    if (this.gestion.manejadoPor(device)) return;
 
     const mqttJson = (device.metadata as MqttJsonMetadata | null)?.mqttJson;
     let extracted = raw;
@@ -127,14 +132,7 @@ export class MqttAdapterService implements DeviceAdapter, OnModuleInit, OnModule
     if (!this.client || !device.commandTopic) {
       throw new Error(`Dispositivo "${device.name}" no tiene commandTopic configurado`);
     }
-
-    const mqttJson = (device.metadata as MqttJsonMetadata | null)?.mqttJson;
-    const jsonPayload = action === CommandAction.on ? mqttJson?.onPayload : mqttJson?.offPayload;
-    const payload = jsonPayload !== undefined
-      ? JSON.stringify(jsonPayload)
-      : action === CommandAction.on
-        ? device.payloadOn
-        : device.payloadOff;
+    const payload = this.payloadDe(device, action);
 
     await new Promise<void>((resolve, reject) => {
       this.client!.publish(device.commandTopic!, payload, { qos: 1 }, (err) => {
@@ -142,6 +140,22 @@ export class MqttAdapterService implements DeviceAdapter, OnModuleInit, OnModule
         else resolve();
       });
     });
+  }
+
+  /** La misma publicacion de publishCommand, para que la haga un Agente_Go. */
+  ordenPara(device: Device, action: CommandAction): OrdenAgente {
+    if (!device.commandTopic) throw new Error(`Dispositivo "${device.name}" no tiene commandTopic configurado`);
+    return { tipo: "mqtt", topic: device.commandTopic, payload: this.payloadDe(device, action) };
+  }
+
+  private payloadDe(device: Device, action: CommandAction): string {
+    const mqttJson = (device.metadata as MqttJsonMetadata | null)?.mqttJson;
+    const jsonPayload = action === CommandAction.on ? mqttJson?.onPayload : mqttJson?.offPayload;
+    return jsonPayload !== undefined
+      ? JSON.stringify(jsonPayload)
+      : action === CommandAction.on
+        ? device.payloadOn
+        : device.payloadOff;
   }
 
   onDeviceRegistered(device: Device): void {

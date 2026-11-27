@@ -1,11 +1,16 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { DeviceKind, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { EventLogService } from "../events/event-log.service";
 import { AgentSyncDto } from "./dto/agent-sync.dto";
 import { SiteEventsService } from "../site-events/site-events.service";
 import { AgentsService } from "../agents/agents.service";
 import { TimeseriesService } from "../timeseries/timeseries.service";
+import { DeviceStateBus } from "../state-bus/device-state-bus.service";
+import { agenteAsignado, GestionService } from "../adapters/agente/gestion.service";
+
+/** externalId de un equipo de la API que maneja un Agente_Go: "nodivo:<deviceId>". */
+const PREFIJO_GESTION = "nodivo:";
 
 export interface AgentMetadata {
   buildingKey: string;
@@ -38,6 +43,8 @@ export class AgentSyncService {
     private readonly siteEvents: SiteEventsService,
     private readonly agents: AgentsService,
     private readonly timeseries: TimeseriesService,
+    private readonly stateBus: DeviceStateBus,
+    private readonly gestion: GestionService,
   ) {}
 
   async sync(dto: AgentSyncDto) {
@@ -51,8 +58,19 @@ export class AgentSyncService {
     const byProtocol: Record<string, number> = {};
     const receivedAt = new Date();
     this.timeseries.agentSeen(dto.buildingKey, receivedAt);
+    await this.gestion.contacto(dto.buildingKey);
+
+    // Equipos de la API que maneja este agente (externalId "nodivo:<id>", ver adapters/agente).
+    const gestionados = dto.devices.filter((d) => d.externalId.startsWith(PREFIJO_GESTION));
+    if (gestionados.length) {
+      const r = await this.aplicarGestionados(dto.buildingKey, gestionados);
+      updated += r.aplicados;
+      skippedExisting += r.ajenos;
+      for (const item of gestionados) byProtocol[item.protocol] = (byProtocol[item.protocol] ?? 0) + 1;
+    }
 
     for (const item of dto.devices) {
+      if (item.externalId.startsWith(PREFIJO_GESTION)) continue;
       byProtocol[item.protocol] = (byProtocol[item.protocol] ?? 0) + 1;
       const existing = await this.prisma.device.findFirst({
         where: {
@@ -178,6 +196,43 @@ export class AgentSyncService {
     };
   }
 
+  /**
+   * Estado de los equipos que el agente maneja en lugar de la API: entra por DeviceStateBus, el
+   * mismo camino que usan los adaptadores en proceso, asi que la vista en vivo (WebSocket),
+   * device_states, el historial de sensores y las automatizaciones funcionan igual que antes.
+   * Solo se acepta si el equipo esta asignado a ESTE agente.
+   */
+  private async aplicarGestionados(buildingKey: string, items: AgentSyncDto["devices"]) {
+    const ids = items.map((i) => i.externalId.slice(PREFIJO_GESTION.length));
+    const devices = await this.prisma.device.findMany({ where: { id: { in: ids } }, select: { id: true, kind: true, metadata: true } });
+    const porId = new Map(devices.map((d) => [d.id, d]));
+    let aplicados = 0;
+    let ajenos = 0;
+    for (const item of items) {
+      const device = porId.get(item.externalId.slice(PREFIJO_GESTION.length));
+      if (!device || agenteAsignado(device) !== buildingKey) {
+        ajenos += 1;
+        continue;
+      }
+      if (!item.state && !item.readings) continue;
+      // Un sensor solo se registra cuando trae una lectura nueva (como el adaptador LoRaWAN/MQTT:
+      // una fila de historial por uplink), no en cada reenvio del snapshot del agente.
+      if (device.kind === DeviceKind.sensor) {
+        const huella = `${item.state ?? ""}|${JSON.stringify(item.readings ?? null)}`;
+        if (this.ultimaLecturaGestionada.get(device.id) === huella) continue;
+        this.ultimaLecturaGestionada.set(device.id, huella);
+      }
+      this.stateBus.emit({
+        deviceId: device.id,
+        state: item.state ?? "online",
+        readings: item.readings,
+        rawPayload: item.readings ? JSON.stringify(item.readings) : undefined,
+      });
+      aplicados += 1;
+    }
+    return { aplicados, ajenos };
+  }
+
   /** Lecturas atrasadas (backlog del agente 0.5+) agrupadas por equipo de este agente. */
   private async recordBacklog(dto: AgentSyncDto, receivedAt: Date) {
     if (!dto.backlog?.length) return 0;
@@ -300,5 +355,6 @@ export class AgentSyncService {
   }
 
   private static readonly HISTORY_MIN_INTERVAL_MS = 60_000;
+  private readonly ultimaLecturaGestionada = new Map<string, string>();
   private readonly lastHistoryAt = new Map<string, number>();
 }

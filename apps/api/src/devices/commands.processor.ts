@@ -37,7 +37,8 @@ export class CommandsProcessor extends WorkerHost {
     }
 
     try {
-      const adapter = this.adapterRegistry.resolve(command.device.protocol);
+      // Si el equipo lo maneja un Agente_Go, la orden sale por el agente (misma orden, otra ruta).
+      const adapter = this.adapterRegistry.paraDispositivo(command.device);
       await adapter.publishCommand(command.device, command.action);
 
       await this.prisma.command.update({

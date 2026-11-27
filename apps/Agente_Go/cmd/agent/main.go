@@ -18,7 +18,7 @@ import (
 	"agente-go/internal/reporter"
 )
 
-const version = "0.5.5"
+const version = "0.6.0"
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "ruta al archivo de configuracion (ver config.example.yaml)")

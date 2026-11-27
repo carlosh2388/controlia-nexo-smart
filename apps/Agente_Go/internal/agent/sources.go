@@ -10,11 +10,12 @@ import (
 	"agente-go/internal/discovery/lorawansource"
 	"agente-go/internal/discovery/modbussource"
 	"agente-go/internal/discovery/mqttsource"
+	"agente-go/internal/gestion"
 )
 
 // Secciones de la config que se arrancan y reinician por separado: si en la web solo cambia el
 // puerto Modbus, el receptor LoRa y los brokers MQTT siguen corriendo sin cortes.
-var sectionNames = []string{"mqtt", "lorawan", "bacnet", "modbus", "loraGateway"}
+var sectionNames = []string{"mqtt", "lorawan", "bacnet", "modbus", "loraGateway", "gestion"}
 
 // sectionKey es lo que se compara para saber si una seccion cambio entre dos versiones de config.
 func sectionKey(p config.Protocols, name string) string {
@@ -30,6 +31,8 @@ func sectionKey(p config.Protocols, name string) string {
 		v = p.ModbusServers
 	case "loraGateway":
 		v = p.LoRaGateway
+	case "gestion":
+		v = p.Gestion
 	}
 	data, _ := json.Marshal(v)
 	return string(data)
@@ -38,9 +41,13 @@ func sectionKey(p config.Protocols, name string) string {
 // buildSection crea (sin arrancar) las fuentes habilitadas de una seccion.
 // Fase 4 (adaptadores HTTP por fabricante): se agrega aca del mismo modo, como su propio
 // discovery.Source - ver docs/agente-go.md "Como agregar un protocolo nuevo".
-func buildSection(p config.Protocols, name string) ([]discovery.Source, error) {
+func buildSection(p config.Protocols, name string, env gestion.Entorno) ([]discovery.Source, error) {
 	var out []discovery.Source
 	switch name {
+	case "gestion":
+		if p.Gestion != nil && p.Gestion.Enabled {
+			out = append(out, gestion.New(*p.Gestion, env))
+		}
 	case "mqtt":
 		if p.MQTT != nil && p.MQTT.Enabled {
 			out = append(out, mqttsource.New(*p.MQTT))

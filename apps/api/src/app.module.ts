@@ -25,6 +25,7 @@ import { RedModule } from "./red/red.module";
 import { AsistenteModule } from "./asistente/asistente.module";
 import { SedeModule } from "./sede/sede.module";
 import { ExportarModule } from "./exportar/exportar.module";
+import { GestionAgenteModule } from "./adapters/agente/gestion.module";
 
 /**
  * GRAVIX_MODO=central (por defecto): servidor central con Centro de mando, red y TEC 3.
@@ -32,7 +33,17 @@ import { ExportarModule } from "./exportar/exportar.module";
  * alarmas y la API /sede que consulta el Centro de mando. Ver docs/gravix-sede.md.
  */
 const MODO_SEDE = process.env.GRAVIX_MODO === "sede";
-const SOLO_CENTRAL = [EwelinkModule, BacnetModule, AutomationsModule, AreasModule, CentroModule, RedModule, AsistenteModule, ExportarModule];
+const SOLO_CENTRAL = [
+  EwelinkModule,
+  BacnetModule,
+  AutomationsModule,
+  AreasModule,
+  CentroModule,
+  RedModule,
+  AsistenteModule,
+  ExportarModule,
+  GestionAgenteModule,
+];
 
 @Module({
   imports: [

@@ -82,6 +82,41 @@ services:
       - redis
       - mosquitto
 
+  # Agente Go de TEC 3 (opcional: COMPOSE_PROFILES=agente-tec3). Lee y controla los equipos que en
+  # Equipos > "Equipos que maneja" se le pasan (Home Assistant, MQTT, LoRaWAN, aires BACnet), en lugar
+  # de la API. Si se cae, la API retoma esos equipos sola. Ver docs/agente-tec3.md.
+  agente-tec3:
+    profiles: ["agente-tec3"]
+    build: ./apps/Agente_Go
+    image: nodivo-agente:${AGENTE_VERSION:-0.6.0}
+    restart: unless-stopped
+    environment:
+      AGENT_BUILDING_KEY: ${AGENTE_TEC3_KEY:-tec3}
+      AGENT_API_KEY: ${AGENTE_TEC3_API_KEY:-}
+      AGENT_API_URL: http://api:3000/api/v1
+      AGENT_SYNC_SECONDS: 15
+      AGENT_REMOTE_CONFIG: "false"
+      AGENT_EVENTS: "false"
+      AGENT_GESTION: "true"
+      AGENT_GESTION_MQTT_URL: tcp://mosquitto:1883
+      AGENT_GESTION_LORAWAN_URL: ${AGENTE_TEC3_LORAWAN_URL:-}
+      AGENT_GESTION_LORAWAN_USER: ${LORAWAN_MQTT_USERNAME:-}
+      AGENT_GESTION_LORAWAN_PASS: ${LORAWAN_MQTT_PASSWORD:-}
+      AGENT_GESTION_BACNET_URL: ${BACNET_BRIDGE_URL:-http://host.docker.internal:3099}
+      AGENT_GESTION_BACNET_TOKEN: ${BACNET_BRIDGE_TOKEN:-}
+      AGENT_GESTION_HOSTS: ${AGENTE_TEC3_HOSTS:-}
+      TZ: America/Guatemala
+    volumes:
+      - agente_tec3_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "10" }
+    depends_on:
+      - api
+      - mosquitto
+
   web:
     build:
       context: .
@@ -108,3 +143,4 @@ services:
 volumes:
   postgres_data:
   area_uploads:
+  agente_tec3_data:

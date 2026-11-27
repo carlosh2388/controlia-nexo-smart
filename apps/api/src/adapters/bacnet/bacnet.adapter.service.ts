@@ -7,9 +7,17 @@ import { AdapterRegistry } from "../adapter-registry.service";
 import { BacnetBridgeClientService, BacnetReadRequest } from "./bacnet-bridge-client.service";
 import type { BacnetDeviceConfigDto, BacnetObjectRefDto } from "../../devices/dto/bacnet-device-config.dto";
 import type { ClimateCommandDto } from "../../devices/dto/climate-command.dto";
+import { GestionService } from "../agente/gestion.service";
+import { OrdenesAgenteService, type OrdenAgente } from "../agente/ordenes-agente.service";
 
 interface BacnetMetadata {
   bacnet?: BacnetDeviceConfigDto;
+}
+
+interface EscrituraBacnet {
+  object: BacnetObjectRefDto;
+  valueType: "boolean" | "real" | "enum";
+  value: boolean | number;
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -32,6 +40,8 @@ export class BacnetAdapterService implements DeviceAdapter, OnModuleInit, OnModu
     private readonly stateBus: DeviceStateBus,
     private readonly registry: AdapterRegistry,
     private readonly bridge: BacnetBridgeClientService,
+    private readonly gestion: GestionService,
+    private readonly ordenes: OrdenesAgenteService,
   ) {}
 
   async onModuleInit() {
@@ -54,67 +64,92 @@ export class BacnetAdapterService implements DeviceAdapter, OnModuleInit, OnModu
     const config = this.readConfig(device);
     if (!config) throw new Error(`Dispositivo "${device.name}" no tiene configuracion BACnet`);
     await this.bridge.write(config.host, config.points.startStopCommand, "boolean", action === CommandAction.on);
-    await this.pollOnce(device.id, config);
+    // La escritura ya se hizo: si la relectura falla, se avisa en el log sin dar la orden por fallida.
+    await this.pollOnce(device.id, config).catch((err) => {
+      this.logger.warn(`Orden aplicada a "${device.name}" pero no se pudo releer: ${(err as Error).message}`);
+    });
   }
 
   /** Control completo (modo/temperatura/ventilador/swing/rango), fuera de la interfaz DeviceAdapter comun. */
   async setClimate(device: Device, dto: ClimateCommandDto): Promise<void> {
     const config = this.readConfig(device);
     if (!config) throw new BadRequestException(`Dispositivo "${device.name}" no tiene configuracion BACnet`);
+    // Se valida todo antes de escribir: un valor invalido ya no deja la orden a medias.
+    const escrituras = this.escriturasClimate(device, config, dto);
 
-    if (dto.on !== undefined) {
-      await this.bridge.write(config.host, config.points.startStopCommand, "boolean", dto.on);
+    const agente = this.gestion.manejadoPor(device);
+    if (agente) {
+      // Lo maneja un Agente_Go: el agente escribe en el gateway y su siguiente lectura trae el estado.
+      await this.ordenes.ejecutar(agente, device, { tipo: "bacnet", host: config.host, escrituras });
+      return;
     }
 
-    if (dto.temperature !== undefined) {
-      await this.bridge.write(config.host, config.points.setRoomTemp, "real", dto.temperature);
+    for (const w of escrituras) {
+      await this.bridge.write(config.host, w.object, w.valueType, w.value);
     }
+
+    // La escritura ya se hizo: si la relectura falla, se avisa en el log sin dar la orden por fallida.
+    await this.pollOnce(device.id, config).catch((err) => {
+      this.logger.warn(`Orden aplicada a "${device.name}" pero no se pudo releer: ${(err as Error).message}`);
+    });
+  }
+
+  /** La orden on/off de publishCommand, para que la ejecute un Agente_Go. */
+  ordenPara(device: Device, action: CommandAction): OrdenAgente {
+    const config = this.readConfig(device);
+    if (!config) throw new Error(`Dispositivo "${device.name}" no tiene configuracion BACnet`);
+    return {
+      tipo: "bacnet",
+      host: config.host,
+      escrituras: [{ object: config.points.startStopCommand, valueType: "boolean", value: action === CommandAction.on }],
+    };
+  }
+
+  private escriturasClimate(device: Device, config: BacnetDeviceConfigDto, dto: ClimateCommandDto): EscrituraBacnet[] {
+    const out: EscrituraBacnet[] = [];
+    const p = config.points;
+
+    if (dto.on !== undefined) out.push({ object: p.startStopCommand, valueType: "boolean", value: dto.on });
+    if (dto.temperature !== undefined) out.push({ object: p.setRoomTemp, valueType: "real", value: dto.temperature });
 
     if (dto.mode !== undefined) {
-      const point = config.points.modeCommand;
       const index = (config.modeStates ?? []).findIndex((s) => s.toUpperCase() === dto.mode!.toUpperCase());
-      if (!point || index < 0) {
-        throw new BadRequestException(`Modo "${dto.mode}" no valido para "${device.name}"`);
-      }
-      await this.bridge.write(config.host, point, "enum", index + 1);
+      if (!p.modeCommand || index < 0) throw new BadRequestException(`Modo "${dto.mode}" no valido para "${device.name}"`);
+      out.push({ object: p.modeCommand, valueType: "enum", value: index + 1 });
     }
 
     if (dto.fanSpeed !== undefined) {
-      const point = config.points.fanCommand;
       const index = (config.fanStates ?? []).findIndex((s) => s.toUpperCase() === dto.fanSpeed!.toUpperCase());
-      if (!point || index < 0) {
+      if (!p.fanCommand || index < 0) {
         throw new BadRequestException(`Velocidad de ventilador "${dto.fanSpeed}" no valida para "${device.name}"`);
       }
-      await this.bridge.write(config.host, point, "enum", index + 1);
+      out.push({ object: p.fanCommand, valueType: "enum", value: index + 1 });
     }
 
     if (dto.swing !== undefined) {
-      if (!config.points.swingCommand) throw new BadRequestException(`"${device.name}" no soporta swing`);
-      await this.bridge.write(config.host, config.points.swingCommand, "boolean", dto.swing);
+      if (!p.swingCommand) throw new BadRequestException(`"${device.name}" no soporta swing`);
+      out.push({ object: p.swingCommand, valueType: "boolean", value: dto.swing });
     }
 
     if (dto.tempRangeLow !== undefined) {
-      if (!config.points.tempRangeLowerCommand) {
-        throw new BadRequestException(`"${device.name}" no soporta ajustar el rango de temperatura`);
-      }
-      await this.bridge.write(config.host, config.points.tempRangeLowerCommand, "real", dto.tempRangeLow);
+      if (!p.tempRangeLowerCommand) throw new BadRequestException(`"${device.name}" no soporta ajustar el rango de temperatura`);
+      out.push({ object: p.tempRangeLowerCommand, valueType: "real", value: dto.tempRangeLow });
     }
 
     if (dto.tempRangeHigh !== undefined) {
-      if (!config.points.tempRangeUpperCommand) {
-        throw new BadRequestException(`"${device.name}" no soporta ajustar el rango de temperatura`);
-      }
-      await this.bridge.write(config.host, config.points.tempRangeUpperCommand, "real", dto.tempRangeHigh);
+      if (!p.tempRangeUpperCommand) throw new BadRequestException(`"${device.name}" no soporta ajustar el rango de temperatura`);
+      out.push({ object: p.tempRangeUpperCommand, valueType: "real", value: dto.tempRangeHigh });
     }
-
-    await this.pollOnce(device.id, config);
+    return out;
   }
 
   private startPolling(device: Device) {
+    this.stopPolling(device.id);
+    // Lo lee un Agente_Go (salvo que el agente este caido: entonces la API lo retoma).
+    if (this.gestion.manejadoPor(device)) return;
     const config = this.readConfig(device);
     if (!config) return;
 
-    this.stopPolling(device.id);
     const poll = () => this.pollOnce(device.id, config).catch((err) => {
       this.logger.warn(`Fallo el polling BACnet de "${device.name}": ${(err as Error).message}`);
     });
@@ -126,6 +161,7 @@ export class BacnetAdapterService implements DeviceAdapter, OnModuleInit, OnModu
   private stopPolling(deviceId: string) {
     const existing = this.pollers.get(deviceId);
     if (existing) clearInterval(existing);
+    this.pollers.delete(deviceId);
   }
 
   private async pollOnce(deviceId: string, config: BacnetDeviceConfigDto) {
@@ -148,7 +184,13 @@ export class BacnetAdapterService implements DeviceAdapter, OnModuleInit, OnModu
     const values = await this.bridge.read(config.host, reads);
     const byKey = new Map(values.map((v) => [v.key, v]));
 
-    const isOn = !!byKey.get("on")?.value;
+    // Sin respuesta del equipo: no se inventa "apagado". Se deja el ultimo estado conocido y el
+    // polling lo registra como falla (antes un timeout del gateway dejaba el aire en "off").
+    const on = byKey.get("on");
+    if (!on || on.ok === false || on.value === null || on.value === undefined) {
+      throw new Error(`sin respuesta del equipo BACnet ${config.host}${on?.error ? ` (${on.error})` : ""}`);
+    }
+    const isOn = !!on.value;
     const modeIndex = byKey.get("mode")?.value as number | undefined;
     const fanIndex = byKey.get("fanSpeed")?.value as number | undefined;
 
